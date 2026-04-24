@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/RemediationPlan.json",
+  "title": "RemediationPlan",
+  "type": "object",
+  "required": ["id", "run_id", "groups"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "run_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title", "tasks"],
+        "additionalProperties": false,
+        "properties": {
+          "title": { "type": "string" },
+          "rationale": { "type": "string" },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "title"],
+              "additionalProperties": false,
+              "properties": {
+                "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+                "title": { "type": "string" },
+                "rationale": { "type": "string" },
+                "evidence_refs": { "type": "array", "items": { "$ref": "EvidenceRef.json" } },
+                "steps": { "type": "array", "items": { "type": "string" } },
+                "constraints": { "type": "array", "items": { "type": "string" } },
+                "risk_notes": { "type": "array", "items": { "type": "string" } },
+                "est_effort": { "type": "string" },
+                "depends_on": { "type": "array", "items": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "total_effort": { "type": "string" },
+    "impact_summary": { "type": "string" },
+    "dependency_graph": { "type": "object", "additionalProperties": true }
+  }
+}

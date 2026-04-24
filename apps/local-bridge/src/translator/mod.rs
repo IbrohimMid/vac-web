@@ -1,0 +1,297 @@
+//! Command dispatch (WS client → session) + envelope translation.
+
+use crate::audit::log_tool_event;
+use crate::profile_layer::{enforce_action, EnforceOutcome};
+use crate::server::AppStateHandle;
+use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
+use bridge_core::AuditSeverity;
+use serde_json::json;
+use tracing::warn;
+
+pub async fn dispatch_command(
+    cmd: ClientCommand,
+    state: AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let mut events = vec![];
+
+    // Profile enforcement intercept (also catches unknown commands).
+    match enforce_action(&cmd, &state) {
+        EnforceOutcome::Allowed => {}
+        EnforceOutcome::Denied { code, reason } => {
+            state.audit.log(
+                &cmd.session_id,
+                "profile",
+                AuditSeverity::Warn,
+                json!({
+                    "decision": "deny",
+                    "tool": cmd.cmd_type,
+                    "code": code,
+                    "reason": reason,
+                }),
+            );
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: code.into(),
+                        message: reason,
+                    }),
+                },
+                events,
+            );
+        }
+        EnforceOutcome::UnknownCommand => {
+            log_tool_event(
+                &state,
+                &cmd.session_id,
+                "protocol",
+                json!({ "decision": "deny", "reason": "unknown command type", "type": cmd.cmd_type }),
+            );
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "protocol.unknown_command".into(),
+                        message: format!("unknown command type '{}'", cmd.cmd_type),
+                    }),
+                },
+                events,
+            );
+        }
+    }
+
+    match cmd.cmd_type.as_str() {
+        "system.ping" => (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: true,
+                error: None,
+            },
+            events,
+        ),
+        "session.create" => {
+            let profile_id = cmd
+                .payload
+                .get("profile_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("assessor.rtd@1.0.0")
+                .to_string();
+            let project_root: std::path::PathBuf = cmd
+                .payload
+                .get("project_root")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default();
+
+            // Validate profile exists before spawn — avoids ack-ok-then-crash.
+            let profile_path = state.profile_root.join(format!("{profile_id}.yaml"));
+            if !profile_path.exists() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "profile.not_found".into(),
+                            message: format!("profile {profile_id} not found"),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            match state
+                .sessions
+                .create(profile_id.clone(), project_root.clone())
+                .await
+            {
+                Ok(handle) => {
+                    state.audit.log(
+                        &handle.id,
+                        "session",
+                        AuditSeverity::Info,
+                        json!({
+                            "event": "created",
+                            "profile_id": profile_id,
+                            "project_root": project_root,
+                        }),
+                    );
+                    let now = chrono::Utc::now().to_rfc3339();
+                    use crate::notify::{
+                        activity_event, notify_event, system_pulse_event, Lane, Severity,
+                    };
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        vec![
+                            ServerEvent {
+                                seq: 0,
+                                session_id: handle.id.clone(),
+                                event_type: "session.ready".into(),
+                                payload: json!({
+                                    "session_id": handle.id,
+                                    "profile_id": handle.profile_id
+                                }),
+                                v: 1,
+                                ts: now.clone(),
+                            },
+                            ServerEvent {
+                                seq: 0,
+                                session_id: handle.id.clone(),
+                                event_type: "system.capabilities".into(),
+                                payload: crate::capabilities::capabilities_payload(),
+                                v: 1,
+                                ts: now.clone(),
+                            },
+                            notify_event(
+                                handle.id.clone(),
+                                Lane::Transient,
+                                Severity::Ok,
+                                "session",
+                                "Session ready",
+                                &format!("Profile: {}", handle.profile_id),
+                            ),
+                            system_pulse_event(
+                                handle.id.clone(),
+                                vec![
+                                    ("profile", handle.profile_id.as_str(), "ok"),
+                                    ("session_count", "1 active", "ok"),
+                                ],
+                            ),
+                            activity_event(
+                                handle.id.clone(),
+                                "session",
+                                Severity::Info,
+                                &format!("Session created with {}", handle.profile_id),
+                            ),
+                        ],
+                    )
+                }
+                Err(e) => {
+                    warn!(error = %e, "session.create failed");
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Error,
+                        json!({ "event": "create_failed", "error": e.to_string() }),
+                    );
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "session.spawn_failed".into(),
+                                message: e.to_string(),
+                            }),
+                        },
+                        events,
+                    )
+                }
+            }
+        }
+        "session.list" => {
+            let list = state.sessions.list();
+            events.push(ServerEvent {
+                seq: 0,
+                session_id: cmd.session_id.clone(),
+                event_type: "session.list_response".into(),
+                payload: json!({ "sessions": list }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                events,
+            )
+        }
+        "session.close" => {
+            if state.sessions.remove(&cmd.session_id).is_none() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            }
+            state.audit.log(
+                &cmd.session_id,
+                "session",
+                AuditSeverity::Info,
+                json!({ "event": "closed", "reason": "user" }),
+            );
+            events.push(ServerEvent {
+                seq: 0,
+                session_id: cmd.session_id.clone(),
+                event_type: "session.closed".into(),
+                payload: json!({ "reason": "user" }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                events,
+            )
+        }
+        _ => {
+            // Forward to engine via session handle.
+            let Some(handle) = state.sessions.get(&cmd.session_id) else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            // Map to JSON-RPC request.
+            let rpc = json!({
+                "jsonrpc": "2.0",
+                "id": cmd.id,
+                "method": cmd.cmd_type,
+                "params": cmd.payload,
+            });
+            match handle.send_to_engine(&rpc.to_string()).await {
+                Ok(()) => (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: true,
+                        error: None,
+                    },
+                    events,
+                ),
+                Err(e) => (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "engine.unreachable".into(),
+                            message: e.to_string(),
+                        }),
+                    },
+                    events,
+                ),
+            }
+        }
+    }
+}

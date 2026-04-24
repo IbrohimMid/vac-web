@@ -1,0 +1,12 @@
+{
+  "id": "01J0000000000000000000EV02",
+  "kind": "connector",
+  "uri": "sentry://issue/ACME/789",
+  "connector_id": "sentry:acme",
+  "snapshot_id": "01J0000000000000000000SN01",
+  "observed_at": "2026-04-24T10:05:00Z",
+  "fresh_until": "2026-04-24T10:20:00Z",
+  "staleness_policy": "hard_expire",
+  "captured_by": "agent:reliability",
+  "mime_type": "application/json"
+}

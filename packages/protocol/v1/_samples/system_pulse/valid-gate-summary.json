@@ -1,0 +1,6 @@
+{
+  "kind": "gate_summary",
+  "label": "✓3 ●1 ✗0",
+  "severity": "warn",
+  "action_id": "workbench.select_tab.readiness_hub"
+}

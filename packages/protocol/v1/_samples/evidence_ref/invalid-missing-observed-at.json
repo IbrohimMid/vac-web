@@ -1,0 +1,7 @@
+{
+  "id": "01J0000000000000000000EV03",
+  "kind": "file",
+  "uri": "file:///repo/x.rs",
+  "staleness_policy": "immutable",
+  "captured_by": "agent:x"
+}

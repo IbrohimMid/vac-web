@@ -1,0 +1,7 @@
+{
+  "id": "cmd_01J00000000000000000000003",
+  "session_id": "sess_01J00000000000000000000002",
+  "type": "approval.approve",
+  "payload": { "approval_id": "apr_01J00000000000000000000004" },
+  "v": 1
+}

@@ -1,0 +1,117 @@
+// Relay-aware transport variant. Wraps the inner vac-web envelope in a
+// `{header, payload}` wire frame so the blind relay can route by
+// `{device_id, session_id}` without inspecting payload.
+//
+// The relay's URL shape is `wss://relay.example.com/client/attach` with
+// `?device_id=…&session_id=…&token=…[&last_event_id=…]` query parameters.
+
+import { Correlator, type Ack } from './correlation';
+import { EventQueue } from './queue';
+import { ulid } from './ulid';
+import {
+  BridgeWs,
+  isAckFrame,
+  type AckFrame,
+  type EventFrame,
+  type InboundFrame,
+} from './ws';
+import type { TransportHandle } from '.';
+
+export interface RelayParams {
+  relayUrl: string;
+  deviceId: string;
+  sessionId: string;
+  token: string;
+  lastEventId?: number;
+}
+
+interface WireFrame {
+  header: { session_id: string; seq: number; dir: 'to_client' | 'to_bridge' };
+  payload: string;
+}
+
+export function buildRelayUrl(p: RelayParams): string {
+  const u = new URL(p.relayUrl);
+  // Accept both ws://host and wss://host/path forms; append route segment.
+  const routePath = u.pathname.endsWith('/')
+    ? `${u.pathname}client/attach`
+    : `${u.pathname}/client/attach`;
+  u.pathname = routePath;
+  u.searchParams.set('device_id', p.deviceId);
+  u.searchParams.set('session_id', p.sessionId);
+  u.searchParams.set('token', p.token);
+  if (typeof p.lastEventId === 'number') {
+    u.searchParams.set('last_event_id', String(p.lastEventId));
+  }
+  return u.toString();
+}
+
+export async function createRelayTransport(p: RelayParams): Promise<TransportHandle> {
+  const queue = new EventQueue();
+  const correlator = new Correlator();
+  let lastSeq = p.lastEventId ?? 0;
+
+  const ws = new BridgeWs({
+    url: buildRelayUrl(p),
+    onMessage: (raw: InboundFrame) => {
+      // Relay wraps inner frames; unwrap here before dispatching to handlers.
+      const wire = raw as unknown as WireFrame;
+      if (wire && wire.header && typeof wire.payload === 'string') {
+        if (wire.header.seq > lastSeq) lastSeq = wire.header.seq;
+        try {
+          const inner = JSON.parse(wire.payload) as InboundFrame;
+          if (isAckFrame(inner)) {
+            correlator.resolve(inner as AckFrame);
+            return;
+          }
+          queue.enqueue(inner);
+        } catch {
+          /* malformed payload — drop */
+        }
+      }
+    },
+    onClose: () => correlator.disconnect(),
+  });
+
+  await ws.connect();
+
+  const wrap = (inner: unknown, sessionId: string, seq: number): WireFrame => ({
+    header: { session_id: sessionId, seq, dir: 'to_bridge' },
+    payload: JSON.stringify(inner),
+  });
+
+  return {
+    async send(sessionId, type, payload): Promise<Ack> {
+      const id = `cmd_${ulid()}`;
+      const ack = correlator.register(id);
+      const inner = { id, session_id: sessionId, type, payload, v: 1 };
+      ws.send(wrap(inner, sessionId, 0) as unknown as object);
+      return ack;
+    },
+    on(type, handler) {
+      return queue.on(type, (frame) => {
+        if ((frame as EventFrame).seq !== undefined) {
+          handler(frame as EventFrame);
+        }
+      });
+    },
+    close() {
+      ws.close();
+    },
+  };
+}
+
+/** Exposed so reconnect logic can resume from the last-seen seq. */
+export function parseRelayParamsFromLocation(): RelayParams | null {
+  if (typeof window === 'undefined') return null;
+  const q = new URLSearchParams(window.location.search);
+  const relayUrl = q.get('relay');
+  const deviceId = q.get('device');
+  const sessionId = q.get('session');
+  const token = q.get('token');
+  if (!relayUrl || !deviceId || !sessionId || !token) return null;
+  const last = q.get('last_event_id');
+  const res: RelayParams = { relayUrl, deviceId, sessionId, token };
+  if (last && Number.isFinite(Number(last))) res.lastEventId = Number(last);
+  return res;
+}

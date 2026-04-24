@@ -1,0 +1,27 @@
+{
+  "id": "01J0000000000000000000FN01",
+  "run_id": "01J0000000000000000000RN01",
+  "family_id": "assessor.rtd",
+  "category": "devops",
+  "subsystem": "secrets",
+  "severity": "critical",
+  "confidence": 0.92,
+  "title": ".env.production committed to repository",
+  "description": "Production environment file is tracked by git and contains values that look like real credentials.",
+  "evidence": [
+    {
+      "id": "01J0000000000000000000EV04",
+      "kind": "file",
+      "uri": "file:///repo/.env.production",
+      "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "observed_at": "2026-04-24T10:00:00Z",
+      "fresh_until": "2030-01-01T00:00:00Z",
+      "staleness_policy": "immutable",
+      "captured_by": "agent:devops_readiness"
+    }
+  ],
+  "fixability": "assisted",
+  "identity_hash": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+  "created_at": "2026-04-24T10:00:01Z",
+  "emitted_by": "agent:devops_readiness"
+}

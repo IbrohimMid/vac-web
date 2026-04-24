@@ -1,0 +1,43 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+*.tsbuildinfo
+.vite/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Generated
+packages/protocol-ts/src/v1/generated/
+packages/protocol-rs/src/v1/generated/
+
+# Bridge state (runtime; not in repo)
+.vac-web/
+~/.config/vac-web/
+~/.cache/vac-web/
+~/.local/share/vac-web/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# CI
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Logs
+*.log
+logs/

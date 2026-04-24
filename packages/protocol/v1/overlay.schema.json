@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/OverlayKind.json",
+  "title": "OverlayKind",
+  "type": "string",
+  "enum": [
+    "command_palette",
+    "file_search",
+    "model_switcher",
+    "profile_switcher",
+    "rulebook_switcher",
+    "isolation_switcher",
+    "shell_drawer",
+    "approval_inspector",
+    "diff_viewer",
+    "handoff_builder",
+    "gate_detail",
+    "assessment_report",
+    "connector_manager",
+    "override_dialog",
+    "signoff_dialog",
+    "confirm",
+    "ask_user",
+    "share_session"
+  ]
+}

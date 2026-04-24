@@ -1,0 +1,9 @@
+{
+  "id": "01J0000000000000000000NT01",
+  "lane": "transient",
+  "severity": "ok",
+  "subsystem": "session",
+  "title": "Session ready",
+  "message": "Bridge connected. You can start typing.",
+  "ts": "2026-04-24T10:00:00Z"
+}

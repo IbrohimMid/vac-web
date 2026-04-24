@@ -1,0 +1,93 @@
+# See docs/capability-profiles.md §4.2
+id: executor.code@1.0.0
+class: executor
+version: 1.0.0
+description: |
+  Code-editing executor. Runs only via approved HandoffPacket.
+  Can edit repo, run shell + builds + tests, create/commit (local) branches.
+  Cannot push, tag, deploy, publish, or write connectors.
+
+tool_allow:
+  - read_file
+  - list_directory
+  - glob
+  - grep
+  - edit_file
+  - write_file
+  - delete_file
+  - move_file
+  - shell.exec
+  - shell.exec_allowlisted
+  - git_log
+  - git_show
+  - git_diff
+  - git_branch_create
+  - git_commit
+  - test.run
+  - lint.run
+  - build.run
+  - format.run
+  - package_manager.*
+  - connector.read.*
+
+tool_deny:
+  - git_push
+  - git_tag
+  - deploy.*
+  - publish.*
+  - db.migrate.*
+  - db.backfill.*
+  - connector.write.*
+
+shell_allowlist: []
+
+fs:
+  read: project_root
+  write: project_root
+  deny_globs:
+    - ".env*"
+    - "**/secrets/**"
+    - "**/.git/config"
+    - "**/.aws/**"
+    - "**/.ssh/**"
+  max_bytes_per_read: 10485760
+  max_bytes_per_write: 5242880
+
+git:
+  read: true
+  branch: true
+  commit: true
+  tag: false
+  push: false
+  protected_refs: [main, master, "release/*", prod]
+
+connectors:
+  read: [github, notion, linear, figma]
+  write: []
+
+network_egress:
+  mode: allowlist
+  host_allowlist:
+    - registry.npmjs.org
+    - pypi.org
+    - crates.io
+    - proxy.golang.org
+    - github.com
+    - api.github.com
+  methods_allow: [GET, HEAD, POST]
+
+approval_required_for:
+  - git.branch.create_from_protected
+  - delete_file
+  - move_file
+  - shell.exec
+
+resource_limits:
+  max_session_wallclock_ms: 7200000
+  max_tool_calls: 5000
+  max_concurrent_children: 8
+
+audit:
+  log_every_tool_call: true
+  log_tool_args: full
+  retain_for_days: 90

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/GatePolicy.json",
+  "title": "GatePolicy",
+  "type": "object",
+  "required": [
+    "gate", "version", "allowed_override_roles",
+    "require_evidence_on_override", "min_reason_length",
+    "require_two_party", "max_override_duration", "absolute_max_override",
+    "required_criteria"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "gate": { "type": "string" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "allowed_override_roles": { "type": "array", "items": { "type": "string" } },
+    "require_evidence_on_override": { "type": "boolean" },
+    "min_reason_length": { "type": "integer", "minimum": 1 },
+    "require_two_party": { "type": "boolean" },
+    "two_party_roles": { "type": "array", "items": { "type": "string" } },
+    "max_override_duration": { "type": "string" },
+    "absolute_max_override": { "type": "string" },
+    "warnings_block": { "type": "boolean", "default": false },
+    "auto_reevaluate_every": { "type": "string" },
+    "required_criteria": { "type": "array", "items": { "type": "string" } },
+    "non_overridable_criteria": { "type": "array", "items": { "type": "string" } }
+  }
+}

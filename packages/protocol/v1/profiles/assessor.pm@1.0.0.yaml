@@ -1,0 +1,22 @@
+id: assessor.pm@1.0.0
+class: assessor
+version: 1.0.0
+inherits_from: assessor.base@1.0.0
+description: Product Review assessor family.
+tool_allow: []
+tool_deny: []
+shell_allowlist: []
+fs: { read: project_and_docs, write: none }
+git: { read: true, branch: false, commit: false, tag: false, push: false }
+connectors:
+  read: [github, notion, linear, figma]
+  write: []
+network_egress:
+  mode: allowlist
+  host_allowlist:
+    - api.github.com
+    - api.notion.com
+    - api.linear.app
+    - api.figma.com
+  methods_allow: [GET, HEAD, OPTIONS]
+approval_required_for: []

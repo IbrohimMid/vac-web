@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@vac-web/protocol/*": ["../../packages/protocol-ts/src/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts"]
+}

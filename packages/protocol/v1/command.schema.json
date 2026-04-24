@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/Command.json",
+  "title": "Command",
+  "description": "Discriminated union of all protocol v1 commands (client → bridge). See docs/protocol.md §3.",
+  "type": "object",
+  "required": ["id", "session_id", "type", "payload", "v"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^cmd_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "session_id": { "type": "string", "pattern": "^sess_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "type": {
+      "type": "string",
+      "enum": [
+        "system.ping", "system.version", "system.capabilities",
+        "session.create", "session.resume", "session.list", "session.snapshot", "session.rename", "session.close",
+        "message.submit", "message.cancel_stream", "message.retry",
+        "approval.approve", "approval.approve_all", "approval.reject", "approval.inspect",
+        "workbench.select_tab", "workbench.invoke",
+        "review.open_file", "review.toggle_hunk", "review.revert_file", "review.revert_all",
+        "runtime.list_jobs", "runtime.cancel_job", "runtime.inspect_job",
+        "plan.open", "plan.edit", "plan.approve", "plan.reject",
+        "shell.start", "shell.input", "shell.resize", "shell.kill",
+        "context.attach_files", "context.mention_search",
+        "palette.invoke_action",
+        "overlay.open", "overlay.dismiss", "overlay.dismiss_all",
+        "assessment.run", "assessment.list_runs", "assessment.fetch_report",
+        "assessment.cancel", "assessment.replay", "assessment.diff",
+        "handoff.create", "handoff.fetch", "handoff.approve", "handoff.reject",
+        "handoff.dispatch_local", "handoff.dispatch_web_cli", "handoff.export_blueprint", "handoff.cancel",
+        "gate.evaluate", "gate.override", "gate.signoff", "gate.revoke_override",
+        "connector.list", "connector.connect", "connector.disconnect",
+        "connector.capabilities", "connector.health"
+      ]
+    },
+    "payload": { "type": "object", "additionalProperties": true },
+    "v": { "type": "integer", "const": 1 }
+  }
+}

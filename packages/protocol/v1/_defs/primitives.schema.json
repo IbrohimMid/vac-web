@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/_defs/primitives.json",
+  "title": "Primitive types shared across vac-web v1 schemas",
+  "$defs": {
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "Crockford base32 ULID, 26 chars."
+    },
+    "iso8601": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 / ISO 8601 UTC timestamp."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "SHA-256 digest in format 'sha256:<hex>'."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["ok", "info", "warn", "error", "critical", "high", "medium", "low"]
+    },
+    "finding_severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "info"]
+    },
+    "verdict_status": {
+      "type": "string",
+      "enum": ["READY", "CONDITIONAL", "BLOCKED", "PASS", "WARN", "FAIL"]
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["transient", "persistent", "sticky"]
+    },
+    "profile_id_versioned": {
+      "type": "string",
+      "pattern": "^(assessor|executor)\\.[a-z0-9_]+(\\.[a-z0-9_]+)*@\\d+\\.\\d+\\.\\d+$"
+    },
+    "assessment_family": {
+      "type": "string",
+      "enum": [
+        "RTD", "PM", "UX", "Frontend", "Security", "Reliability", "Perf",
+        "Release", "Launch", "QA", "Docs", "Growth"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "depth": {
+      "type": "string",
+      "enum": ["quick", "standard", "full"]
+    }
+  }
+}

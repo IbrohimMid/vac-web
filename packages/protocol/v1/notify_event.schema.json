@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/NotifyEvent.json",
+  "title": "NotifyEvent",
+  "type": "object",
+  "required": ["id", "lane", "severity", "subsystem", "title", "message", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "lane": { "$ref": "_defs/primitives.schema.json#/$defs/lane" },
+    "severity": { "type": "string", "enum": ["ok", "info", "warn", "error"] },
+    "subsystem": { "type": "string" },
+    "title": { "type": "string" },
+    "message": { "type": "string", "maxLength": 300 },
+    "action_id": { "type": "string" },
+    "evidence_ref": { "$ref": "EvidenceRef.json" },
+    "correlation_id": { "type": "string" },
+    "ts": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" }
+  }
+}

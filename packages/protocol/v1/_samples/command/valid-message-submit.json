@@ -1,0 +1,7 @@
+{
+  "id": "cmd_01J00000000000000000000001",
+  "session_id": "sess_01J00000000000000000000002",
+  "type": "message.submit",
+  "payload": { "text": "refactor login flow", "mentions": ["src/auth/login.ts"] },
+  "v": 1
+}

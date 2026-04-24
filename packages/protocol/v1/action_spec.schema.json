@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/ActionSpec.json",
+  "title": "ActionSpec",
+  "type": "object",
+  "required": ["id", "label", "group"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "description": { "type": "string" },
+    "group": { "type": "string" },
+    "keybinding": { "type": "string" },
+    "slash_alias": { "type": "string", "pattern": "^/[a-z0-9_-]+$" },
+    "palette_visible": { "type": "boolean", "default": true },
+    "footer_visible": { "type": "boolean", "default": false },
+    "required_capabilities": { "type": "array", "items": { "type": "string" } },
+    "available_when": { "type": "string" },
+    "prepare_ui": { "type": "string", "enum": ["file_picker", "form_modal"] }
+  }
+}

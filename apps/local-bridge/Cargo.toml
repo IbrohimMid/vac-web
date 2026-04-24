@@ -1,0 +1,44 @@
+[package]
+name = "local-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "vac-bridge"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+url = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+jsonwebtoken = { workspace = true }
+futures = { workspace = true }
+tokio-tungstenite = { workspace = true }
+bridge-core = { path = "../../packages/bridge-core" }
+profile-core = { path = "../../packages/profile-core" }
+protocol-rs = { path = "../../packages/protocol-rs" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+reqwest = { workspace = true }

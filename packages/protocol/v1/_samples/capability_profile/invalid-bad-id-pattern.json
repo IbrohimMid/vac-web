@@ -1,0 +1,13 @@
+{
+  "id": "ASSESSOR.RTD",
+  "class": "assessor",
+  "version": "1.0.0",
+  "tool_allow": [],
+  "tool_deny": [],
+  "shell_allowlist": [],
+  "fs": { "read": "project_root", "write": "none" },
+  "git": { "read": true, "branch": false, "commit": false, "tag": false, "push": false },
+  "connectors": { "read": [], "write": [] },
+  "network_egress": { "mode": "off", "host_allowlist": [], "methods_allow": [] },
+  "approval_required_for": []
+}

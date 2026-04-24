@@ -1,0 +1,20 @@
+{
+  "id": "01J0000000000000000000PL01",
+  "run_id": "01J0000000000000000000RN01",
+  "groups": [
+    {
+      "title": "Fix secrets hygiene",
+      "rationale": "Remove committed secrets and rotate credentials.",
+      "tasks": [
+        {
+          "id": "01J0000000000000000000TA10",
+          "title": "Move .env.production to vault",
+          "steps": ["git rm --cached .env.production", "Rotate DB password"],
+          "est_effort": "hours"
+        }
+      ]
+    }
+  ],
+  "total_effort": "half day",
+  "impact_summary": "Eliminates the single critical blocker preventing deploy."
+}

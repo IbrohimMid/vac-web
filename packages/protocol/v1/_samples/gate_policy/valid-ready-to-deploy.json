@@ -1,0 +1,22 @@
+{
+  "gate": "ReadyToDeploy",
+  "version": "1.0.0",
+  "allowed_override_roles": ["release_manager", "eng_lead"],
+  "require_evidence_on_override": true,
+  "min_reason_length": 20,
+  "require_two_party": true,
+  "two_party_roles": ["release_manager", "eng_lead"],
+  "max_override_duration": "7d",
+  "absolute_max_override": "30d",
+  "warnings_block": false,
+  "auto_reevaluate_every": "1h",
+  "required_criteria": [
+    "rtd_not_blocked",
+    "security_pass",
+    "reliability_pass",
+    "release_readiness_ready",
+    "rollback_plan_present",
+    "two_party_signed"
+  ],
+  "non_overridable_criteria": ["two_party_signed"]
+}

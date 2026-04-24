@@ -1,0 +1,87 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/local-bridge",
+    "apps/relay-service",
+    "packages/bridge-core",
+    "packages/protocol-rs",
+    "packages/profile-core",
+    "tests/integration",
+    "tests/red-team",
+    "tools/codegen",
+    "tools/mock-engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["vac-web contributors"]
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# HTTP / WS
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+tokio-tungstenite = "0.24"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Auth / crypto
+jsonwebtoken = "9"
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = "2"
+rand = "0.8"
+keyring = "3"
+
+# Filesystem / git
+ignore = "0.4"
+globset = "0.4"
+notify = "6"
+
+# Matching
+regex = "1"
+nucleo-matcher = "0.3"
+
+# Tracing / logs
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Utilities
+anyhow = "1"
+thiserror = "1"
+ulid = { version = "1", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6"
+rust-embed = "8"
+url = "2"
+
+# Dev
+tempfile = "3"
+wiremock = "0.6"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.test]
+opt-level = 0
+debug = true

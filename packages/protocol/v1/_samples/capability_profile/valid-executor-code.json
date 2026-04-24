@@ -1,0 +1,24 @@
+{
+  "id": "executor.code@1.0.0",
+  "class": "executor",
+  "version": "1.0.0",
+  "tool_allow": ["read_file", "edit_file", "shell.exec", "git_commit"],
+  "tool_deny": ["git_push", "deploy.*"],
+  "shell_allowlist": [],
+  "fs": {
+    "read": "project_root",
+    "write": "project_root",
+    "deny_globs": [".env*", "**/secrets/**"]
+  },
+  "git": {
+    "read": true, "branch": true, "commit": true, "tag": false, "push": false,
+    "protected_refs": ["main", "master"]
+  },
+  "connectors": { "read": ["github"], "write": [] },
+  "network_egress": {
+    "mode": "allowlist",
+    "host_allowlist": ["registry.npmjs.org", "api.github.com"],
+    "methods_allow": ["GET", "POST"]
+  },
+  "approval_required_for": ["shell.exec", "delete_file"]
+}

@@ -1,0 +1,11 @@
+{
+  "status": "BLOCKED",
+  "score": 0.32,
+  "summary": "Critical secret exposure + missing rollback plan. Cannot deploy until resolved.",
+  "blockers": [
+    "01J0000000000000000000FN01",
+    "01J0000000000000000000FN20"
+  ],
+  "warnings": ["01J0000000000000000000FN21"],
+  "synthesizer_agent_id": "agent:release_gate"
+}

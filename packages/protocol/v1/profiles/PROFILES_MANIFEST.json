@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0-draft",
+  "profiles": {
+    "assessor.base@1.0.0": "sha256:adfee7539ebb8af6007ab8d6798bdb220a93e783b203886930b9a6b65f7c39b5",
+    "assessor.docs@1.0.0": "sha256:991cd4bdce3bd7e8e412a1fd29f5b95c5253ba5981c5c25f9ea8a47a1186a118",
+    "assessor.frontend@1.0.0": "sha256:97f32a9bab85007fda34ce07c54684309cebff0697331a294da9b39fdf59c893",
+    "assessor.growth@1.0.0": "sha256:0034299337346d3538bb9fa843681a3343d47cfd6f04133f025c943eb173dbdd",
+    "assessor.launch@1.0.0": "sha256:bbef2746d96fd7352207aa33f83970546f9407ad3ae9f09b06484d65e9178a51",
+    "assessor.perf@1.0.0": "sha256:b0ee72ea4f6283ef39ae194bdc1e4b12059250a3c4dce5c5696e6bca90a621fd",
+    "assessor.pm@1.0.0": "sha256:98f89559330f4401a4752e27c49061da5fe0238bbbfb1fc8fe435aa2e8ec6939",
+    "assessor.qa@1.0.0": "sha256:2d761c2cea93646df26b93ddb779f95de6d58b3973bbe5137eafd6e7f65bdee7",
+    "assessor.release@1.0.0": "sha256:395255853667d078824774e8af44eeee4b35ce9b53e8f8da827dccc121708f2d",
+    "assessor.reliability@1.0.0": "sha256:00554ea44220495401f4220e0ebbd9140ab8de1e6ff27cc65299594743b84384",
+    "assessor.rtd@1.0.0": "sha256:1af74249cb32228699f5992ed14113c2d9bdb8e6981d3456c53f20ca910f3f82",
+    "assessor.security@1.0.0": "sha256:0ca023069df8c4443659a281a360c949a7a53d1e65ed6c3a9c6c54ab4dc41cd3",
+    "assessor.ux@1.0.0": "sha256:d6f330d6efa1a2bd0770ed9e47f82c5cef9b4129714cf6e09bf01a189aa0bfd1",
+    "executor.code@1.0.0": "sha256:f290b1e63d6804dc0452a37f5e9960c3de0dc76b1a74c4dc2344f0a002230e03",
+    "executor.release@1.0.0": "sha256:ecfb1ee996550dda67d74ab547584a642221d5ac7b79f1d25e271b7561a18fa1"
+  },
+  "note": "Hashes computed over raw YAML bytes (stable line endings). CI enforces match; edit YAML -> bump manifest."
+}

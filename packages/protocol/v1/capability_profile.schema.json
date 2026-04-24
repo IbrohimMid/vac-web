@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/CapabilityProfile.json",
+  "title": "CapabilityProfile",
+  "description": "Security boundary definition for assessor/executor sessions. SSOT is docs/capability-profiles.md.",
+  "type": "object",
+  "required": [
+    "id", "class", "version", "tool_allow", "tool_deny",
+    "shell_allowlist", "fs", "git", "connectors",
+    "network_egress", "approval_required_for"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned" },
+    "class": { "type": "string", "enum": ["assessor", "executor"] },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "description": { "type": "string" },
+    "inherits_from": { "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned" },
+
+    "tool_allow": { "type": "array", "items": { "type": "string" } },
+    "tool_deny": { "type": "array", "items": { "type": "string" } },
+
+    "shell_allowlist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["bin"],
+        "additionalProperties": false,
+        "properties": {
+          "bin": { "type": "string" },
+          "args_pattern": { "type": "string" },
+          "max_args": { "type": "integer", "minimum": 0, "default": 32 },
+          "cwd_scope": {
+            "type": "string",
+            "enum": ["project_root", "project_root_subtree", "tempdir"],
+            "default": "project_root_subtree"
+          },
+          "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 120000, "default": 15000 },
+          "env_allowlist": { "type": "array", "items": { "type": "string" }, "default": [] },
+          "output_cap_bytes": { "type": "integer", "default": 2097152 }
+        }
+      }
+    },
+
+    "fs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read": {
+          "type": "string",
+          "enum": ["none", "project_root", "project_and_docs"],
+          "default": "project_root"
+        },
+        "write": {
+          "type": "string",
+          "enum": ["none", "project_root", "scoped_paths"],
+          "default": "none"
+        },
+        "scoped_paths": { "type": "array", "items": { "type": "string" } },
+        "deny_globs": { "type": "array", "items": { "type": "string" } },
+        "max_bytes_per_read": { "type": "integer", "default": 10485760 },
+        "max_bytes_per_write": { "type": "integer", "default": 5242880 }
+      }
+    },
+
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read": { "type": "boolean", "default": true },
+        "branch": { "type": "boolean", "default": false },
+        "commit": { "type": "boolean", "default": false },
+        "tag": { "type": "boolean", "default": false },
+        "push": { "type": "boolean", "default": false },
+        "push_remotes_allow": { "type": "array", "items": { "type": "string" } },
+        "protected_refs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "connectors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read": { "type": "array", "items": { "type": "string" } },
+        "write": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "network_egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["off", "allowlist", "unrestricted"],
+          "default": "allowlist"
+        },
+        "host_allowlist": { "type": "array", "items": { "type": "string" } },
+        "methods_allow": {
+          "type": "array",
+          "items": { "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] }
+        }
+      }
+    },
+
+    "approval_required_for": { "type": "array", "items": { "type": "string" } },
+
+    "resource_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_session_wallclock_ms": { "type": "integer", "default": 3600000 },
+        "max_tool_calls": { "type": "integer", "default": 2000 },
+        "max_concurrent_children": { "type": "integer", "default": 4 }
+      }
+    },
+
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "log_every_tool_call": { "type": "boolean", "default": true },
+        "log_tool_args": { "type": "string", "enum": ["full", "redacted", "none"], "default": "redacted" },
+        "retain_for_days": { "type": "integer", "default": 90 }
+      }
+    }
+  },
+
+  "x-assertions": [
+    "If connectors.write is non-empty, each entry must appear in tool_allow as 'connector.write.<id>'.",
+    "If class='assessor', fs.write must be 'none' and git.commit must be false.",
+    "tool_deny is evaluated before tool_allow (deny wins)."
+  ]
+}

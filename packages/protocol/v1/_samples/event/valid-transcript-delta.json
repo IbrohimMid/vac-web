@@ -1,0 +1,8 @@
+{
+  "seq": 42,
+  "session_id": "sess_01J00000000000000000000002",
+  "type": "transcript.delta",
+  "payload": { "message_id": "msg_01J00000000000000000000005", "delta": "Let me " },
+  "v": 1,
+  "ts": "2026-04-24T10:00:00.123Z"
+}

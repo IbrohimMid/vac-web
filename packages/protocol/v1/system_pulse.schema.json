@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/SystemPulse.json",
+  "title": "SystemPulseFacet",
+  "type": "object",
+  "required": ["kind", "label", "severity"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["model", "provider", "trust", "isolation", "profile", "tokens", "rate",
+               "connectors", "gate_summary", "pending_approvals", "stale_evidence"]
+    },
+    "label": { "type": "string" },
+    "severity": { "type": "string", "enum": ["ok", "info", "warn", "error"] },
+    "action_id": { "type": "string" }
+  }
+}

@@ -1,0 +1,21 @@
+id: assessor.perf@1.0.0
+class: assessor
+version: 1.0.0
+inherits_from: assessor.base@1.0.0
+description: Performance Review assessor family.
+tool_allow: []
+tool_deny: []
+shell_allowlist: []
+fs: { read: project_and_docs, write: none }
+git: { read: true, branch: false, commit: false, tag: false, push: false }
+connectors:
+  read: [github, lighthouse_ci, datadog, posthog]
+  write: []
+network_egress:
+  mode: allowlist
+  host_allowlist:
+    - api.github.com
+    - api.datadoghq.com
+    - app.posthog.com
+  methods_allow: [GET, HEAD, OPTIONS]
+approval_required_for: []

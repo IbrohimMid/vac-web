@@ -1,0 +1,14 @@
+# Clippy configuration applied workspace-wide.
+# Keep narrow: strict by default, only loosen where proven justified.
+
+avoid-breaking-exported-api = false
+msrv = "1.75"
+
+# Codegen output is allow-all because we can't control exact shape.
+# Generated files declare #![allow(clippy::all)] at their head — no workspace config needed.
+
+# Max size for `too_many_arguments` lint (default 7). Bridge handlers occasionally hit 8.
+too-many-arguments-threshold = 8
+
+# Max lines for `too_many_lines` lint. Default 100 is too strict for translator.
+too-many-lines-threshold = 200

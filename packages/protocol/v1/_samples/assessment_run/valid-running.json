@@ -1,0 +1,17 @@
+{
+  "id": "01J0000000000000000000RN10",
+  "type": "RTD",
+  "family_id": "assessor.rtd",
+  "profile_id": "assessor.rtd@1.0.0",
+  "profile_hash": "sha256:1af74249cb32228699f5992ed14113c2d9bdb8e6981d3456c53f20ca910f3f82",
+  "scope": {
+    "project_root": "/abs/path/project-a",
+    "repo_ref": "branch:main",
+    "base_commit_sha": "abc123def456",
+    "depth": "standard"
+  },
+  "triggered_by": { "kind": "user", "user_id": "usr_alice" },
+  "status": "running",
+  "started_at": "2026-04-24T10:00:00Z",
+  "session_id": "01J0000000000000000000SS10"
+}

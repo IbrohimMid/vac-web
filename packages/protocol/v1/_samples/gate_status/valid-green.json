@@ -1,0 +1,29 @@
+{
+  "gate": "DevComplete",
+  "project_root": "/abs/path/project-a",
+  "branch": "main",
+  "criteria": [
+    {
+      "id": "pm_no_critical",
+      "description": "Product Review has no critical findings.",
+      "required": true,
+      "satisfied": true,
+      "evidence_ref": {
+        "id": "01J0000000000000000000EV10",
+        "kind": "file",
+        "uri": "run://01J0000000000000000000RN05",
+        "observed_at": "2026-04-24T10:00:00Z",
+        "fresh_until": "2026-04-25T10:00:00Z",
+        "staleness_policy": "warn_only",
+        "captured_by": "gate.evaluator"
+      },
+      "checked_at": "2026-04-24T10:00:00Z"
+    }
+  ],
+  "blockers": [],
+  "warnings": [],
+  "overrides": [],
+  "sign_offs": [],
+  "state": "green",
+  "last_evaluated_at": "2026-04-24T10:00:00Z"
+}

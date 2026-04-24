@@ -1,0 +1,112 @@
+# See docs/capability-profiles.md §4.1
+id: assessor.base@1.0.0
+class: assessor
+version: 1.0.0
+description: |
+  Base assessor profile. All assessor.<family>@1.0.0 inherit from this; families
+  may only add connectors.read entries and network_egress hosts. They may NOT
+  re-allow any tool/filesystem/git capability denied here.
+
+tool_allow:
+  - read_file
+  - list_directory
+  - glob
+  - grep
+  - git_log
+  - git_show
+  - git_blame
+  - git_diff
+  - git_ls_files
+  - git_rev_parse
+  - shell.exec_allowlisted
+  - http_get
+  - connector.read.*
+  - evidence.capture
+  - finding.emit
+  - report.compose
+
+tool_deny:
+  - edit_file
+  - write_file
+  - delete_file
+  - move_file
+  - bash
+  - shell
+  - git_commit
+  - git_push
+  - git_tag
+  - git_branch_create
+  - deploy.*
+  - publish.*
+  - db.*
+  - connector.write.*
+  - network.post
+
+shell_allowlist:
+  - bin: ls
+    args_pattern: "^(-[AalhF1R]+\\x1F)*([^;&|`$><\\n]*\\x1F?)*$"
+    max_args: 16
+  - bin: cat
+    max_args: 8
+  - bin: head
+    max_args: 6
+  - bin: tail
+    max_args: 6
+  - bin: wc
+    max_args: 6
+  - bin: stat
+    max_args: 6
+  - bin: file
+    max_args: 6
+  - bin: rg
+    args_pattern: "^(--?[a-zA-Z0-9-]+\\x1F)*([^;&|`$><\\n]*\\x1F?)*$"
+    max_args: 20
+  - bin: find
+    args_pattern: "^[^;&|`$><\\n]*$"
+    max_args: 20
+  - bin: git
+    args_pattern: "^(status|diff|log|show|blame|ls-files|rev-parse|config --get|remote -v|branch --list|tag --list)(\\x1F|$).*"
+
+fs:
+  read: project_and_docs
+  write: none
+  deny_globs:
+    - ".env*"
+    - "**/*.key"
+    - "**/*.pem"
+    - "**/*.p12"
+    - "**/secrets/**"
+    - "**/.git/config"
+    - "**/.aws/**"
+    - "**/.ssh/**"
+    - "**/id_rsa*"
+  max_bytes_per_read: 10485760
+  max_bytes_per_write: 0
+
+git:
+  read: true
+  branch: false
+  commit: false
+  tag: false
+  push: false
+
+connectors:
+  read: []
+  write: []
+
+network_egress:
+  mode: allowlist
+  host_allowlist: []
+  methods_allow: [GET, HEAD, OPTIONS]
+
+approval_required_for: []
+
+resource_limits:
+  max_session_wallclock_ms: 1800000
+  max_tool_calls: 1500
+  max_concurrent_children: 4
+
+audit:
+  log_every_tool_call: true
+  log_tool_args: redacted
+  retain_for_days: 90

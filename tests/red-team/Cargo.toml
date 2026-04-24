@@ -1,0 +1,39 @@
+[package]
+name = "red-team"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = []
+redteam = []
+
+[lib]
+path = "src/lib.rs"
+
+[[test]]
+name = "red_team"
+path = "tests/red_team.rs"
+harness = true
+required-features = ["redteam"]
+
+[[test]]
+name = "red_team_bridge"
+path = "tests/red_team_bridge.rs"
+harness = true
+required-features = ["redteam"]
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+futures = { workspace = true }
+tokio-tungstenite = { workspace = true }
+axum = { workspace = true }
+profile-core = { path = "../../packages/profile-core" }
+protocol-rs = { path = "../../packages/protocol-rs" }
+local-bridge = { path = "../../apps/local-bridge" }

@@ -1,0 +1,11 @@
+{
+  "id": "01J0000000000000000000NT02",
+  "lane": "sticky",
+  "severity": "error",
+  "subsystem": "gate.ready_to_deploy",
+  "title": "Deploy blocked",
+  "message": "RTD verdict: BLOCKED. 2 critical findings must be resolved.",
+  "action_id": "assessment.fetch_report",
+  "correlation_id": "gate.ready_to_deploy",
+  "ts": "2026-04-24T10:15:00Z"
+}

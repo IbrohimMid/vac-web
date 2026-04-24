@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/GateStatus.json",
+  "title": "GateStatus",
+  "type": "object",
+  "required": ["gate", "project_root", "criteria", "state", "last_evaluated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "gate": {
+      "type": "string",
+      "enum": ["DevComplete", "QAComplete", "ReadyForStaging", "ReadyToDeploy", "ReadyToPublish", "ReadyForGrowth"]
+    },
+    "project_root": { "type": "string" },
+    "branch": { "type": ["string", "null"] },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "required", "satisfied"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "required": { "type": "boolean" },
+          "satisfied": { "type": "boolean" },
+          "evidence_ref": { "$ref": "EvidenceRef.json" },
+          "checked_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+          "stale": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "blockers": { "type": "array", "items": { "type": "object" } },
+    "warnings": { "type": "array", "items": { "type": "object" } },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "by", "role", "reason", "scope", "expires_at", "applied_at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+          "by": { "type": "string" },
+          "role": { "type": "string" },
+          "reason": { "type": "string", "minLength": 20 },
+          "scope": { "type": "string" },
+          "expires_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+          "attached_evidence_refs": { "type": "array", "items": { "$ref": "EvidenceRef.json" } },
+          "revoked_by": { "type": "string" },
+          "revoked_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+          "revoke_reason": { "type": "string" },
+          "applied_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" }
+        }
+      }
+    },
+    "sign_offs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "by", "at"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "type": "string" },
+          "by": { "type": "string" },
+          "at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "state": { "type": "string", "enum": ["green", "yellow", "red", "overridden"] },
+    "last_evaluated_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+    "next_auto_evaluation": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/AssessmentDiff.json",
+  "title": "AssessmentDiff",
+  "type": "object",
+  "required": ["id", "base_run_id", "head_run_id", "family_id", "verdict_delta", "computed_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "base_run_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "head_run_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "family_id": { "type": "string" },
+    "resolved": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id"],
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+          "resolution_evidence": { "type": "array", "items": { "$ref": "EvidenceRef.json" } }
+        }
+      }
+    },
+    "persistent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id"],
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+          "unchanged_reason": { "type": "string" }
+        }
+      }
+    },
+    "regressed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "severity_before", "severity_after"],
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+          "severity_before": { "$ref": "_defs/primitives.schema.json#/$defs/finding_severity" },
+          "severity_after": { "$ref": "_defs/primitives.schema.json#/$defs/finding_severity" },
+          "drift_evidence": { "type": "array", "items": { "$ref": "EvidenceRef.json" } }
+        }
+      }
+    },
+    "new_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id"],
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" }
+        }
+      }
+    },
+    "verdict_delta": {
+      "type": "object",
+      "required": ["before", "after", "direction"],
+      "additionalProperties": false,
+      "properties": {
+        "before": { "$ref": "AssessmentVerdict.json" },
+        "after": { "$ref": "AssessmentVerdict.json" },
+        "direction": { "type": "string", "enum": ["improved", "same", "worsened"] }
+      }
+    },
+    "convergence_counter": { "type": "integer", "minimum": 0 },
+    "computed_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" }
+  }
+}

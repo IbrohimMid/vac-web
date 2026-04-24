@@ -1,0 +1,20 @@
+[package]
+name = "vac-integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tracing = { workspace = true }
+bridge-core = { path = "../../packages/bridge-core" }
+protocol-rs = { path = "../../packages/protocol-rs" }

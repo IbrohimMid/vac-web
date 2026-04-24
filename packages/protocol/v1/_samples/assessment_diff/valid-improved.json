@@ -1,0 +1,21 @@
+{
+  "id": "01J0000000000000000000DF01",
+  "base_run_id": "01J0000000000000000000RN01",
+  "head_run_id": "01J0000000000000000000RN11",
+  "family_id": "assessor.rtd",
+  "resolved": [
+    { "finding_id": "01J0000000000000000000FN01", "resolution_evidence": [] }
+  ],
+  "persistent": [
+    { "finding_id": "01J0000000000000000000FN21", "unchanged_reason": "noted but not addressed in this handoff" }
+  ],
+  "regressed": [],
+  "new_findings": [],
+  "verdict_delta": {
+    "before": { "status": "BLOCKED", "summary": "pre-fix", "score": 0.32 },
+    "after":  { "status": "CONDITIONAL", "summary": "post-fix", "score": 0.72 },
+    "direction": "improved"
+  },
+  "convergence_counter": 0,
+  "computed_at": "2026-04-24T11:00:00Z"
+}

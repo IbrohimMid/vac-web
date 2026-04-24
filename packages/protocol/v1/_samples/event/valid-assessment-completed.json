@@ -1,0 +1,18 @@
+{
+  "seq": 200,
+  "session_id": "sess_01J00000000000000000000002",
+  "type": "assessment.completed",
+  "payload": {
+    "run_id": "01J0000000000000000000RN11",
+    "verdict": {
+      "status": "READY",
+      "score": 0.94,
+      "summary": "All checks passed.",
+      "blockers": [],
+      "warnings": [],
+      "synthesizer_agent_id": "agent:release_gate"
+    }
+  },
+  "v": 1,
+  "ts": "2026-04-24T10:05:00Z"
+}

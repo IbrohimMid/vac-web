@@ -1,0 +1,87 @@
+id: executor.release@1.0.0
+class: executor
+version: 1.0.0
+description: |
+  Release executor. Runs only via approved two-party HandoffPacket.
+  Can tag, push, deploy, publish, and write release-adjacent docs.
+  CANNOT edit source code (scoped_paths only covers changelogs/runbooks).
+
+tool_allow:
+  - read_file
+  - list_directory
+  - glob
+  - grep
+  - git_log
+  - git_show
+  - git_diff
+  - git_tag
+  - git_push
+  - git_commit
+  - deploy.*
+  - publish.*
+  - runbook.write
+  - release_notes.write
+  - connector.read.*
+  - connector.write.github
+  - connector.write.notion
+
+tool_deny:
+  - edit_file
+  - write_file
+  - delete_file
+  - move_file
+  - shell.exec
+  - db.migrate.*
+  - db.backfill.*
+
+shell_allowlist: []
+
+fs:
+  read: project_root
+  write: scoped_paths
+  scoped_paths:
+    - CHANGELOG.md
+    - RELEASES.md
+    - "docs/runbooks/**"
+    - ".github/releases/**"
+  deny_globs:
+    - ".env*"
+    - "**/secrets/**"
+
+git:
+  read: true
+  branch: false
+  commit: true
+  tag: true
+  push: true
+  push_remotes_allow: [origin]
+
+connectors:
+  read: [github, ci, vercel, cloudflare, notion]
+  write: [github, notion]
+
+network_egress:
+  mode: allowlist
+  host_allowlist:
+    - api.github.com
+    - api.vercel.com
+    - api.cloudflare.com
+    - api.notion.com
+  methods_allow: [GET, HEAD, POST, PATCH]
+
+approval_required_for:
+  - git.push
+  - git.tag
+  - deploy.*
+  - publish.*
+  - connector.write.*
+
+resource_limits:
+  max_session_wallclock_ms: 3600000
+  max_tool_calls: 1000
+  max_concurrent_children: 2
+
+audit:
+  log_every_tool_call: true
+  log_tool_args: full
+  retain_for_days: 180

@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0-draft",
+  "generated_at": null,
+  "schemas": {
+    "_defs/primitives.schema.json": "sha256:120334537e7ff100d3813fe6a183a322a0782a21df8d436e2113ef38e927be7d",
+    "action_spec.schema.json": "sha256:6f5000946efd9bad440acd5ed54bc62f1dfaea0df22e1185992a89fdc3ac8ed9",
+    "assessment_diff.schema.json": "sha256:fb0086c5549c73c7f0be88aa55cf06f959bbf8688012c095421d1cc1ed5faa5b",
+    "assessment_finding.schema.json": "sha256:df723d7aac02f216de233fd2faca03097f885e1073a94742f12c6f3331987193",
+    "assessment_run.schema.json": "sha256:fac0efdfe4495e5ec82c9e8bbd24c967ec3111104ec8660eeb911fcfbe6f2a4c",
+    "assessment_verdict.schema.json": "sha256:88cb83e7eb40700589409413271c39c0fa8ac1527db2920190cc71ff72508d07",
+    "capability_profile.schema.json": "sha256:bea3b64d93627a09953bde4bd7d4c396e8908049d16715e0c102f46051a12405",
+    "command.schema.json": "sha256:7d68644e5a535096976c314a59deb542ac3da9d65fd8052a3e3127abca5f283b",
+    "event.schema.json": "sha256:bfcc1929455b057dd31bc99bdcb47b19b1c0e78479750ec3138632aac4d43e53",
+    "evidence_ref.schema.json": "sha256:0823a9612029522587dcfe7403aa2b3913d0e436bda5b8629e35dbb6589bd075",
+    "gate_policy.schema.json": "sha256:77d2a59553ab3164f471eccd0bd4139acbe447a7b2dd5d16a7aa2005db572746",
+    "gate_status.schema.json": "sha256:c90640470deabbc7e71a3f1187484c9a49583fb12197cc892999f27fbd772e0d",
+    "handoff_packet.schema.json": "sha256:259460229558c1158d385d9f554dcb70786691d5f2081828ef1a2d019df9d267",
+    "notify_event.schema.json": "sha256:8adbe20d8ec1f0ff7a37518a05dd18d1f68544161a28f41c6c26f0ac48e56b4c",
+    "overlay.schema.json": "sha256:787486e9fbff2837d100812c4283acac9edf7e7a9389fefa83a8b2244d8431ee",
+    "remediation_plan.schema.json": "sha256:4b01a527d98bba730b7402d2cba5358fffcb2e47ab7f496b9d4d41e5f3c6e61c",
+    "system_pulse.schema.json": "sha256:91d6332763ba176990175a4067de178553132e76c7b6cec7c0f259dbaaf3119d"
+  },
+  "note": "Hashes computed over canonical JSON (RFC 8785-ish: sorted keys, no spaces, UTF-8). Run scripts/manifest-verify.sh to re-verify."
+}

@@ -1,0 +1,33 @@
+/* Color tokens per docs/ux-grammar.md §10 */
+
+:root {
+  --sev-ok: hsl(152 60% 40%);
+  --sev-info: hsl(215 16% 47%);
+  --sev-warn: hsl(38 92% 50%);
+  --sev-error: hsl(354 70% 54%);
+
+  --surface-1: hsl(0 0% 100%);
+  --surface-2: hsl(220 14% 96%);
+  --surface-3: hsl(220 13% 91%);
+  --border: hsl(220 13% 85%);
+  --text-1: hsl(220 26% 14%);
+  --text-2: hsl(220 9% 46%);
+  --accent: hsl(215 100% 55%);
+
+  --focus-ring: 0 0 0 2px hsl(215 100% 60% / 0.5);
+}
+
+[data-theme='dark'] {
+  --sev-ok: hsl(152 50% 50%);
+  --sev-info: hsl(215 10% 60%);
+  --sev-warn: hsl(38 92% 55%);
+  --sev-error: hsl(354 70% 60%);
+
+  --surface-1: hsl(220 14% 12%);
+  --surface-2: hsl(220 14% 16%);
+  --surface-3: hsl(220 13% 20%);
+  --border: hsl(220 13% 25%);
+  --text-1: hsl(220 14% 90%);
+  --text-2: hsl(220 9% 60%);
+  --accent: hsl(215 100% 65%);
+}

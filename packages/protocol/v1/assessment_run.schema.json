@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/AssessmentRun.json",
+  "title": "AssessmentRun",
+  "type": "object",
+  "required": [
+    "id", "type", "family_id", "profile_id", "profile_hash",
+    "scope", "status", "started_at", "triggered_by", "session_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "type": { "$ref": "_defs/primitives.schema.json#/$defs/assessment_family" },
+    "family_id": { "type": "string", "pattern": "^assessor\\.[a-z0-9_]+$" },
+    "profile_id": { "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned" },
+    "profile_hash": { "$ref": "_defs/primitives.schema.json#/$defs/sha256" },
+    "scope": {
+      "type": "object",
+      "required": ["project_root", "depth"],
+      "additionalProperties": false,
+      "properties": {
+        "project_root": { "type": "string" },
+        "repo_ref": { "type": "string" },
+        "base_commit_sha": { "type": "string" },
+        "diff_range": { "type": "string" },
+        "path_globs": { "type": "array", "items": { "type": "string" } },
+        "depth": { "$ref": "_defs/primitives.schema.json#/$defs/depth" }
+      }
+    },
+    "connector_snapshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connector_id": { "type": "string" },
+          "kind": { "type": "string" },
+          "snapshot_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+          "captured_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+          "etag": { "type": "string" }
+        },
+        "required": ["connector_id", "kind", "snapshot_id", "captured_at"]
+      }
+    },
+    "triggered_by": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["user", "stage", "continuous", "orchestrator"] },
+        "user_id": { "type": "string" },
+        "source_ref": { "type": "string" }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "running", "completed", "failed", "cancelled"]
+    },
+    "started_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+    "completed_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+    "cancelled_reason": { "type": "string" },
+    "verdict": { "$ref": "AssessmentVerdict.json" },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "findings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "critical": { "type": "integer" },
+            "high": { "type": "integer" },
+            "medium": { "type": "integer" },
+            "low": { "type": "integer" },
+            "info": { "type": "integer" }
+          }
+        },
+        "evidence": { "type": "integer" },
+        "tool_calls": { "type": "integer" }
+      }
+    },
+    "session_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "base_run_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" }
+  }
+}

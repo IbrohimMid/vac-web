@@ -1,0 +1,16 @@
+{
+  "id": "01J0000000000000000000FN02",
+  "run_id": "01J0000000000000000000RN01",
+  "family_id": "assessor.rtd",
+  "category": "devops",
+  "subsystem": "secrets",
+  "severity": "critical",
+  "confidence": 0.5,
+  "title": "suspected secret",
+  "description": "...",
+  "evidence": [],
+  "fixability": "manual",
+  "identity_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-04-24T10:00:01Z",
+  "emitted_by": "agent:x"
+}

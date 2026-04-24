@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/AssessmentVerdict.json",
+  "title": "AssessmentVerdict",
+  "type": "object",
+  "required": ["status", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "status": { "$ref": "_defs/primitives.schema.json#/$defs/verdict_status" },
+    "score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "summary": { "type": "string", "maxLength": 500 },
+    "blockers": { "type": "array", "items": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" } },
+    "warnings": { "type": "array", "items": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" } },
+    "top_wins": { "type": "array", "items": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" } },
+    "synthesizer_agent_id": { "type": "string" }
+  }
+}

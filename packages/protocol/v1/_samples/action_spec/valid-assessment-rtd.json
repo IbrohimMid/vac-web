@@ -1,0 +1,12 @@
+{
+  "id": "assessment.run_rtd",
+  "label": "Ready to Deploy?",
+  "description": "Run RTD assessment on this project.",
+  "group": "Assess",
+  "keybinding": "Mod+Shift+R",
+  "slash_alias": "/rtd",
+  "palette_visible": true,
+  "footer_visible": false,
+  "required_capabilities": ["assessment.run"],
+  "available_when": "session.open && !session.streaming"
+}

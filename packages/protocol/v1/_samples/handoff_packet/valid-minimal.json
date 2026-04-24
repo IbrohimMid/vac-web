@@ -1,0 +1,52 @@
+{
+  "id": "01J0000000000000000000HO01",
+  "title": "Fix secrets + add rollback runbook",
+  "summary": "Two critical RTD findings accepted; produces executor.code tasks.",
+  "source_run_ids": ["01J0000000000000000000RN01"],
+  "accepted_finding_ids": ["01J0000000000000000000FN01"],
+  "created_by": "user:alice",
+  "created_at": "2026-04-24T10:30:00Z",
+  "pin": {
+    "repo_ref": "branch:feature/cleanup",
+    "base_commit_sha": "abcdef1234567890abcdef1234567890abcdef12",
+    "worktree_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "assessment_snapshot_at": "2026-04-24T10:00:00Z",
+    "connector_snapshots": [],
+    "expires_at": "2026-05-01T10:30:00Z",
+    "invalidate_on_repo_change": true,
+    "invalidation_policy": "strict"
+  },
+  "tasks": [
+    {
+      "id": "01J0000000000000000000TA01",
+      "title": "Move .env.production to vault; add .gitignore entry",
+      "rationale": "Remove committed secret and prevent re-commit.",
+      "steps": [
+        "git rm --cached .env.production",
+        "echo '.env.production' >> .gitignore",
+        "Rotate affected credentials (document in runbook)"
+      ],
+      "constraints": ["no downtime"],
+      "risk_notes": ["credentials must be rotated after removal"],
+      "est_effort": "hours",
+      "depends_on": [],
+      "touches_paths": [".env.production", ".gitignore"],
+      "requires_approval_per_step": true
+    }
+  ],
+  "order_hint": ["01J0000000000000000000TA01"],
+  "target": {
+    "kind": "dispatch_to_local_vac",
+    "executor_profile_id": "executor.code@1.0.0"
+  },
+  "approval": {
+    "required": true,
+    "approvers": [],
+    "two_party": true,
+    "required_roles": ["release_manager", "eng_lead"]
+  },
+  "state": "draft",
+  "state_history": [
+    { "state": "draft", "at": "2026-04-24T10:30:00Z", "by": "user:alice" }
+  ]
+}

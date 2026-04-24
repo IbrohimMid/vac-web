@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/v1/Event.json",
+  "title": "Event",
+  "description": "Discriminated union of all protocol v1 events (bridge → client). See docs/protocol.md §4.",
+  "type": "object",
+  "required": ["seq", "session_id", "type", "payload", "v", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "seq": { "type": "integer", "minimum": 0 },
+    "session_id": { "type": "string", "pattern": "^sess_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "type": {
+      "type": "string",
+      "enum": [
+        "session.ready", "session.snapshot", "session.updated", "session.closed",
+        "transcript.message_added", "transcript.delta", "transcript.completed", "transcript.error",
+        "approval.pending", "approval.resolved", "approval.expired",
+        "workbench.state",
+        "review.diff_ready", "review.changeset_updated",
+        "runtime.jobs_updated", "runtime.job_log",
+        "plan.updated",
+        "shell.started", "shell.output", "shell.exited",
+        "system_pulse.updated", "notify.event", "overlay.opened", "overlay.dismissed", "activity.appended",
+        "assessment.started", "assessment.progress", "assessment.finding_added",
+        "assessment.evidence_attached", "assessment.evidence_stale_detected",
+        "assessment.completed", "assessment.failed", "assessment.diff_ready",
+        "handoff.created", "handoff.approved", "handoff.rejected",
+        "handoff.dispatched", "handoff.execution_progress", "handoff.completed",
+        "handoff.invalidated", "handoff.expired",
+        "gate.state_changed", "gate.override_applied", "gate.override_revoked",
+        "connector.connected", "connector.disconnected", "connector.health", "connector.rate_limited"
+      ]
+    },
+    "payload": { "type": "object", "additionalProperties": true },
+    "v": { "type": "integer", "const": 1 },
+    "ts": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" }
+  }
+}

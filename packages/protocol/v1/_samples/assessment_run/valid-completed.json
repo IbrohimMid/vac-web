@@ -1,0 +1,30 @@
+{
+  "id": "01J0000000000000000000RN11",
+  "type": "RTD",
+  "family_id": "assessor.rtd",
+  "profile_id": "assessor.rtd@1.0.0",
+  "profile_hash": "sha256:1af74249cb32228699f5992ed14113c2d9bdb8e6981d3456c53f20ca910f3f82",
+  "scope": {
+    "project_root": "/abs/path/project-a",
+    "repo_ref": "branch:main",
+    "depth": "full"
+  },
+  "triggered_by": { "kind": "stage", "source_ref": "pr:123" },
+  "status": "completed",
+  "started_at": "2026-04-24T10:00:00Z",
+  "completed_at": "2026-04-24T10:04:30Z",
+  "verdict": {
+    "status": "CONDITIONAL",
+    "score": 0.72,
+    "summary": "1 high secrets finding + 2 medium observability gaps; fixable before deploy.",
+    "blockers": [],
+    "warnings": ["01J0000000000000000000FN10"],
+    "synthesizer_agent_id": "agent:release_gate"
+  },
+  "counts": {
+    "findings": { "critical": 0, "high": 1, "medium": 2, "low": 3, "info": 1 },
+    "evidence": 14,
+    "tool_calls": 187
+  },
+  "session_id": "01J0000000000000000000SS11"
+}

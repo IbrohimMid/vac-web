@@ -1,0 +1,8 @@
+{
+  "status": "READY",
+  "score": 0.94,
+  "summary": "All RTD criteria met. CI green, secrets clean, rollback runbook present.",
+  "blockers": [],
+  "warnings": [],
+  "synthesizer_agent_id": "agent:release_gate"
+}
