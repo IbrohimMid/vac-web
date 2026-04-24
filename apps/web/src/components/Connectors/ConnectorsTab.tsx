@@ -50,7 +50,7 @@ export function ConnectorsTab({ transport }: Props) {
   const connectedProviders = new Set(connected.map((c) => c.provider));
 
   return (
-    <div style={{ padding: 8 }}>
+    <div role="region" aria-label="Connectors" style={{ padding: 8 }}>
       <section>
         <h3 style={{ margin: '8px 0' }}>Connected</h3>
         {connected.length === 0 ? (

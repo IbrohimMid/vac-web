@@ -39,7 +39,7 @@ export function ReviewTab({ transport }: Props) {
   }
 
   return (
-    <div style={{ padding: 8 }}>
+    <div role="region" aria-label="Changeset review" style={{ padding: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
         <strong>{files.length} files</strong>
         <button onClick={revertAll} disabled={!transport}>

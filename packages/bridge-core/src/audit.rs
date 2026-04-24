@@ -103,8 +103,13 @@ async fn writer_task(mut rx: mpsc::Receiver<AuditEntry>, config: AuditConfig) {
                     .await
                 {
                     Ok(f) => {
+                        // `get_or_insert_with`-style pattern: the insert we
+                        // just performed guarantees the entry exists. `.expect`
+                        // here narrows the panic scope + documents the invariant.
                         files.insert(entry.session_id.clone(), f);
-                        files.get_mut(&entry.session_id).unwrap()
+                        files
+                            .get_mut(&entry.session_id)
+                            .expect("just-inserted session audit file handle")
                     }
                     Err(e) => {
                         warn!(error = %e, "audit open failed");

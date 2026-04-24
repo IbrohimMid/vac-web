@@ -53,7 +53,10 @@ export function SessionsTab({ transport }: Props) {
   }
 
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <table
+      aria-label="Sessions"
+      style={{ width: '100%', borderCollapse: 'collapse' }}
+    >
       <thead>
         <tr style={{ textAlign: 'left', fontSize: 12, color: 'var(--text-2)' }}>
           <th style={th}>ID</th>

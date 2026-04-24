@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0-draft",
+  "version": "1.0.0",
   "profiles": {
     "assessor.base@1.0.0": "sha256:adfee7539ebb8af6007ab8d6798bdb220a93e783b203886930b9a6b65f7c39b5",
     "assessor.docs@1.0.0": "sha256:991cd4bdce3bd7e8e412a1fd29f5b95c5253ba5981c5c25f9ea8a47a1186a118",
@@ -15,7 +15,8 @@
     "assessor.security@1.0.0": "sha256:0ca023069df8c4443659a281a360c949a7a53d1e65ed6c3a9c6c54ab4dc41cd3",
     "assessor.ux@1.0.0": "sha256:d6f330d6efa1a2bd0770ed9e47f82c5cef9b4129714cf6e09bf01a189aa0bfd1",
     "executor.code@1.0.0": "sha256:f290b1e63d6804dc0452a37f5e9960c3de0dc76b1a74c4dc2344f0a002230e03",
-    "executor.release@1.0.0": "sha256:ecfb1ee996550dda67d74ab547584a642221d5ac7b79f1d25e271b7561a18fa1"
+    "executor.release@1.0.0": "sha256:ecfb1ee996550dda67d74ab547584a642221d5ac7b79f1d25e271b7561a18fa1",
+    "executor.migration@1.0.0": "sha256:584d8a537f09bcfa451ac1e1216091bb81e7276b0fa98fdee51314ca3e3891a8"
   },
   "note": "Hashes computed over raw YAML bytes (stable line endings). CI enforces match; edit YAML -> bump manifest."
 }

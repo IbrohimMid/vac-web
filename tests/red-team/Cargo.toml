@@ -7,7 +7,11 @@ authors.workspace = true
 publish = false
 
 [features]
-default = []
+# Red-team suite is default-on so a plain `cargo test -p red-team` (or the
+# workspace test job without `--features`) cannot silently "pass" with zero
+# cases. Feature remains explicit so downstream consumers who want to skip
+# the suite (e.g. quick local runs) can pass `--no-default-features`.
+default = ["redteam"]
 redteam = []
 
 [lib]

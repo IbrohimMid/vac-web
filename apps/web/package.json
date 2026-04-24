@@ -9,8 +9,29 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts,.tsx"
+    "lint": "eslint src --ext .ts,.tsx",
+    "size": "size-limit"
   },
+  "size-limit": [
+    {
+      "name": "initial bundle (eager main chunk)",
+      "path": "dist/assets/index-*.js",
+      "limit": "110 KB",
+      "gzip": true
+    },
+    {
+      "name": "tanstack chunk",
+      "path": "dist/assets/tanstack-*.js",
+      "limit": "60 KB",
+      "gzip": true
+    },
+    {
+      "name": "xterm chunk (lazy via ShellDrawer)",
+      "path": "dist/assets/xterm-*.js",
+      "limit": "90 KB",
+      "gzip": true
+    }
+  ],
   "dependencies": {
     "@tanstack/react-query": "^5.59.20",
     "@tanstack/react-virtual": "^3.10.9",
@@ -32,6 +53,8 @@
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.14.0",
+    "size-limit": "^11.1.6",
+    "@size-limit/preset-big-lib": "^11.1.6",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",

@@ -1,0 +1,100 @@
+# See docs/capability-profiles.md §4.2 + docs/plans/phase-8/README.md §8.5
+id: executor.migration@1.0.0
+class: executor
+version: 1.0.0
+description: |
+  Database migration executor. Stricter trust model than executor.code:
+  - Dry-run REQUIRED before real dispatch (profile invariant).
+  - Two-party signoff REQUIRED (required_signers=2 cannot be overridden).
+  - Reversibility proof MUST be executed against scratch DB before real run.
+  - Maintenance window enforced; dispatch outside window is rejected.
+
+tool_allow:
+  - read_file
+  - list_directory
+  - glob
+  - grep
+  - git_log
+  - git_show
+  - git_diff
+  - db.migrate.dry_run
+  - db.migrate.verify_reversibility
+  - db.migrate.apply
+  - db.migrate.rollback
+  - db.snapshot.create
+  - db.snapshot.restore
+  - connector.read.*
+  - test.run
+
+tool_deny:
+  # No arbitrary file edits — migration content is delivered via the
+  # HandoffPacket's forward_sql / rollback_sql fields, not scratch-authored.
+  - edit_file
+  - write_file
+  - delete_file
+  - move_file
+  # No git mutation — migrations are applied against the pinned base.
+  - git_branch_create
+  - git_commit
+  - git_push
+  - git_tag
+  # No arbitrary shell; migrations run exclusively through the db.migrate.* API.
+  - shell.exec
+  - shell.exec_allowlisted
+  # No connector writes, no application-layer deploys.
+  - deploy.*
+  - publish.*
+  - connector.write.*
+
+shell_allowlist: []
+
+fs:
+  read: project_root
+  write: none
+  deny_globs:
+    - ".env*"
+    - "**/secrets/**"
+    - "**/.git/config"
+    - "**/.aws/**"
+    - "**/.ssh/**"
+  max_bytes_per_read: 10485760
+  max_bytes_per_write: 0
+
+git:
+  read: true
+  branch: false
+  commit: false
+  tag: false
+  push: false
+  protected_refs: [main, master, "release/*", prod]
+
+connectors:
+  read: [github, notion, linear, datadog, pagerduty]
+  write: []
+
+network_egress:
+  mode: allowlist
+  host_allowlist: []
+  methods_allow: [GET, HEAD]
+
+approval_required_for:
+  - db.migrate.apply
+  - db.migrate.rollback
+  - db.snapshot.restore
+
+# Two-party invariant lives at the profile level so packets cannot override.
+required_signers: 2
+require_dry_run_first: true
+require_reversibility_proof: true
+require_maintenance_window: true
+
+resource_limits:
+  max_session_wallclock_ms: 3600000
+  max_tool_calls: 500
+  max_concurrent_children: 2
+
+audit:
+  log_every_tool_call: true
+  log_tool_args: full
+  subsystem_tag: migration
+  retain_for_days: 365

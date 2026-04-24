@@ -39,7 +39,7 @@ export function MigrationTab({ transport }: Props) {
   // Surface below already shows phase/log/reversibility coming from store events.
 
   return (
-    <div style={{ padding: 8 }}>
+    <div role="region" aria-label="Migrations" style={{ padding: 8 }}>
       <header style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <h3 style={{ margin: 0 }}>Migrations</h3>
         <span style={{ flex: 1 }} />

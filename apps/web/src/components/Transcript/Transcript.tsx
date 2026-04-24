@@ -23,9 +23,13 @@ export function Transcript() {
   }, []);
 
   return (
-    <div
+    <section
       ref={parentRef}
       className="transcript"
+      role="log"
+      aria-label="Assistant transcript"
+      aria-live="polite"
+      aria-relevant="additions text"
       style={{
         height: '60vh',
         overflowY: 'auto',
@@ -57,6 +61,6 @@ export function Transcript() {
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

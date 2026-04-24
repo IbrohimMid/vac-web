@@ -92,7 +92,8 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
     );
 
     // 3. Send welcome.
-    let welcome = serde_json::to_string(&WelcomeFrame::new()).unwrap();
+    let welcome =
+        serde_json::to_string(&WelcomeFrame::new()).expect("serialize WelcomeFrame");
     if tx.send(Message::Text(welcome.into())).await.is_err() {
         return;
     }
@@ -115,7 +116,10 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
         loop {
             tokio::time::sleep(Duration::from_secs(20)).await;
             let _ = ping_sender
-                .send(serde_json::to_string(&json!({"type": "ping"})).unwrap())
+                .send(
+                    serde_json::to_string(&json!({"type": "ping"}))
+                        .expect("serialize ping frame"),
+                )
                 .await;
         }
     });
@@ -217,7 +221,7 @@ fn subscribe_to_session(
                                 "session_id": sid.clone(),
                                 "lagged": n
                             }))
-                            .unwrap(),
+                            .expect("serialize replay.out_of_range frame"),
                         )
                         .await;
                 }
@@ -305,15 +309,15 @@ fn serde_ack(id: &str, ok: bool, err: Option<ErrorInfo>) -> String {
         ok,
         error: err,
     })
-    .unwrap()
+    .expect("serialize ServerAck")
 }
 
 fn serde_ack_from(a: ServerAck) -> String {
-    serde_json::to_string(&a).unwrap()
+    serde_json::to_string(&a).expect("serialize ServerAck")
 }
 
 fn serde_event(e: ServerEvent) -> String {
-    serde_json::to_string(&e).unwrap()
+    serde_json::to_string(&e).expect("serialize ServerEvent")
 }
 
 // Keep the _ prefix to satisfy unused-var lints where Value is not mapped.

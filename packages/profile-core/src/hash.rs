@@ -32,7 +32,7 @@ fn canonical_json(v: &serde_json::Value) -> String {
                 .map(|(k, v)| {
                     format!(
                         "{}:{}",
-                        serde_json::to_string(k).unwrap(),
+                        serde_json::to_string(k).expect("serialize canonical key (String)"),
                         canonical_json(v)
                     )
                 })
@@ -43,6 +43,6 @@ fn canonical_json(v: &serde_json::Value) -> String {
             let parts: Vec<String> = arr.iter().map(canonical_json).collect();
             format!("[{}]", parts.join(","))
         }
-        _ => serde_json::to_string(v).unwrap(),
+        _ => serde_json::to_string(v).expect("serialize canonical leaf value"),
     }
 }

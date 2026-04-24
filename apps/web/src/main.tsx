@@ -1,31 +1,55 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles/tokens.css';
 import { BridgeStatus } from './app/BridgeStatus';
 import { PairingPrompt } from './app/PairingPrompt';
 import { ActivityRail } from './components/ActivityRail/ActivityRail';
-import { ApprovalsTab } from './components/Approvals/ApprovalsTab';
 import { Composer } from './components/Composer/Composer';
-import { ConnectorsTab } from './components/Connectors/ConnectorsTab';
-import { ArchiveTab } from './components/Archive/ArchiveTab';
-import { MigrationTab } from './components/Migration/MigrationTab';
-import { HandoffTab } from './components/Handoff/HandoffTab';
-import { ReadinessHub } from './components/Readiness/ReadinessHub';
-import { ReleaseTab } from './components/Release/ReleaseTab';
 import {
   PersistentRail,
   StickyBanners,
   TransientToasts,
 } from './components/NotifyLane';
 import { OverlayHost } from './components/OverlayHost/OverlayHost';
-import { ReviewTab } from './components/Review/ReviewTab';
-import { RuntimeTab } from './components/Runtime/RuntimeTab';
 import { SessionPicker } from './components/SessionPicker/SessionPicker';
-import { SessionsTab } from './components/Sessions/SessionsTab';
 import { ShellDrawer } from './components/Shell/ShellDrawer';
 import { Topbar } from './components/Topbar/Topbar';
 import { Transcript } from './components/Transcript/Transcript';
 import { Workbench } from './components/Workbench/Workbench';
+
+// Non-default workbench panes lazy-load to keep the initial bundle focused on
+// the Transcript + composer surface. Each pane chunks independently; Vite
+// generates one JS file per pane and the browser fetches on first tab click.
+const ApprovalsTab = lazy(() =>
+  import('./components/Approvals/ApprovalsTab').then((m) => ({ default: m.ApprovalsTab })),
+);
+const ReviewTab = lazy(() =>
+  import('./components/Review/ReviewTab').then((m) => ({ default: m.ReviewTab })),
+);
+const ReadinessHub = lazy(() =>
+  import('./components/Readiness/ReadinessHub').then((m) => ({ default: m.ReadinessHub })),
+);
+const HandoffTab = lazy(() =>
+  import('./components/Handoff/HandoffTab').then((m) => ({ default: m.HandoffTab })),
+);
+const SessionsTab = lazy(() =>
+  import('./components/Sessions/SessionsTab').then((m) => ({ default: m.SessionsTab })),
+);
+const RuntimeTab = lazy(() =>
+  import('./components/Runtime/RuntimeTab').then((m) => ({ default: m.RuntimeTab })),
+);
+const ConnectorsTab = lazy(() =>
+  import('./components/Connectors/ConnectorsTab').then((m) => ({ default: m.ConnectorsTab })),
+);
+const ReleaseTab = lazy(() =>
+  import('./components/Release/ReleaseTab').then((m) => ({ default: m.ReleaseTab })),
+);
+const MigrationTab = lazy(() =>
+  import('./components/Migration/MigrationTab').then((m) => ({ default: m.MigrationTab })),
+);
+const ArchiveTab = lazy(() =>
+  import('./components/Archive/ArchiveTab').then((m) => ({ default: m.ArchiveTab })),
+);
 import { registerApprovalHandlers } from './domain/approvals/handlers';
 import { registerAssessmentHandlers } from './domain/assessment/handlers';
 import { registerCapabilitiesHandlers } from './domain/capabilities/handlers';
@@ -151,21 +175,25 @@ function App() {
       {transport ? (
         <div style={{ padding: 8 }}>
           <SessionPicker transport={transport} />
-          <Workbench
-            panes={{
-              transcript: <Transcript />,
-              approvals: <ApprovalsTab transport={transport} />,
-              review: <ReviewTab transport={transport} />,
-              sessions: <SessionsTab transport={transport} />,
-              readiness: <ReadinessHub transport={transport} />,
-              handoff: <HandoffTab transport={transport} />,
-              release: <ReleaseTab transport={transport} />,
-              migration: <MigrationTab transport={transport} />,
-              archive: <ArchiveTab />,
-              runtime: <RuntimeTab transport={transport} />,
-              connectors: <ConnectorsTab transport={transport} />,
-            }}
-          />
+          <Suspense
+            fallback={<div style={{ padding: 16, color: 'var(--text-2)' }}>Loading…</div>}
+          >
+            <Workbench
+              panes={{
+                transcript: <Transcript />,
+                approvals: <ApprovalsTab transport={transport} />,
+                review: <ReviewTab transport={transport} />,
+                sessions: <SessionsTab transport={transport} />,
+                readiness: <ReadinessHub transport={transport} />,
+                handoff: <HandoffTab transport={transport} />,
+                release: <ReleaseTab transport={transport} />,
+                migration: <MigrationTab transport={transport} />,
+                archive: <ArchiveTab />,
+                runtime: <RuntimeTab transport={transport} />,
+                connectors: <ConnectorsTab transport={transport} />,
+              }}
+            />
+          </Suspense>
           <Composer transport={transport} />
           <PersistentRail />
           <ActivityRail />

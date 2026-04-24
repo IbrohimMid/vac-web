@@ -67,7 +67,7 @@ export function ReleaseTab({ transport }: Props) {
   const targetList = useMemo(() => Array.from(targets.values()), [targets]);
 
   return (
-    <div style={{ padding: 8 }}>
+    <div role="region" aria-label="Release plane" style={{ padding: 8 }}>
       <h3 style={{ margin: '4px 0' }}>Release plane</h3>
       {targetList.length === 0 ? (
         <div style={{ color: 'var(--text-2)' }}>No deploy targets configured.</div>

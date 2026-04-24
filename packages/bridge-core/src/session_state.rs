@@ -69,15 +69,26 @@ impl StateHolder {
     }
 
     pub fn current(&self) -> SessionState {
-        *self.state.read().unwrap()
+        // Poisoned locks degrade to the last-written value rather than panic:
+        // a panic in a *prior* holder should not take down every future reader.
+        match self.state.read() {
+            Ok(g) => *g,
+            Err(poison) => *poison.into_inner(),
+        }
     }
 
     pub fn close_reason(&self) -> Option<CloseReason> {
-        *self.close_reason.read().unwrap()
+        match self.close_reason.read() {
+            Ok(g) => *g,
+            Err(poison) => *poison.into_inner(),
+        }
     }
 
     pub fn transition(&self, to: SessionState) -> Result<SessionState> {
-        let mut guard = self.state.write().unwrap();
+        let mut guard = match self.state.write() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        };
         if *guard == to {
             return Ok(to);
         }
@@ -90,7 +101,11 @@ impl StateHolder {
     }
 
     pub fn set_close_reason(&self, r: CloseReason) {
-        *self.close_reason.write().unwrap() = Some(r);
+        let mut guard = match self.close_reason.write() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        };
+        *guard = Some(r);
     }
 }
 

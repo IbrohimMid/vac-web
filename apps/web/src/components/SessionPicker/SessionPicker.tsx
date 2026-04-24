@@ -57,7 +57,10 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
   }
 
   return (
-    <div style={{ padding: 12, border: '1px solid #ddd' }}>
+    <section
+      aria-label="Session picker"
+      style={{ padding: 12, border: '1px solid #ddd' }}
+    >
       <h3>Start session</h3>
       <label style={{ display: 'block', marginBottom: 8 }}>
         Profile:
@@ -84,6 +87,6 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
         {creating ? 'creating…' : 'Create session'}
       </button>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
-    </div>
+    </section>
   );
 }

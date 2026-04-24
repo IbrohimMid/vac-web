@@ -32,7 +32,11 @@ export function RuntimeTab({ transport }: Props) {
   const selectedLogs = selected ? logs.get(selected) ?? [] : [];
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 8 }}>
+    <div
+      role="region"
+      aria-label="Runtime jobs"
+      style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 8 }}
+    >
       <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {order.map((id) => {
           const j = jobsMap.get(id);

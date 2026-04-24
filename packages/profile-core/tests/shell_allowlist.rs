@@ -117,7 +117,8 @@ fn all_profiles_load_cleanly() {
             .unwrap_or_else(|e| panic!("failed to load {}: {:?}", id, e));
         loaded += 1;
     }
-    assert_eq!(loaded, 15, "expected 15 profile YAMLs, found {}", loaded);
+    // 13 assessor + 3 executor (code + release + migration) = 16 profiles in v1.0.0.
+    assert_eq!(loaded, 16, "expected 16 profile YAMLs, found {}", loaded);
 }
 
 #[test]
