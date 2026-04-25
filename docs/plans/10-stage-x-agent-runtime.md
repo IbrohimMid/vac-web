@@ -4,7 +4,7 @@
 
 **Design lock.** [`../agent-runtime.md`](../agent-runtime.md) (commit `cd1ff13`). All decisions there are authoritative; this plan only describes execution.
 
-**Depends on.** Phase 0–8 baseline (see [`00-shipped.md`](./00-shipped.md)). No upstream `vastar-agentic-cli` change required for X.1–X.3; X.4 needs the additive `agent_id` field landed on `session.create`.
+**Depends on.** Phase 0–8 baseline (see [`00-shipped.md`](./00-shipped.md)). No upstream `vastar-agentic-cli` change required for X.1–X.3; X.4 lands the additive `agent_id` field on `session.create`, and later stages (X.5–X.8) depend on it.
 
 **Out of scope.** VIL/VWFD semantics (Stage K). Production deploy/publish via ACP (release plan keeps that VAC-native initially).
 

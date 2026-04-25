@@ -8,11 +8,11 @@ The earlier plan tree (Phase 0–8 + Cockpit A–J) has been retired now that th
 
 1. [`00-shipped.md`](./00-shipped.md) — what's already in `main` (state of the world).
 2. [`10-stage-x-agent-runtime.md`](./10-stage-x-agent-runtime.md) — wire ACP / multi-runtime picker into bridge + web. Design lock at [`../agent-runtime.md`](../agent-runtime.md).
-3. Surface plans (depend on Stage X.1–X.4):
-   - [`20-assess.md`](./20-assess.md) — driven by [`../product-specs/assess.md`](../product-specs/assess.md)
-   - [`21-handoff.md`](./21-handoff.md) — driven by [`../product-specs/handoff.md`](../product-specs/handoff.md)
-   - [`22-release.md`](./22-release.md) — driven by [`../product-specs/release.md`](../product-specs/release.md)
-   - [`23-build.md`](./23-build.md) — driven by [`../product-specs/build.md`](../product-specs/build.md)
+3. Surface plans — each declares its own Stage X dependency:
+   - [`20-assess.md`](./20-assess.md) — driven by [`../product-specs/assess.md`](../product-specs/assess.md); depends on X.5 + X.7.
+   - [`21-handoff.md`](./21-handoff.md) — driven by [`../product-specs/handoff.md`](../product-specs/handoff.md); depends on X.5 + X.6.
+   - [`22-release.md`](./22-release.md) — driven by [`../product-specs/release.md`](../product-specs/release.md); depends on Assess gate feed + Handoff dispatch foundations.
+   - [`23-build.md`](./23-build.md) — driven by [`../product-specs/build.md`](../product-specs/build.md); depends on X.4 + X.5 + X.6.
 4. [`30-stage-k-vil-vwfd.md`](./30-stage-k-vil-vwfd.md) — held; upstream `vil-expr` schema + events required first.
 
 ## Plan format
