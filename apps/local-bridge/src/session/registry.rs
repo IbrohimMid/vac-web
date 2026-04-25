@@ -45,8 +45,28 @@ impl SessionRegistry {
         profile_id: String,
         project_root: PathBuf,
     ) -> anyhow::Result<SessionHandleRef> {
+        self.create_with_agent(profile_id, project_root, None).await
+    }
+
+    /// Stage X.4 entry point: optional `agent_id` selects a specific
+    /// agent from the registry. `None` falls back to the registry's
+    /// `default_agent` for compatibility with pre-X.4 callers and old
+    /// `session.create` payloads that don't carry the field.
+    pub async fn create_with_agent(
+        &self,
+        profile_id: String,
+        project_root: PathBuf,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<SessionHandleRef> {
         let session_id = format!("sess_{}", ulid::Ulid::new());
-        let agent = self.agents.default_agent().clone();
+        let agent = match agent_id {
+            Some(id) => self
+                .agents
+                .get(id)
+                .cloned()
+                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            None => self.agents.default_agent().clone(),
+        };
         let opts = SpawnOptions {
             session_id: session_id.clone(),
             profile_id,

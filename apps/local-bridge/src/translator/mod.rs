@@ -85,6 +85,14 @@ pub async fn dispatch_command(
                 .and_then(|v| v.as_str())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default();
+            // Stage X.4 — additive `agent_id` on session.create.
+            // Pre-X.4 payloads omit this field and fall through to the
+            // bridge's default agent.
+            let requested_agent_id = cmd
+                .payload
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
 
             // Validate profile exists before spawn — avoids ack-ok-then-crash.
             let profile_path = state.profile_root.join(format!("{profile_id}.yaml"));
@@ -102,13 +110,72 @@ pub async fn dispatch_command(
                 );
             }
 
+            // Resolve the agent we'd actually spawn. Stage X.4 gives
+            // priority to a requested `agent_id`; X.1 default is used
+            // when the field is absent. Unknown / disabled selections
+            // produce dedicated error codes so web clients can react
+            // distinctly from policy denials.
+            let registry = state.sessions.agents();
+            let resolved_agent = match requested_agent_id.as_deref() {
+                Some(id) => match registry.get(id) {
+                    Ok(a) => {
+                        if !a.enabled {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "agent",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "decision": "deny",
+                                    "code": "agent.disabled",
+                                    "reason": format!("agent '{id}' is disabled"),
+                                    "agent_id": id,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "agent.disabled".into(),
+                                        message: format!("agent '{id}' is disabled"),
+                                    }),
+                                },
+                                events,
+                            );
+                        }
+                        a.clone()
+                    }
+                    Err(_) => {
+                        state.audit.log(
+                            &cmd.session_id,
+                            "agent",
+                            AuditSeverity::Warn,
+                            json!({
+                                "decision": "deny",
+                                "code": "agent.not_registered",
+                                "reason": format!("agent '{id}' is not registered"),
+                                "agent_id": id,
+                            }),
+                        );
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "agent.not_registered".into(),
+                                    message: format!("agent '{id}' is not registered"),
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                },
+                None => registry.default_agent().clone(),
+            };
+            let agent_kind_str = resolved_agent.kind.as_str();
+
             // Stage X.2 — enforce profile.allowed_agent_kinds against
-            // the agent that would actually back this session. Since
-            // X.4 hasn't landed `agent_id` on the wire yet, we resolve
-            // the bridge's default agent here. When agent_id ships,
-            // resolve via the registry instead and keep this check.
-            let agent = state.sessions.agents().default_agent();
-            let agent_kind_str = agent.kind.as_str();
+            // the *resolved* agent (X.4 may have selected a non-default).
             match CapabilityProfile::load(&profile_id, &state.profile_root) {
                 Ok(profile) => match enforce_agent_kind(&profile, agent_kind_str) {
                     Decision::Allow => {}
@@ -122,7 +189,7 @@ pub async fn dispatch_command(
                                 "code": code,
                                 "reason": reason,
                                 "profile_id": profile_id,
-                                "agent_id": agent.id,
+                                "agent_id": resolved_agent.id,
                                 "agent_kind": agent_kind_str,
                             }),
                         );
@@ -156,7 +223,11 @@ pub async fn dispatch_command(
 
             match state
                 .sessions
-                .create(profile_id.clone(), project_root.clone())
+                .create_with_agent(
+                    profile_id.clone(),
+                    project_root.clone(),
+                    requested_agent_id.as_deref(),
+                )
                 .await
             {
                 Ok(handle) => {
@@ -168,6 +239,8 @@ pub async fn dispatch_command(
                             "event": "created",
                             "profile_id": profile_id,
                             "project_root": project_root,
+                            "agent_id": handle.agent_id,
+                            "agent_kind": handle.agent_kind.as_str(),
                         }),
                     );
                     let now = chrono::Utc::now().to_rfc3339();
@@ -185,9 +258,15 @@ pub async fn dispatch_command(
                                 seq: 0,
                                 session_id: handle.id.clone(),
                                 event_type: "session.ready".into(),
+                                // Stage X.4 — emit agent_id + agent_kind so
+                                // web clients can render which runtime is
+                                // backing the session and lock UI affordances
+                                // accordingly. Pre-X.4 fields preserved.
                                 payload: json!({
                                     "session_id": handle.id,
-                                    "profile_id": handle.profile_id
+                                    "profile_id": handle.profile_id,
+                                    "agent_id": handle.agent_id,
+                                    "agent_kind": handle.agent_kind.as_str(),
                                 }),
                                 v: 1,
                                 ts: now.clone(),
