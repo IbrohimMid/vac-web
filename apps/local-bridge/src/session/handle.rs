@@ -110,14 +110,25 @@ impl SessionHandle {
             }
         });
 
-        // Pump stdout → ring + broadcast.
+        // Pump stdout → ring + broadcast. Stage X.3 dispatches the
+        // line processor by agent kind: Mock + VacNative use the
+        // historical JSON-RPC notification shape; Acp speaks a small
+        // ACP-style envelope mapped to transcript.delta. The driver
+        // layer is intentionally per-line so the rest of the spawn
+        // path stays uniform.
         let handle_clone = Arc::clone(&handle);
+        let kind = handle.agent_kind;
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                process_stdout_line(&line, &handle_clone).await;
+                match kind {
+                    AgentKind::Mock | AgentKind::VacNative => {
+                        process_jsonrpc_line(&line, &handle_clone).await
+                    }
+                    AgentKind::Acp => process_acp_line(&line, &handle_clone).await,
+                }
             }
-            info!(session = %handle_clone.id, "engine stdout closed");
+            info!(session = %handle_clone.id, agent_kind = %kind.as_str(), "engine stdout closed");
             let _ = handle_clone
                 .state
                 .transition(bridge_core::SessionState::Closing);
@@ -126,11 +137,31 @@ impl SessionHandle {
                 .transition(bridge_core::SessionState::Closed);
         });
 
-        // Spawn watchdog: when child exits, transition state.
+        // Spawn watchdog: when child exits, transition state. Non-zero
+        // exits emit a transcript.error event so web surfaces can
+        // distinguish a clean close from a crash.
         let handle_wait = Arc::clone(&handle);
         tokio::spawn(async move {
             let status = child.wait().await;
             info!(session = %handle_wait.id, status = ?status, "child exited");
+            let crashed = status.as_ref().map(|s| !s.success()).unwrap_or(true);
+            if crashed {
+                let ts = chrono::Utc::now().to_rfc3339();
+                let event = ServerEvent {
+                    seq: 0,
+                    session_id: handle_wait.id.clone(),
+                    event_type: "transcript.error".into(),
+                    payload: serde_json::json!({
+                        "reason": "child_exited",
+                        "agent_id": handle_wait.agent_id,
+                        "agent_kind": handle_wait.agent_kind.as_str(),
+                        "status": format!("{status:?}"),
+                    }),
+                    v: 1,
+                    ts,
+                };
+                emit_event(&handle_wait, event).await;
+            }
             let _ = handle_wait
                 .state
                 .transition(bridge_core::SessionState::Closing);
@@ -158,8 +189,21 @@ impl SessionHandle {
     }
 }
 
-async fn process_stdout_line(line: &str, handle: &SessionHandleRef) {
-    // Engine emits JSON-RPC notifications. Translator maps method → protocol v1 event.
+async fn emit_event(handle: &SessionHandleRef, event: ServerEvent) {
+    let seq = {
+        let mut ring = handle.ring.write().await;
+        ring.push(event.clone())
+    };
+    let mut with_seq = event;
+    with_seq.seq = seq;
+    let _ = handle.broadcast.send(with_seq);
+}
+
+/// JSON-RPC notification line processor — used for Mock + VacNative
+/// engines. The mock-engine + future `vac serve --stdio` both speak
+/// `{"jsonrpc":"2.0","method":"…","params":{…}}`; we pass-through
+/// `method` as the event_type and `params` as the payload.
+async fn process_jsonrpc_line(line: &str, handle: &SessionHandleRef) {
     let parsed: serde_json::Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => {
@@ -179,22 +223,83 @@ async fn process_stdout_line(line: &str, handle: &SessionHandleRef) {
         .unwrap_or(serde_json::Value::Null);
     let ts = chrono::Utc::now().to_rfc3339();
 
-    // Simple pass-through event.
-    let event_type = method.to_string();
     let event = ServerEvent {
-        seq: 0, // assigned by ring
+        seq: 0,
         session_id: handle.id.clone(),
-        event_type,
+        event_type: method.to_string(),
         payload: params,
         v: 1,
         ts,
     };
+    emit_event(handle, event).await;
+}
 
-    let seq = {
-        let mut ring = handle.ring.write().await;
-        ring.push(event.clone())
+/// ACP envelope line processor — Stage X.3 scaffold.
+///
+/// Today's ACP support is intentionally narrow: text-only assistant
+/// streaming. The mock-acp child (and, after X.6, real Claude Code)
+/// emits line-delimited JSON like:
+///
+/// ```json
+/// {"type": "session_started", ...}
+/// {"type": "assistant_message_chunk", "text": "..."}
+/// {"type": "assistant_message_complete"}
+/// ```
+///
+/// We map:
+///   - `assistant_message_chunk` → `transcript.delta` event with
+///     `{ delta }` payload.
+///   - `assistant_message_complete` → `transcript.completed`.
+///   - `session_started` → ignored (web already gets `session.ready`
+///     from the bridge ack path).
+///   - tool / permission / file-write envelopes are NOT handled here;
+///     X.5 (permission bridge) wires those.
+async fn process_acp_line(line: &str, handle: &SessionHandleRef) {
+    let parsed: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(session = %handle.id, "acp emitted non-JSON: {e} | raw: {line}");
+            return;
+        }
     };
-    let mut with_seq = event;
-    with_seq.seq = seq;
-    let _ = handle.broadcast.send(with_seq);
+    let Some(kind) = parsed.get("type").and_then(|m| m.as_str()) else {
+        return;
+    };
+    let ts = chrono::Utc::now().to_rfc3339();
+    match kind {
+        "assistant_message_chunk" => {
+            let delta = parsed
+                .get("text")
+                .cloned()
+                .unwrap_or(serde_json::Value::String(String::new()));
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "transcript.delta".into(),
+                payload: serde_json::json!({ "delta": delta }),
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+        "assistant_message_complete" => {
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "transcript.completed".into(),
+                payload: serde_json::Value::Null,
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+        "session_started" => {
+            // Bridge already emits session.ready on ack — drop this.
+        }
+        other => {
+            // Stage X.5 will widen this to permission/tool envelopes.
+            // For now anything unknown is logged at debug only.
+            tracing::debug!(session = %handle.id, kind = %other, "acp envelope ignored (X.3 scaffold)");
+        }
+    }
 }

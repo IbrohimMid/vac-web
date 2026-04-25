@@ -9,6 +9,7 @@ members = [
     "tests/integration",
     "tests/red-team",
     "tools/codegen",
+    "tools/mock-acp",
     "tools/mock-engine",
 ]
 
