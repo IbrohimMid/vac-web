@@ -8,7 +8,7 @@
 //  - transport.send(sessionId, 'assessment.run', { swarm }) — same command the
 //    ReadinessHub buttons use today; the drawer becomes an alternate entry.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ASSESSOR_FAMILIES, type AssessorFamily } from '../../stores/assessment';
 import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
 import { useSession } from '../../stores/session';
@@ -53,7 +53,13 @@ const HEALTH_BADGE: Record<ConnectorHealth, string> = {
 
 export function RunAssessmentDrawer({ transport, onClose }: Props) {
   const sessionId = useSession((s) => s.sessionId);
-  const connectors = useConnectors((s) => Array.from(s.items.values()));
+  // Subscribe to the Map identity (stable across snapshots that don't mutate
+  // it), then derive the array via useMemo. Returning `Array.from(...)`
+  // directly from the selector creates a fresh array every render → trips
+  // Zustand's strict-mode equality check and (per audit) ships React error
+  // #185 on the run-sweep drawer.
+  const connectorMap = useConnectors((s) => s.items);
+  const connectors = useMemo(() => Array.from(connectorMap.values()), [connectorMap]);
   const [family, setFamily] = useState<AssessorFamily | 'all'>('rtd');
   const [depth, setDepth] = useState<Depth>('standard');
   const [running, setRunning] = useState(false);
