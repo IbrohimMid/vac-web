@@ -64,53 +64,98 @@ export function Composer({ transport }: { transport: TransportHandle }) {
   };
 
   return (
-    <div style={{ borderTop: '1px solid #eee', padding: 8 }}>
-      {attachments.length > 0 && (
-        <ul
-          aria-label="Attachments"
-          style={{ listStyle: 'none', padding: 0, margin: '0 0 6px 0', display: 'flex', gap: 4, flexWrap: 'wrap' }}
-        >
-          {attachments.map((a) => (
-            <li
-              key={a.id}
+    <div className="composer-wrap">
+      <div className="composer">
+        {attachments.length > 0 && (
+          <ul
+            aria-label="Attachments"
+            className="composer-chips"
+            style={{ listStyle: 'none', margin: 0 }}
+          >
+            {attachments.map((a) => (
+              <li key={a.id} className="context-chip">
+                <span>{a.label}</span>
+                <button
+                  onClick={() => useAttachments.getState().remove(a.id)}
+                  aria-label={`Remove ${a.label}`}
+                  className="x"
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    padding: 0,
+                    marginLeft: 4,
+                  }}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div style={{ position: 'relative' }}>
+          {pickerOpen && mentionQuery && (
+            <MentionPicker
+              transport={transport}
+              query={mentionQuery}
+              onClose={() => setPickerOpen(false)}
+            />
+          )}
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKey}
+            disabled={submitting || !sessionId}
+            placeholder={
+              sessionId
+                ? 'Ask, plan, or run a slash command…  type / for actions, @ to mention'
+                : 'No active session'
+            }
+            rows={3}
+            style={{
+              width: '100%',
+              border: 'none',
+              outline: 'none',
+              background: 'transparent',
+              color: 'var(--ink)',
+              padding: '12px 14px 6px',
+              resize: 'vertical',
+              fontFamily: 'var(--font-sans)',
+              fontSize: 'var(--fs-body)',
+              minHeight: 56,
+            }}
+          />
+        </div>
+        <div className="composer-foot">
+          <div className="left">
+            <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+              Enter to send · Shift+Enter newline · @ to mention
+            </span>
+          </div>
+          <div className="right">
+            {sessionId && (
+              <span
+                className="badge"
+                style={{ fontSize: 11, padding: '2px 6px' }}
+              >
+                {sessionId.slice(0, 12)}
+              </span>
+            )}
+            <button
+              onClick={submit}
+              disabled={submitting || !text.trim() || !sessionId}
+              className="btn primary"
               style={{
                 fontSize: 12,
-                background: 'var(--bg-2, #222)',
-                padding: '2px 6px',
-                borderRadius: 10,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
+                padding: '6px 12px',
+                opacity: submitting || !text.trim() || !sessionId ? 0.5 : 1,
               }}
             >
-              <span>{a.label}</span>
-              <button
-                onClick={() => useAttachments.getState().remove(a.id)}
-                aria-label={`Remove ${a.label}`}
-                style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div style={{ display: 'flex', gap: 8, position: 'relative' }}>
-        {pickerOpen && mentionQuery && (
-          <MentionPicker transport={transport} query={mentionQuery} onClose={() => setPickerOpen(false)} />
-        )}
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKey}
-          disabled={submitting || !sessionId}
-          placeholder={sessionId ? 'Type a prompt… (Enter to send, @ to mention)' : 'No active session'}
-          rows={2}
-          style={{ flex: 1, resize: 'vertical', padding: 8, fontFamily: 'inherit' }}
-        />
-        <button onClick={submit} disabled={submitting || !text.trim() || !sessionId}>
-          {submitting ? '…' : 'Send'}
-        </button>
+              {submitting ? 'Sending…' : 'Send'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

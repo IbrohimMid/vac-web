@@ -4,43 +4,35 @@ import { useNotify } from '../../stores/notify';
 export function TransientToasts() {
   const items = useNotify((s) => s.transient);
   const dismiss = useNotify((s) => s.dismiss);
+  if (items.length === 0) return null;
   return (
-    <div
-      aria-live="polite"
-      style={{
-        position: 'fixed',
-        top: 60,
-        right: 16,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        zIndex: 900,
-        maxWidth: 360,
-      }}
-    >
+    <div className="toast-stack" aria-live="polite">
       {items.map((n) => (
         <div
           key={n.id}
+          className="toast"
           style={{
-            background: 'var(--surface-1)',
-            border: '1px solid var(--border)',
-            borderLeft: `3px solid var(--sev-${n.severity})`,
-            padding: '8px 12px',
-            borderRadius: 4,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-            display: 'flex',
-            gap: 8,
+            // Border-left tinted by severity per ux-grammar §10.
+            borderLeft: `3px solid var(--${toneVar(n.severity)})`,
           }}
         >
           <SeverityIcon severity={n.severity} />
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 13 }}>{n.title}</div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{n.message}</div>
+            <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{n.message}</div>
           </div>
           <button
             aria-label="dismiss"
             onClick={() => dismiss(n.id)}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              color: 'var(--ink-3)',
+              fontSize: 14,
+              width: 20,
+              height: 20,
+            }}
           >
             ×
           </button>
@@ -48,6 +40,13 @@ export function TransientToasts() {
       ))}
     </div>
   );
+}
+
+function toneVar(sev: string): string {
+  if (sev === 'ok') return 'ok';
+  if (sev === 'warn') return 'warn';
+  if (sev === 'error') return 'crit';
+  return 'info';
 }
 
 export function StickyBanners() {
@@ -59,18 +58,19 @@ export function StickyBanners() {
         <div
           key={n.id}
           style={{
-            background: `var(--sev-${n.severity}, var(--surface-2))`,
-            color: 'white',
-            padding: '6px 12px',
+            background: `var(--${toneVar(n.severity)}-soft)`,
+            color: `var(--${toneVar(n.severity)})`,
+            padding: '8px 14px',
             fontSize: 13,
             display: 'flex',
             gap: 8,
             alignItems: 'center',
+            borderBottom: `1px solid var(--${toneVar(n.severity)})`,
           }}
         >
           <SeverityIcon severity={n.severity} />
           <strong>{n.title}</strong>
-          <span>{n.message}</span>
+          <span style={{ color: 'var(--ink-2)' }}>{n.message}</span>
         </div>
       ))}
     </div>
@@ -85,35 +85,53 @@ export function PersistentRail() {
     <aside
       aria-label="Notifications"
       style={{
-        border: '1px solid var(--border)',
-        borderRadius: 4,
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)',
+        background: 'var(--panel)',
         maxHeight: 240,
         overflowY: 'auto',
-        margin: '8px 0',
+        margin: 'var(--gap) var(--pad)',
       }}
     >
-      <header style={{ padding: 8, borderBottom: '1px solid var(--border)', fontSize: 12, fontWeight: 600 }}>
+      <header
+        style={{
+          padding: '8px 12px',
+          borderBottom: '1px solid var(--line)',
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--ink-2)',
+        }}
+      >
         Notifications ({items.length})
       </header>
       {items.map((n) => (
         <div
           key={n.id}
           style={{
-            padding: '6px 8px',
-            borderBottom: '1px solid var(--border)',
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--line-soft)',
             fontSize: 12,
             display: 'flex',
             gap: 8,
           }}
         >
           <SeverityIcon severity={n.severity} />
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 500 }}>{n.title}</div>
-            <div style={{ color: 'var(--text-2)' }}>{n.message}</div>
+            <div style={{ color: 'var(--ink-3)' }}>{n.message}</div>
           </div>
           <button
             onClick={() => dismiss(n.id)}
-            style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}
+            aria-label="Dismiss notification"
+            style={{
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              color: 'var(--ink-3)',
+              fontSize: 14,
+              width: 20,
+              height: 20,
+            }}
           >
             ×
           </button>

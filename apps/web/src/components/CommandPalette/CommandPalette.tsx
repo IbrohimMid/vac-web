@@ -90,73 +90,89 @@ export function CommandPalette({ dismiss, params }: OverlayRenderProps) {
     // Esc handled globally by overlays/esc.ts.
   };
 
+  // Group filtered rows by `action.group` so the cockpit `.palette-section`
+  // header can render once per group. Preserves score order within group.
+  const grouped = useMemo(() => {
+    const out: Array<[string, typeof filtered]> = [];
+    for (const row of filtered) {
+      const g = row.action.group ?? 'Actions';
+      const existing = out.find(([k]) => k === g);
+      if (existing) existing[1].push(row);
+      else out.push([g, [row]]);
+    }
+    return out;
+  }, [filtered]);
+
+  // Flatten back to a list with section markers so keyboard navigation still
+  // counts items linearly.
+  let runningIndex = 0;
+
   return (
     <div
+      className="palette"
+      role="dialog"
       aria-label="Command palette"
+      aria-modal="true"
       onKeyDown={onKey}
-      style={{
-        background: 'var(--surface-1, white)',
-        width: 560,
-        maxWidth: '90vw',
-        borderRadius: 8,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.2)',
-        overflow: 'hidden',
-      }}
       onClick={(e) => e.stopPropagation()}
     >
       <input
         ref={inputRef}
+        className="palette-input"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Type a command…"
-        style={{
-          width: '100%',
-          border: 'none',
-          outline: 'none',
-          padding: '16px',
-          fontSize: 16,
-          borderBottom: '1px solid var(--border, #eee)',
-          background: 'transparent',
-          color: 'var(--text-1)',
-        }}
+        placeholder="Type a command, page, or assessment…"
       />
-      <ul role="listbox" style={{ margin: 0, padding: 0, maxHeight: 400, overflowY: 'auto' }}>
+      <div className="palette-list" role="listbox">
         {filtered.length === 0 && (
-          <li style={{ padding: 16, color: 'var(--text-2)' }}>No commands</li>
+          <div className="empty">
+            <div className="icon-wrap">⌕</div>
+            No matches
+          </div>
         )}
-        {filtered.map((row, i) => (
-          <li
-            key={row.action.id}
-            role="option"
-            aria-selected={i === focused}
-            aria-disabled={!!row.disabledReason}
-            onClick={() => row.disabledReason || invoke(row.action)}
-            style={{
-              padding: '10px 16px',
-              listStyle: 'none',
-              background: i === focused ? 'var(--surface-2, #f0f4ff)' : undefined,
-              cursor: row.disabledReason ? 'not-allowed' : 'pointer',
-              opacity: row.disabledReason ? 0.4 : 1,
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'baseline',
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 500 }}>{row.action.label}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{row.action.description}</div>
-              {row.disabledReason && (
-                <div style={{ fontSize: 11, color: 'var(--sev-error)' }}>
-                  {row.disabledReason}
+        {grouped.map(([section, rows]) => (
+          <div key={section}>
+            <div className="palette-section">{section}</div>
+            {rows.map((row) => {
+              const i = runningIndex++;
+              const isActive = i === focused;
+              return (
+                <div
+                  key={row.action.id}
+                  className={`palette-item ${isActive ? 'active' : ''}`}
+                  role="option"
+                  aria-selected={isActive}
+                  aria-disabled={!!row.disabledReason}
+                  onMouseEnter={() => setFocused(i)}
+                  onClick={() => row.disabledReason || invoke(row.action)}
+                  style={{
+                    cursor: row.disabledReason ? 'not-allowed' : 'pointer',
+                    opacity: row.disabledReason ? 0.45 : 1,
+                  }}
+                >
+                  <span className="icon">⌘</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 500 }}>{row.action.label}</div>
+                    {row.action.description && (
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>
+                        {row.action.description}
+                      </div>
+                    )}
+                    {row.disabledReason && (
+                      <div style={{ fontSize: 11, color: 'var(--crit)' }}>
+                        {row.disabledReason}
+                      </div>
+                    )}
+                  </span>
+                  <span className="kbd" style={{ marginLeft: 'auto', fontSize: 11 }}>
+                    {row.action.keybinding ?? row.action.slash_alias ?? ''}
+                  </span>
                 </div>
-              )}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-2)' }}>
-              {row.action.keybinding ?? row.action.slash_alias ?? row.action.group}
-            </div>
-          </li>
+              );
+            })}
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
