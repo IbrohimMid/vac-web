@@ -21,16 +21,25 @@ export interface ContentEditableHandle {
 interface Props {
   placeholder?: string;
   disabled?: boolean;
+  /** When true, Enter still preventDefaults the editor's newline insertion
+   *  but does NOT call `onSubmit` — the active picker/palette is expected
+   *  to consume the Enter via its own listener. */
+  submitDisabled?: boolean;
   /** Submit fired by Enter (Shift+Enter inserts a newline; Enter during
    *  IME composition is silently ignored — the composition handler manages it). */
   onSubmit(): void;
-  /** Called on every input mutation with the live plain-text-ish view used to
-   *  detect `/` + `@` triggers. Caller decides what to do (open palette/picker). */
-  onTextChange(plainText: string, caret: { atStart: boolean; afterWhitespace: boolean }): void;
+  /** Called on every input mutation with:
+   *   - `plain`: full plain-text view of the editor (for empty-state etc.)
+   *   - `textBefore`: text from start of editor up to the caret (used by
+   *     pure trigger matchers in `composer/triggers.ts`). */
+  onTextChange(plain: string, textBefore: string): void;
 }
 
 export const ContentEditable = forwardRef<ContentEditableHandle, Props>(
-  function ContentEditable({ placeholder, disabled, onSubmit, onTextChange }, ref) {
+  function ContentEditable(
+    { placeholder, disabled, submitDisabled, onSubmit, onTextChange },
+    ref,
+  ) {
     const rootRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
     const [empty, setEmpty] = useState(true);
@@ -43,7 +52,7 @@ export const ContentEditable = forwardRef<ContentEditableHandle, Props>(
         if (rootRef.current) {
           rootRef.current.innerHTML = '';
           setEmpty(true);
-          onTextChange('', { atStart: true, afterWhitespace: true });
+          onTextChange('', '');
         }
       },
     }));
@@ -53,13 +62,21 @@ export const ContentEditable = forwardRef<ContentEditableHandle, Props>(
       if (!root) return;
       const txt = root.textContent ?? '';
       setEmpty(txt.length === 0);
-      const caret = inspectCaret(root);
-      onTextChange(txt, caret);
+      const before = textBeforeCaret(root);
+      onTextChange(txt, before);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        // IME composition owns Enter; let the browser commit the candidate.
+        if (composingRef.current) return;
+        // Always preventDefault so the editor never inserts a stray newline
+        // when the user wanted to submit / invoke a palette item.
         e.preventDefault();
+        // When a picker/palette is open, do NOT submit. The picker's window
+        // listener fires next (preventDefault doesn't stop propagation) and
+        // owns this Enter.
+        if (submitDisabled) return;
         onSubmit();
       }
     };
@@ -136,29 +153,75 @@ function insertPlainText(text: string): void {
   }
 }
 
-function inspectCaret(
-  root: HTMLDivElement,
-): { atStart: boolean; afterWhitespace: boolean } {
+/**
+ * Returns the editor's plain-text content from start up to the caret position
+ * in document order. Used by `composer/triggers.ts::matchTrigger` so trigger
+ * detection can reason about real char-before-trigger context (the previous
+ * `inspectCaret` shape only saw the char immediately before the caret, which
+ * was always the trigger char itself the moment it was typed).
+ *
+ * Walks DOM in order; mention chips contribute `@<label>` (matching the
+ * serializer); <br> contributes \n; child collection stops at the caret's
+ * range.startContainer + range.startOffset.
+ */
+function textBeforeCaret(root: HTMLDivElement): string {
   const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) {
-    return { atStart: true, afterWhitespace: true };
-  }
+  if (!sel || sel.rangeCount === 0) return '';
   const range = sel.getRangeAt(0);
-  if (!root.contains(range.startContainer)) {
-    return { atStart: true, afterWhitespace: true };
-  }
-  // atStart: caret offset 0 in the first text-bearing child
-  const atStart = range.startOffset === 0 && range.startContainer === root;
-  // afterWhitespace: char immediately before caret is whitespace OR caret at start
-  const node = range.startContainer;
-  if (node.nodeType === 3) {
+  if (!root.contains(range.startContainer)) return '';
+  const out: string[] = [];
+  collect(root, range.startContainer, range.startOffset, out, true);
+  return out.join('');
+}
+
+/** Returns true if collection should stop (caret reached). */
+function collect(
+  node: Node,
+  stopNode: Node,
+  stopOffset: number,
+  out: string[],
+  isRoot: boolean,
+): boolean {
+  if (node.nodeType === 3 /* TEXT_NODE */) {
     const txt = node.nodeValue ?? '';
-    const off = range.startOffset;
-    if (off === 0) return { atStart, afterWhitespace: true };
-    const prev = txt.charAt(off - 1);
-    return { atStart, afterWhitespace: /\s/.test(prev) };
+    if (node === stopNode) {
+      out.push(txt.slice(0, stopOffset));
+      return true;
+    }
+    out.push(txt);
+    return false;
   }
-  return { atStart, afterWhitespace: true };
+  if (node.nodeType !== 1 /* ELEMENT_NODE */) return false;
+  const el = node as HTMLElement;
+  // Mention chip — emit `@<label>`, do NOT recurse.
+  if (el.dataset.mention === '1') {
+    const label = el.dataset.mentionLabel ?? el.textContent ?? '';
+    out.push(`@${label}`);
+    return el === stopNode;
+  }
+  if (el.tagName === 'BR') {
+    out.push('\n');
+    return el === stopNode;
+  }
+  // Block break before nested div/p (matches serializer behavior).
+  if (!isRoot && (el.tagName === 'DIV' || el.tagName === 'P')) {
+    const last = out[out.length - 1];
+    if (last && !last.endsWith('\n')) out.push('\n');
+  }
+  // If caret is `(stopNode === el, stopOffset = N)` that means caret sits
+  // before the Nth child. Iterate children, stopping when we hit the boundary.
+  const childList = Array.from(el.childNodes);
+  if (el === stopNode) {
+    for (let i = 0; i < stopOffset && i < childList.length; i++) {
+      const child = childList[i];
+      if (child) collect(child, stopNode, stopOffset, out, false);
+    }
+    return true;
+  }
+  for (const child of childList) {
+    if (collect(child, stopNode, stopOffset, out, false)) return true;
+  }
+  return false;
 }
 
 function insertChipAtTrigger(

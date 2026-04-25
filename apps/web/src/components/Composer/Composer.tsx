@@ -22,6 +22,7 @@ import { useSession } from '../../stores/session';
 import { useTranscript } from '../../stores/transcript';
 import type { TransportHandle } from '../../transport';
 import { serialize, type MentionRef } from '../../composer/serialize';
+import { matchTrigger } from '../../composer/triggers';
 
 const EXPERIMENTAL_KEY = 'vac.composer.experimental';
 
@@ -180,17 +181,11 @@ function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
     });
   };
 
-  const onTextChange = (
-    plain: string,
-    caret: { atStart: boolean; afterWhitespace: boolean },
-  ) => {
+  const onTextChange = (plain: string, textBefore: string) => {
     setHasContent(plain.trim().length > 0);
-    // Slash trigger: `/` at line start or after whitespace.
-    const slashMatch = matchTrigger(plain, '/', caret);
-    setSlashQuery(slashMatch);
-    // Mention trigger: `@` at any non-mid-word position.
-    const atMatch = matchTrigger(plain, '@', caret);
-    setMentionQuery(atMatch);
+    // Pure trigger detection over text-before-caret. See composer/triggers.ts.
+    setSlashQuery(matchTrigger(textBefore, '/'));
+    setMentionQuery(matchTrigger(textBefore, '@'));
   };
 
   const insertMention = (r: {
@@ -250,6 +245,9 @@ function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
         <ContentEditable
           ref={editorRef}
           disabled={submitting || !sessionId}
+          // While a palette/picker is open it owns Enter — editor still
+          // preventDefaults newline insertion but skips submit.
+          submitDisabled={slashQuery !== null || mentionQuery !== null}
           placeholder={
             sessionId
               ? 'Ask, plan, or run a slash command…  type / for actions, @ to mention'
@@ -261,34 +259,6 @@ function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
       </div>
     </ComposerShell>
   );
-}
-
-/**
- * Match an active trigger char (`/` or `@`) ending at the caret. Returns the
- * query (chars after the trigger) or null when no active trigger.
- *
- * Slash is gated on caret being at line start or after whitespace; the
- * `@` form is more permissive (any whitespace-prefixed `@` token).
- */
-function matchTrigger(
-  plain: string,
-  ch: '/' | '@',
-  caret: { atStart: boolean; afterWhitespace: boolean },
-): string | null {
-  if (!caret.afterWhitespace && !caret.atStart && ch === '/') return null;
-  // Find the last `ch` whose position is preceded by start/whitespace.
-  for (let i = plain.length - 1; i >= 0; i--) {
-    if (plain[i] === ch) {
-      const before = i === 0 ? '' : plain[i - 1] ?? '';
-      if (i === 0 || /\s/.test(before)) {
-        const tail = plain.slice(i + 1);
-        if (/\s/.test(tail)) return null; // whitespace breaks the trigger
-        return tail;
-      }
-      return null;
-    }
-  }
-  return null;
 }
 
 // ---- Shared chrome ------------------------------------------------------

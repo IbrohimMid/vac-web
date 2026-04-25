@@ -5,7 +5,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { filterActions } from '../../actions/filterActions';
 import { type Context } from '../../actions/predicate';
-import { markUsed } from '../../actions/recency';
 import { useActions, type ActionSpec } from '../../actions/registry';
 import { useComposer } from '../../stores/composer';
 import { useSession } from '../../stores/session';
@@ -56,7 +55,8 @@ export function SlashPalette({ query, onInvoke, onClose }: Props) {
       } else if (e.key === 'Enter' && rows[cursor] && !rows[cursor]?.disabledReason) {
         e.preventDefault();
         const r = rows[cursor]!;
-        markUsed(r.action.id);
+        // Recency tracking is the parent's responsibility (it also dispatches
+        // the action), so we only forward the invoke here.
         onInvokeRef.current(r.action);
       }
     };
@@ -105,7 +105,6 @@ export function SlashPalette({ query, onInvoke, onClose }: Props) {
           onMouseEnter={() => setCursor(i)}
           onClick={() => {
             if (row.disabledReason) return;
-            markUsed(row.action.id);
             onInvoke(row.action);
           }}
         >
