@@ -4,8 +4,10 @@ import './styles/tokens.css';
 import './styles/cockpit.css';
 import { BridgeStatus } from './app/BridgeStatus';
 import { PairingPrompt } from './app/PairingPrompt';
-import { ActivityRail } from './components/ActivityRail/ActivityRail';
 import { Composer } from './components/Composer/Composer';
+import { Rail } from './components/cockpit/Rail';
+import { Sidebar } from './components/cockpit/Sidebar';
+import { Topbar as CockpitTopbar } from './components/cockpit/Topbar';
 import {
   PersistentRail,
   StickyBanners,
@@ -14,13 +16,10 @@ import {
 import { OverlayHost } from './components/OverlayHost/OverlayHost';
 import { SessionPicker } from './components/SessionPicker/SessionPicker';
 import { ShellDrawer } from './components/Shell/ShellDrawer';
-import { Topbar } from './components/Topbar/Topbar';
 import { Transcript } from './components/Transcript/Transcript';
-import { Workbench } from './components/Workbench/Workbench';
 
-// Non-default workbench panes lazy-load to keep the initial bundle focused on
-// the Transcript + composer surface. Each pane chunks independently; Vite
-// generates one JS file per pane and the browser fetches on first tab click.
+// Phase-3..8 surfaces — each route lazy-loads its primary panel so the
+// initial chunk stays under the bundle budget.
 const ApprovalsTab = lazy(() =>
   import('./components/Approvals/ApprovalsTab').then((m) => ({ default: m.ApprovalsTab })),
 );
@@ -36,21 +35,13 @@ const HandoffTab = lazy(() =>
 const SessionsTab = lazy(() =>
   import('./components/Sessions/SessionsTab').then((m) => ({ default: m.SessionsTab })),
 );
-const RuntimeTab = lazy(() =>
-  import('./components/Runtime/RuntimeTab').then((m) => ({ default: m.RuntimeTab })),
-);
-const ConnectorsTab = lazy(() =>
-  import('./components/Connectors/ConnectorsTab').then((m) => ({ default: m.ConnectorsTab })),
-);
 const ReleaseTab = lazy(() =>
   import('./components/Release/ReleaseTab').then((m) => ({ default: m.ReleaseTab })),
-);
-const MigrationTab = lazy(() =>
-  import('./components/Migration/MigrationTab').then((m) => ({ default: m.MigrationTab })),
 );
 const ArchiveTab = lazy(() =>
   import('./components/Archive/ArchiveTab').then((m) => ({ default: m.ArchiveTab })),
 );
+
 import { registerApprovalHandlers } from './domain/approvals/handlers';
 import { registerAssessmentHandlers } from './domain/assessment/handlers';
 import { registerCapabilitiesHandlers } from './domain/capabilities/handlers';
@@ -65,6 +56,7 @@ import { registerRuntimeHandlers } from './domain/runtime/handlers';
 import { registerSessionHandlers } from './domain/sessions/handlers';
 import { registerTranscriptHandlers } from './domain/transcript/handlers';
 import { overlayRegistry } from './overlays/overlay-registry';
+import { useCockpit } from './stores/cockpit';
 import { useOverlays } from './stores/overlays';
 import { useShell } from './stores/shell';
 import { createTransport, type TransportHandle } from './transport';
@@ -74,6 +66,21 @@ function App() {
   const [paired, setPaired] = useState(false);
   const [transport, setTransport] = useState<TransportHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Apply theme + density + accent to <html data-*> + CSS vars.
+  const theme = useCockpit((s) => s.theme);
+  const density = useCockpit((s) => s.density);
+  const accent = useCockpit((s) => s.accent);
+  const sidebarCollapsed = useCockpit((s) => s.sidebarCollapsed);
+  const railCollapsed = useCockpit((s) => s.railCollapsed);
+  const route = useCockpit((s) => s.route);
+
+  useEffect(() => {
+    const html = document.documentElement;
+    html.setAttribute('data-theme', theme);
+    html.setAttribute('data-density', density);
+    html.style.setProperty('--accent', accent);
+  }, [theme, density, accent]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -100,9 +107,6 @@ function App() {
     const offs: Array<() => void> = [];
     (async () => {
       try {
-        // Relay mode: if the URL carries `?relay=…&device=…&session=…&token=…`,
-        // dial the relay instead of the direct local bridge WS. All downstream
-        // handlers work identically because the wire envelope is unchanged.
         const relay = parseRelayParamsFromLocation();
         if (relay) {
           t = await createRelayTransport(relay);
@@ -142,7 +146,7 @@ function App() {
 
   if (!paired) {
     return (
-      <main style={{ fontFamily: 'system-ui', maxWidth: 900, margin: '0 auto' }}>
+      <main className="paired-empty">
         <h1>vac-web</h1>
         <PairingPrompt onPaired={() => setPaired(true)} />
         <BridgeStatus />
@@ -150,63 +154,144 @@ function App() {
     );
   }
 
+  const openTweaks = () => {
+    // Tweaks panel lands in Stage E; for now just open the command palette
+    // so ⌘K + tweaks button share an entry point.
+    useOverlays.getState().open('command_palette', { transport });
+  };
+
   return (
-    <main
-      style={{
-        fontFamily: 'system-ui',
-        maxWidth: 1100,
-        margin: '0 auto',
-        color: 'var(--text-1)',
-      }}
+    <div
+      className="app"
+      data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}
+      data-rail={railCollapsed ? 'collapsed' : 'expanded'}
     >
-      <Topbar transport={transport} />
-      <StickyBanners />
-      {error && <div style={{ color: 'crimson', padding: 8 }}>transport error: {error}</div>}
-      <div style={{ fontSize: 12, color: 'var(--text-2)', padding: 8, display: 'flex', gap: 12 }}>
-        <span>
-          <kbd>Ctrl/⌘ + K</kbd> palette · <kbd>Ctrl/⌘ + `</kbd> shell
-        </span>
-        <button
-          onClick={() => useOverlays.getState().open('guided_mode', { transport })}
-          style={{ fontSize: 12 }}
-        >
-          Guided setup
-        </button>
-      </div>
-      {transport ? (
-        <div style={{ padding: 8 }}>
-          <SessionPicker transport={transport} />
+      <CockpitTopbar
+        onCmdK={() => useOverlays.getState().open('command_palette', { transport })}
+        onTweaks={openTweaks}
+      />
+      <Sidebar />
+      <main className="main">
+        <StickyBanners />
+        {error && (
+          <div style={{ color: 'var(--crit)', padding: 'var(--pad)' }}>
+            transport error: {error}
+          </div>
+        )}
+        {transport ? (
           <Suspense
-            fallback={<div style={{ padding: 16, color: 'var(--text-2)' }}>Loading…</div>}
+            fallback={
+              <div style={{ padding: 16, color: 'var(--ink-3)' }}>Loading surface…</div>
+            }
           >
-            <Workbench
-              panes={{
-                transcript: <Transcript />,
-                approvals: <ApprovalsTab transport={transport} />,
-                review: <ReviewTab transport={transport} />,
-                sessions: <SessionsTab transport={transport} />,
-                readiness: <ReadinessHub transport={transport} />,
-                handoff: <HandoffTab transport={transport} />,
-                release: <ReleaseTab transport={transport} />,
-                migration: <MigrationTab transport={transport} />,
-                archive: <ArchiveTab />,
-                runtime: <RuntimeTab transport={transport} />,
-                connectors: <ConnectorsTab transport={transport} />,
-              }}
-            />
+            {route === 'build' && (
+              <BuildSurface transport={transport}>
+                <Transcript />
+                <Composer transport={transport} />
+              </BuildSurface>
+            )}
+            {route === 'assess' && (
+              <SurfaceWrap title="Assess">
+                <ReadinessHub transport={transport} />
+              </SurfaceWrap>
+            )}
+            {route === 'handoff' && (
+              <SurfaceWrap title="Handoff">
+                <HandoffTab transport={transport} />
+              </SurfaceWrap>
+            )}
+            {route === 'release' && (
+              <SurfaceWrap title="Release">
+                <ReleaseTab transport={transport} />
+              </SurfaceWrap>
+            )}
+            {route === 'knowledge' && (
+              <SurfaceWrap title="Knowledge">
+                <ArchiveTab />
+              </SurfaceWrap>
+            )}
+            {route === 'sessions' && (
+              <SurfaceWrap title="Sessions">
+                <SessionPicker transport={transport} />
+                <SessionsTab transport={transport} />
+              </SurfaceWrap>
+            )}
           </Suspense>
-          <Composer transport={transport} />
-          <PersistentRail />
-          <ActivityRail />
-        </div>
-      ) : (
-        <p>connecting…</p>
-      )}
+        ) : (
+          <p style={{ padding: 'var(--pad)' }}>connecting…</p>
+        )}
+        <PersistentRail />
+      </main>
+      <Rail />
       <OverlayHost registry={registry} />
       <ShellDrawer transport={transport} />
       <TransientToasts />
       <BridgeStatus />
-    </main>
+    </div>
+  );
+}
+
+interface BuildProps {
+  transport: TransportHandle;
+  children: React.ReactNode;
+}
+
+function BuildSurface({ transport, children }: BuildProps) {
+  // Build route: transcript + composer in primary, Approvals + Review surface
+  // as a stacked sub-pane below. Stage C will redesign this into the Workbench
+  // tab layout per the prototype.
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)', padding: 'var(--pad)', minWidth: 0 }}>
+      <section
+        style={{
+          background: 'var(--panel)',
+          borderRadius: 'var(--r-md)',
+          border: '1px solid var(--line)',
+          padding: 'var(--pad)',
+        }}
+      >
+        {children}
+      </section>
+      <section
+        style={{
+          background: 'var(--panel)',
+          borderRadius: 'var(--r-md)',
+          border: '1px solid var(--line)',
+          padding: 'var(--pad)',
+        }}
+      >
+        <h3 style={{ margin: '0 0 var(--gap) 0', fontSize: 14 }}>Approvals</h3>
+        <ApprovalsTab transport={transport} />
+      </section>
+      <section
+        style={{
+          background: 'var(--panel)',
+          borderRadius: 'var(--r-md)',
+          border: '1px solid var(--line)',
+          padding: 'var(--pad)',
+        }}
+      >
+        <h3 style={{ margin: '0 0 var(--gap) 0', fontSize: 14 }}>Review</h3>
+        <ReviewTab transport={transport} />
+      </section>
+    </div>
+  );
+}
+
+function SurfaceWrap({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ padding: 'var(--pad)', minWidth: 0, overflow: 'auto' }}>
+      <h2 style={{ margin: '0 0 var(--gap) 0', fontSize: 18 }}>{title}</h2>
+      <div
+        style={{
+          background: 'var(--panel)',
+          borderRadius: 'var(--r-md)',
+          border: '1px solid var(--line)',
+        }}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 
