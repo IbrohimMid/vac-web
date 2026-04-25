@@ -1,19 +1,58 @@
-import { useEffect, useMemo, useState } from 'react';
+// Composer — Stage I.
+// Default path: textarea (preserved from Phase 6, fully functional, IME-safe
+// because the browser owns the textbox).
+// Experimental path: contentEditable + slash palette + inline mention chips,
+// gated behind `localStorage['vac.composer.experimental'] === '1'`.
+//
+// Both paths converge on the same submit contract:
+//   message.submit { text, attachments, mentions }
+//
+// `mentions` is `[]` for textarea mode (mentions are emitted as `attachments`
+// there). Server side accepts an empty array; tests lock this shape.
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ContentEditable, buildMentionChip, type ContentEditableHandle } from './ContentEditable';
 import { MentionPicker } from './MentionPicker';
+import { SlashPalette } from './SlashPalette';
+import { markUsed } from '../../actions/recency';
+import type { ActionSpec } from '../../actions/registry';
 import { useAttachments } from '../../stores/attachments';
 import { useComposer } from '../../stores/composer';
 import { useSession } from '../../stores/session';
-import type { TransportHandle } from '../../transport';
 import { useTranscript } from '../../stores/transcript';
+import type { TransportHandle } from '../../transport';
+import { serialize, type MentionRef } from '../../composer/serialize';
+
+const EXPERIMENTAL_KEY = 'vac.composer.experimental';
+
+function readExperimentalFlag(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(EXPERIMENTAL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 export function Composer({ transport }: { transport: TransportHandle }) {
+  // Read once on mount; flipping the flag requires a reload (acceptable for
+  // an experimental toggle, and avoids resetting in-flight composer state).
+  const [experimental] = useState(readExperimentalFlag);
+  return experimental ? (
+    <ExperimentalComposer transport={transport} />
+  ) : (
+    <TextareaComposer transport={transport} />
+  );
+}
+
+// ---- Default textarea path (unchanged contract, still default) ----------
+
+function TextareaComposer({ transport }: { transport: TransportHandle }) {
   const { text, submitting, setText, setSubmitting, reset } = useComposer();
   const sessionId = useSession((s) => s.sessionId);
   const attachments = useAttachments((s) => s.items);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Derive active @-query from the last token after `@`. Auto-close when the
-  // `@` disappears (backspaced) or a whitespace breaks the mention.
   const mentionQuery = useMemo(() => {
     if (!pickerOpen) return '';
     const i = text.lastIndexOf('@');
@@ -30,28 +69,19 @@ export function Composer({ transport }: { transport: TransportHandle }) {
 
   const submit = async () => {
     if (!sessionId || submitting || !text.trim()) return;
-    setSubmitting(true);
-    try {
-      const localId = 'usr_' + Math.random().toString(36).slice(2, 10);
-      useTranscript.getState().upsert({
-        id: localId,
-        role: 'user',
-        content: text,
-        state: 'completed',
-        createdAt: new Date().toISOString(),
-      });
-      const ack = await transport.send(sessionId, 'message.submit', {
-        text,
-        attachments: attachments.map((a) => ({ kind: a.kind, label: a.label, payload: a.payload })),
-      });
-      if (!ack.ok) {
-        console.error('submit failed', ack.error);
-      }
-      reset();
-      useAttachments.getState().clear();
-    } finally {
-      setSubmitting(false);
-    }
+    await dispatchSubmit({
+      transport,
+      sessionId,
+      text,
+      attachments: attachments.map((a) => ({ kind: a.kind, label: a.label, payload: a.payload })),
+      mentions: [],
+      onStart: () => setSubmitting(true),
+      onDone: () => {
+        reset();
+        useAttachments.getState().clear();
+        setSubmitting(false);
+      },
+    });
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -63,6 +93,227 @@ export function Composer({ transport }: { transport: TransportHandle }) {
     }
   };
 
+  return (
+    <ComposerShell
+      sessionId={sessionId}
+      submitting={submitting}
+      canSend={!!text.trim() && !!sessionId && !submitting}
+      onSendClick={submit}
+      attachments={attachments.map((a) => ({ id: a.id, label: a.label }))}
+      onRemoveAttachment={(id) => useAttachments.getState().remove(id)}
+    >
+      <div style={{ position: 'relative' }}>
+        {pickerOpen && mentionQuery && (
+          <MentionPicker
+            transport={transport}
+            query={mentionQuery}
+            onSelect={(r) => {
+              useAttachments.getState().add({
+                id: r.id,
+                kind: r.kind === 'file' ? 'file' : 'url',
+                label: r.label,
+                payload: r.payload,
+              });
+            }}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKey}
+          disabled={submitting || !sessionId}
+          placeholder={
+            sessionId
+              ? 'Ask, plan, or run a slash command…  type / for actions, @ to mention'
+              : 'No active session'
+          }
+          rows={3}
+          style={{
+            width: '100%',
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            color: 'var(--ink)',
+            padding: '12px 14px 6px',
+            resize: 'vertical',
+            fontFamily: 'var(--font-sans)',
+            fontSize: 'var(--fs-body)',
+            minHeight: 56,
+          }}
+        />
+      </div>
+    </ComposerShell>
+  );
+}
+
+// ---- Experimental contentEditable path ----------------------------------
+
+function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
+  const { submitting, setSubmitting, reset } = useComposer();
+  const sessionId = useSession((s) => s.sessionId);
+  const attachments = useAttachments((s) => s.items);
+  const editorRef = useRef<ContentEditableHandle>(null);
+  const [hasContent, setHasContent] = useState(false);
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!sessionId || submitting) return;
+    const root = editorRef.current?.root() ?? null;
+    const { text, mentions } = serialize(root);
+    if (!text.trim() && mentions.length === 0) return;
+    await dispatchSubmit({
+      transport,
+      sessionId,
+      text,
+      attachments: attachments.map((a) => ({ kind: a.kind, label: a.label, payload: a.payload })),
+      mentions,
+      onStart: () => setSubmitting(true),
+      onDone: () => {
+        editorRef.current?.clear();
+        setHasContent(false);
+        reset();
+        useAttachments.getState().clear();
+        setSubmitting(false);
+      },
+    });
+  };
+
+  const onTextChange = (
+    plain: string,
+    caret: { atStart: boolean; afterWhitespace: boolean },
+  ) => {
+    setHasContent(plain.trim().length > 0);
+    // Slash trigger: `/` at line start or after whitespace.
+    const slashMatch = matchTrigger(plain, '/', caret);
+    setSlashQuery(slashMatch);
+    // Mention trigger: `@` at any non-mid-word position.
+    const atMatch = matchTrigger(plain, '@', caret);
+    setMentionQuery(atMatch);
+  };
+
+  const insertMention = (r: {
+    id: string;
+    kind: 'file' | 'url' | 'page';
+    label: string;
+    payload: string;
+  }) => {
+    const handle = editorRef.current;
+    if (!handle) return;
+    const trigger = `@${mentionQuery ?? ''}`;
+    const chip = buildMentionChip(r);
+    handle.insertChip(trigger, chip);
+    setMentionQuery(null);
+  };
+
+  const invokeSlashAction = (action: ActionSpec) => {
+    markUsed(action.id);
+    if (transport && sessionId) {
+      transport
+        .send(sessionId, 'palette.invoke_action', { actionId: action.id, args: {} })
+        .catch(() => {
+          /* notify lane handles */
+        });
+    }
+    editorRef.current?.clear();
+    setSlashQuery(null);
+    setHasContent(false);
+  };
+
+  return (
+    <ComposerShell
+      sessionId={sessionId}
+      submitting={submitting}
+      canSend={hasContent && !!sessionId && !submitting}
+      onSendClick={submit}
+      attachments={attachments.map((a) => ({ id: a.id, label: a.label }))}
+      onRemoveAttachment={(id) => useAttachments.getState().remove(id)}
+      footnote="experimental · Enter to send · Shift+Enter newline · / commands · @ mentions"
+    >
+      <div style={{ position: 'relative' }}>
+        {slashQuery !== null && (
+          <SlashPalette
+            query={slashQuery}
+            onInvoke={invokeSlashAction}
+            onClose={() => setSlashQuery(null)}
+          />
+        )}
+        {mentionQuery !== null && (
+          <MentionPicker
+            transport={transport}
+            query={mentionQuery}
+            onSelect={insertMention}
+            onClose={() => setMentionQuery(null)}
+          />
+        )}
+        <ContentEditable
+          ref={editorRef}
+          disabled={submitting || !sessionId}
+          placeholder={
+            sessionId
+              ? 'Ask, plan, or run a slash command…  type / for actions, @ to mention'
+              : 'No active session'
+          }
+          onSubmit={submit}
+          onTextChange={onTextChange}
+        />
+      </div>
+    </ComposerShell>
+  );
+}
+
+/**
+ * Match an active trigger char (`/` or `@`) ending at the caret. Returns the
+ * query (chars after the trigger) or null when no active trigger.
+ *
+ * Slash is gated on caret being at line start or after whitespace; the
+ * `@` form is more permissive (any whitespace-prefixed `@` token).
+ */
+function matchTrigger(
+  plain: string,
+  ch: '/' | '@',
+  caret: { atStart: boolean; afterWhitespace: boolean },
+): string | null {
+  if (!caret.afterWhitespace && !caret.atStart && ch === '/') return null;
+  // Find the last `ch` whose position is preceded by start/whitespace.
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (plain[i] === ch) {
+      const before = i === 0 ? '' : plain[i - 1] ?? '';
+      if (i === 0 || /\s/.test(before)) {
+        const tail = plain.slice(i + 1);
+        if (/\s/.test(tail)) return null; // whitespace breaks the trigger
+        return tail;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+// ---- Shared chrome ------------------------------------------------------
+
+interface ShellProps {
+  sessionId: string | null;
+  submitting: boolean;
+  canSend: boolean;
+  onSendClick(): void;
+  attachments: Array<{ id: string; label: string }>;
+  onRemoveAttachment(id: string): void;
+  footnote?: string;
+  children: React.ReactNode;
+}
+
+function ComposerShell({
+  sessionId,
+  submitting,
+  canSend,
+  onSendClick,
+  attachments,
+  onRemoveAttachment,
+  footnote,
+  children,
+}: ShellProps) {
   return (
     <div className="composer-wrap">
       <div className="composer">
@@ -76,7 +327,7 @@ export function Composer({ transport }: { transport: TransportHandle }) {
               <li key={a.id} className="context-chip">
                 <span>{a.label}</span>
                 <button
-                  onClick={() => useAttachments.getState().remove(a.id)}
+                  onClick={() => onRemoveAttachment(a.id)}
                   aria-label={`Remove ${a.label}`}
                   className="x"
                   style={{
@@ -94,62 +345,27 @@ export function Composer({ transport }: { transport: TransportHandle }) {
             ))}
           </ul>
         )}
-        <div style={{ position: 'relative' }}>
-          {pickerOpen && mentionQuery && (
-            <MentionPicker
-              transport={transport}
-              query={mentionQuery}
-              onClose={() => setPickerOpen(false)}
-            />
-          )}
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={onKey}
-            disabled={submitting || !sessionId}
-            placeholder={
-              sessionId
-                ? 'Ask, plan, or run a slash command…  type / for actions, @ to mention'
-                : 'No active session'
-            }
-            rows={3}
-            style={{
-              width: '100%',
-              border: 'none',
-              outline: 'none',
-              background: 'transparent',
-              color: 'var(--ink)',
-              padding: '12px 14px 6px',
-              resize: 'vertical',
-              fontFamily: 'var(--font-sans)',
-              fontSize: 'var(--fs-body)',
-              minHeight: 56,
-            }}
-          />
-        </div>
+        {children}
         <div className="composer-foot">
           <div className="left">
             <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-              Enter to send · Shift+Enter newline · @ to mention
+              {footnote ?? 'Enter to send · Shift+Enter newline · @ to mention'}
             </span>
           </div>
           <div className="right">
             {sessionId && (
-              <span
-                className="badge"
-                style={{ fontSize: 11, padding: '2px 6px' }}
-              >
+              <span className="badge" style={{ fontSize: 11, padding: '2px 6px' }}>
                 {sessionId.slice(0, 12)}
               </span>
             )}
             <button
-              onClick={submit}
-              disabled={submitting || !text.trim() || !sessionId}
+              onClick={onSendClick}
+              disabled={!canSend}
               className="btn primary"
               style={{
                 fontSize: 12,
                 padding: '6px 12px',
-                opacity: submitting || !text.trim() || !sessionId ? 0.5 : 1,
+                opacity: canSend ? 1 : 0.5,
               }}
             >
               {submitting ? 'Sending…' : 'Send'}
@@ -159,4 +375,63 @@ export function Composer({ transport }: { transport: TransportHandle }) {
       </div>
     </div>
   );
+}
+
+// ---- Submit pipeline ----------------------------------------------------
+
+interface DispatchArgs {
+  transport: TransportHandle;
+  sessionId: string;
+  text: string;
+  attachments: Array<{ kind: string; label: string; payload: string }>;
+  mentions: MentionRef[];
+  onStart(): void;
+  onDone(): void;
+}
+
+/** Single source of truth for the message.submit envelope shape, locked
+ *  by composer.payload.test.ts so the contract cannot drift. */
+export function buildSubmitPayload(args: {
+  text: string;
+  attachments: Array<{ kind: string; label: string; payload: string }>;
+  mentions: MentionRef[];
+}): {
+  text: string;
+  attachments: Array<{ kind: string; label: string; payload: string }>;
+  mentions: MentionRef[];
+} {
+  return {
+    text: args.text,
+    attachments: args.attachments,
+    mentions: args.mentions,
+  };
+}
+
+async function dispatchSubmit({
+  transport,
+  sessionId,
+  text,
+  attachments,
+  mentions,
+  onStart,
+  onDone,
+}: DispatchArgs): Promise<void> {
+  onStart();
+  try {
+    const localId = 'usr_' + Math.random().toString(36).slice(2, 10);
+    useTranscript.getState().upsert({
+      id: localId,
+      role: 'user',
+      content: text,
+      state: 'completed',
+      createdAt: new Date().toISOString(),
+    });
+    const payload = buildSubmitPayload({ text, attachments, mentions });
+    const ack = await transport.send(sessionId, 'message.submit', payload);
+    if (!ack.ok) {
+      console.error('submit failed', ack.error);
+    }
+  } finally {
+    onDone();
+  }
 }

@@ -1,15 +1,16 @@
 // `@`-trigger fuzzy picker over project files (+ connector items later).
 //
 // Debounced query → `context.mention_search` command; bridge responds via
-// `context.mention_results` event; picker shows top results. Enter selects;
-// Esc closes. Parent (Composer) owns open/close state.
+// `context.mention_results` event; picker shows top results. Enter or click
+// invokes `onSelect(result)` — caller decides what happens (attachment tray
+// for textarea mode, inline DOM chip for contentEditable mode). The picker
+// itself never mutates global state.
 
 import { useEffect, useRef, useState } from 'react';
-import { useAttachments } from '../../stores/attachments';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
-interface Result {
+export interface MentionResult {
   id: string;
   kind: 'file' | 'url' | 'page';
   label: string;
@@ -20,15 +21,20 @@ interface Result {
 interface Props {
   transport: TransportHandle | null;
   query: string;
+  onSelect(result: MentionResult): void;
   onClose: () => void;
 }
 
-export function MentionPicker({ transport, query, onClose }: Props) {
+export function MentionPicker({ transport, query, onSelect, onClose }: Props) {
   const sessionId = useSession((s) => s.sessionId);
-  const [results, setResults] = useState<Result[]>([]);
+  const [results, setResults] = useState<MentionResult[]>([]);
   const [cursor, setCursor] = useState(0);
+  // Refs so the keydown listener doesn't need to re-register on every prop
+  // identity change; callbacks may be inline arrow functions from the parent.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     if (!transport || !sessionId || !query) {
@@ -36,7 +42,7 @@ export function MentionPicker({ transport, query, onClose }: Props) {
       return;
     }
     const off = transport.on('context.mention_results', (ev) => {
-      const p = ev.payload as { query?: string; results?: Result[] } | null;
+      const p = ev.payload as { query?: string; results?: MentionResult[] } | null;
       if (!p || p.query !== query) return;
       setResults(p.results ?? []);
       setCursor(0);
@@ -63,12 +69,7 @@ export function MentionPicker({ transport, query, onClose }: Props) {
       } else if (e.key === 'Enter' && results[cursor]) {
         e.preventDefault();
         const r = results[cursor]!;
-        useAttachments.getState().add({
-          id: r.id,
-          kind: r.kind === 'file' ? 'file' : 'url',
-          label: r.label,
-          payload: r.payload,
-        });
+        onSelectRef.current(r);
         onCloseRef.current();
       }
     };
@@ -89,12 +90,13 @@ export function MentionPicker({ transport, query, onClose }: Props) {
         listStyle: 'none',
         margin: 0,
         padding: 4,
-        background: 'var(--bg-1, #1a1a1a)',
-        border: '1px solid var(--border-1, #333)',
-        borderRadius: 6,
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 'var(--r-md)',
         maxHeight: 240,
         overflow: 'auto',
         zIndex: 40,
+        boxShadow: 'var(--shadow-md)',
       }}
     >
       {results.map((r, i) => (
@@ -104,12 +106,16 @@ export function MentionPicker({ transport, query, onClose }: Props) {
           aria-selected={i === cursor}
           style={{
             padding: '4px 8px',
-            background: i === cursor ? 'var(--bg-2, #222)' : 'transparent',
+            background: i === cursor ? 'var(--bg-hover)' : 'transparent',
             cursor: 'pointer',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-mono)',
             fontSize: 13,
           }}
           onMouseEnter={() => setCursor(i)}
+          onClick={() => {
+            onSelect(r);
+            onClose();
+          }}
         >
           {r.label}
         </li>

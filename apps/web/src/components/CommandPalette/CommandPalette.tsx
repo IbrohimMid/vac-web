@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fuzzyScore } from '../../actions/fuzzy';
-import { evaluate, type Context } from '../../actions/predicate';
-import { markUsed, recencyBonus } from '../../actions/recency';
+import { filterActions } from '../../actions/filterActions';
+import { type Context } from '../../actions/predicate';
+import { markUsed } from '../../actions/recency';
 import { useActions, type ActionSpec } from '../../actions/registry';
 import type { OverlayRenderProps } from '../../overlays/registry';
 import { useComposer } from '../../stores/composer';
@@ -41,24 +41,12 @@ export function CommandPalette({ dismiss, params }: OverlayRenderProps) {
     [sessionId, streaming],
   );
 
-  const filtered = useMemo(() => {
-    const scored: Array<{ action: ActionSpec; score: number; disabledReason?: string }> = [];
-    for (const a of actions) {
-      if (!a.palette_visible) continue;
-      const baseScore = query ? fuzzyScore(query, a.label) ?? fuzzyScore(query, a.id) : 1;
-      if (baseScore === null) continue;
-      const score = baseScore + recencyBonus(a.id);
-      const availableOk = evaluate(a.available_when ?? null, ctx);
-      const entry: { action: ActionSpec; score: number; disabledReason?: string } = {
-        action: a,
-        score,
-      };
-      if (!availableOk) entry.disabledReason = `unavailable: ${a.available_when}`;
-      scored.push(entry);
-    }
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, 30);
-  }, [actions, query, ctx]);
+  // Single source of truth shared with SlashPalette — both modes funnel
+  // through `filterActions` to prevent command-discovery drift.
+  const filtered = useMemo(
+    () => filterActions({ actions, query, mode: 'palette', ctx }),
+    [actions, query, ctx],
+  );
 
   useEffect(() => {
     setFocused(0);
