@@ -1,0 +1,142 @@
+//! Minimal hand-rolled types for the slice of ACP that Stage X.5b needs.
+//!
+//! Schema source: `@agentclientprotocol/sdk@0.20.0`'s
+//! `schema/schema.json`. We hand-roll only the messages used by
+//! `initialize`, `session/new`, `session/prompt`, `session/cancel`,
+//! and the inbound `session/update` notification. Everything else
+//! (permissions, fs, terminal, elicitation, providers, NES, and the
+//! rest of `session/*`) is X.5c+ scope.
+//!
+//! `_meta` fields and any field whose schema we don't actively read
+//! stay as `serde_json::Value` so vendor extensions (e.g.
+//! `agentCapabilities._meta.claudeCode.promptQueueing`) pass through
+//! intact. Type-strategy decision recorded in
+//! `docs/plans/stage-x5a-acp-client-design.md` §8.3.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+// --- initialize ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InitializeRequest {
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: u32,
+    #[serde(rename = "clientCapabilities")]
+    pub client_capabilities: ClientCapabilities,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientCapabilities {
+    pub fs: FsClientCapabilities,
+    pub terminal: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FsClientCapabilities {
+    #[serde(rename = "readTextFile")]
+    pub read_text_file: bool,
+    #[serde(rename = "writeTextFile")]
+    pub write_text_file: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitializeResponse {
+    pub protocol_version: u32,
+    pub agent_capabilities: Value,
+    #[serde(default)]
+    pub agent_info: Value,
+    #[serde(default)]
+    pub auth_methods: Value,
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
+// --- session/new ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NewSessionRequest {
+    pub cwd: String,
+    #[serde(rename = "mcpServers")]
+    pub mcp_servers: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewSessionResponse {
+    pub session_id: String,
+    #[serde(default)]
+    pub models: Value,
+    #[serde(default)]
+    pub modes: Value,
+    #[serde(default)]
+    pub config_options: Value,
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
+// --- session/prompt ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptRequest {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub prompt: Vec<ContentBlock>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    Text { text: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptResponse {
+    pub stop_reason: String,
+    #[serde(default)]
+    pub usage: Value,
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
+// --- session/cancel (notification) ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CancelNotification {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+}
+
+// --- session/update (notification, agent → client) ---
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionNotification {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub update: Value,
+}
+
+/// Convenience accessors for the SessionUpdate discriminator. Kept as
+/// helpers rather than a typed enum because X.5b only needs three
+/// variants reliably; the rest pass through as raw JSON for X.5c.
+impl SessionNotification {
+    pub fn discriminator(&self) -> Option<&str> {
+        self.update.get("sessionUpdate").and_then(|v| v.as_str())
+    }
+
+    /// For `agent_message_chunk` and `agent_thought_chunk`, extract the
+    /// text content as a single concatenated string. Returns `None` if
+    /// the variant doesn't carry chunk content.
+    pub fn message_chunk_text(&self) -> Option<String> {
+        let content = self.update.get("content")?;
+        // Per ACP, content is a single ContentBlock (not array) for
+        // chunk variants. Pull the text field if present.
+        if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
+            return Some(text.to_string());
+        }
+        // Fallback: serialize whatever's there so we don't drop data.
+        Some(content.to_string())
+    }
+}

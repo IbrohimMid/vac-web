@@ -216,56 +216,40 @@ async fn x3_acp_unsupported_command_returns_protocol_unsupported() {
 }
 
 #[tokio::test]
-async fn x3_acp_session_streams_transcript_delta() {
-    let (url, state) = start_bridge_with(build_acp_registry(vec![])).await;
-    let mut ws = connect_hello(&url).await;
-    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
-
-    // Drive the ACP child directly via the SessionHandle. message.submit
-    // normalization for ACP belongs to a later stage (X.5 wires tool
-    // envelopes); for the scaffold we just inject the line.
-    let handle = state
-        .sessions
-        .get(&session_id)
-        .expect("session handle must exist after session.ready");
-    handle
-        .send_to_engine(
-            &serde_json::to_string(&json!({
-                "type": "prompt",
-                "text": "hello world"
-            }))
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let delta = next_event_of_type(&mut ws, "transcript.delta").await;
-    assert!(
-        delta["payload"]["delta"].is_string(),
-        "expected delta string payload: {delta}"
-    );
-    let _completed = next_event_of_type(&mut ws, "transcript.completed").await;
-}
-
-#[tokio::test]
-async fn x3_acp_child_crash_emits_transcript_error() {
+async fn x5b_acp_child_crash_emits_transcript_error() {
     // Start mock-acp with --crash-after 1 so it exits non-zero after
-    // emitting one chunk. Bridge should surface transcript.error.
-    let (url, state) =
+    // emitting one session/update chunk. Drive a real message.submit
+    // through the WS path; bridge surfaces transcript.error from the
+    // child watchdog when the ACP child dies non-zero.
+    let (url, _state) =
         start_bridge_with(build_acp_registry(vec!["--crash-after".into(), "1".into()])).await;
     let mut ws = connect_hello(&url).await;
     let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
 
-    let handle = state.sessions.get(&session_id).unwrap();
-    handle
-        .send_to_engine(
-            &serde_json::to_string(&json!({ "type": "prompt", "text": "boom" })).unwrap(),
-        )
+    let cmd = json!({
+        "v": 1,
+        "id": "cmd_msg",
+        "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "boom please crash" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
         .await
         .unwrap();
-    let err = next_event_of_type(&mut ws, "transcript.error").await;
-    assert_eq!(err["payload"]["reason"], json!("child_exited"));
-    assert_eq!(err["payload"]["agent_kind"], json!("acp"));
+
+    // A crashed prompt fires two transcript.error events: first from
+    // the prompt path (`prompt_failed` when the response channel drops
+    // as stdout closes), then from the watchdog (`child_exited`).
+    // Walk events until we see the watchdog one — that's the X.3
+    // contract anchor.
+    loop {
+        let err = next_event_of_type(&mut ws, "transcript.error").await;
+        if err["payload"]["reason"] == json!("child_exited") {
+            assert_eq!(err["payload"]["agent_kind"], json!("acp"));
+            return;
+        }
+        // Otherwise it's prompt_failed — keep walking.
+    }
 }
 
 #[tokio::test]

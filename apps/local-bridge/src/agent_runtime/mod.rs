@@ -10,6 +10,7 @@
 //! See [`docs/agent-runtime.md`](../../../../docs/agent-runtime.md) for
 //! the X.0 design lock and X.1–X.8 substage breakdown.
 
+pub mod acp;
 pub mod config;
 pub mod errors;
 pub mod registry;
