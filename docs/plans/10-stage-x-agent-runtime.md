@@ -74,23 +74,27 @@ Wire ACP modal-halt permission requests to the existing async approval queue. 5-
 
 Replace (or alias) the `AgentKind::Acp` driver path so the bridge
 speaks the real protocol on the wire: JSON-RPC 2.0 over ndjson stdio,
-matching `@agentclientprotocol/sdk` v0.14.x. Two viable shapes:
+matching `@agentclientprotocol/sdk` v0.20.x.
 
-1. **Rust-native ACP client** inside `local-bridge` — port the SDK's
-   `AgentSideConnection` shape (typed methods + framed stream).
-2. **Node sidecar** — small daemon shipped alongside the bridge that
-   imports the official SDK and exposes a stable IPC to local-bridge.
+**Design decision (2026-04-26):** Rust-native client inside
+`local-bridge`. Both Rust and Node prototypes drove the live
+`claude-agent-acp@0.31.0` end-to-end successfully; the full
+comparison and rationale live in
+[`stage-x5a-acp-client-design.md`](./stage-x5a-acp-client-design.md).
+Headline: Rust-native preserves the X.0 single-trust-boundary design,
+keeps distribution to one binary, and the wire is small enough
+(~155 lines in the spike) that re-using the SDK's TS surface buys
+little. Node sidecar is recorded as fallback only.
 
-The decision is taken at X.5a kick-off based on whether the Rust
-re-implementation cost is cheaper than the cross-process complexity of
-a sidecar. Either shape MUST preserve the bridge's existing
-`AgentDriver` boundary (X.1) and the `agent_kind = acp` enforcement
-(X.2). `mock-acp` is upgraded later (or replaced by an in-process fake
+Either shape MUST preserve the bridge's existing `AgentDriver`
+boundary (X.1) and the `agent_kind = acp` enforcement (X.2).
+`mock-acp` is upgraded later (or replaced by an in-process fake
 that speaks real ACP) so X.3 tests still anchor the contract.
 
 **Exit.** A unit-level integration test issues `initialize` →
-`newSession` → `prompt` against an in-process ACP fake using the
-official SDK shape and observes the response on the bridge side.
+`session/new` → `session/prompt` against an in-process ACP fake using
+the real wire shape and observes `session/update` notifications on
+the bridge side.
 
 ### X.5b — Spawn `claude-agent-acp` provider
 
