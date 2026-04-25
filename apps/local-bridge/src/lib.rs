@@ -3,6 +3,7 @@
 //! Transport, session management, translator, enforcement, auth, audit.
 //! `main.rs` composes these into the runnable daemon.
 
+pub mod agent_runtime;
 pub mod audit;
 pub mod auth;
 pub mod capabilities;
