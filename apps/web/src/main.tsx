@@ -7,6 +7,7 @@ import { PairingPrompt } from './app/PairingPrompt';
 import { BuildSurface } from './components/cockpit/BuildSurface';
 import { Rail } from './components/cockpit/Rail';
 import { Sidebar } from './components/cockpit/Sidebar';
+import { SurfacePage } from './components/cockpit/SurfacePage';
 import { Topbar as CockpitTopbar } from './components/cockpit/Topbar';
 import {
   PersistentRail,
@@ -180,30 +181,53 @@ function App() {
           >
             {route === 'build' && <BuildSurface transport={transport} />}
             {route === 'assess' && (
-              <SurfaceWrap title="Assess">
+              <SurfacePage
+                title="Readiness"
+                subtitle="Assessor families, scorecards, and the next thing to do"
+                icon="assess"
+              >
                 <ReadinessHub transport={transport} />
-              </SurfaceWrap>
+              </SurfacePage>
             )}
             {route === 'handoff' && (
-              <SurfaceWrap title="Handoff">
+              <SurfacePage
+                title="Handoff"
+                subtitle="Build packets from selected findings; two-party signoff before dispatch"
+                icon="handoff"
+              >
                 <HandoffTab transport={transport} />
-              </SurfaceWrap>
+              </SurfacePage>
             )}
             {route === 'release' && (
-              <SurfaceWrap title="Release">
+              <SurfacePage
+                title="Release"
+                subtitle="Deploy / publish targets with gate guards + release notes"
+                icon="release"
+              >
                 <ReleaseTab transport={transport} />
-              </SurfaceWrap>
+              </SurfacePage>
             )}
             {route === 'knowledge' && (
-              <SurfaceWrap title="Knowledge">
+              <SurfacePage
+                title="Knowledge"
+                subtitle="Plan / VIL / Signal / Memory lenses on session state"
+                icon="knowledge"
+              >
                 <ArchiveTab />
-              </SurfaceWrap>
+              </SurfacePage>
             )}
             {route === 'sessions' && (
-              <SurfaceWrap title="Sessions">
-                <SessionPicker transport={transport} />
+              <SurfacePage
+                title="Sessions"
+                subtitle="Active and recent sessions; resume or close"
+                icon="sessions"
+                fullBleed
+              >
+                <div style={{ padding: 'var(--pad)' }}>
+                  <SessionPicker transport={transport} />
+                </div>
                 <SessionsTab transport={transport} />
-              </SurfaceWrap>
+              </SurfacePage>
             )}
           </Suspense>
         ) : (
@@ -216,23 +240,6 @@ function App() {
       <ShellDrawer transport={transport} />
       <TransientToasts />
       <BridgeStatus />
-    </div>
-  );
-}
-
-function SurfaceWrap({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ padding: 'var(--pad)', minWidth: 0, overflow: 'auto' }}>
-      <h2 style={{ margin: '0 0 var(--gap) 0', fontSize: 18 }}>{title}</h2>
-      <div
-        style={{
-          background: 'var(--panel)',
-          borderRadius: 'var(--r-md)',
-          border: '1px solid var(--line)',
-        }}
-      >
-        {children}
-      </div>
     </div>
   );
 }
