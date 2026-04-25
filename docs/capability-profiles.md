@@ -593,4 +593,5 @@ These are not blockers for v1; tracked here so they don't get forgotten.
 - [`docs/gates.md`](./gates.md) — gate governance and override policy.
 - [`docs/evidence-freshness.md`](./evidence-freshness.md) — EvidenceRef freshness rules.
 - [`docs/frontend-rules.md`](./frontend-rules.md) — UI enforcement of profile-aware surfaces.
+- [`docs/agent-runtime.md`](./agent-runtime.md) — Stage X profile YAML gains optional `allowed_agent_kinds` field (authoritative; bridge has deny-by-default fallback).
 - Upstream VAC PRs: `vac serve --stdio --profile`, tool `side_effect` tagging, `shell.exec_allowlisted` tool — tracked in repo VAC issue tracker.

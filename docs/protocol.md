@@ -380,3 +380,4 @@ Max emission rate per session: 60 `transcript.delta`/s. Above that → forced co
 - [`assessment-contract.md`](./assessment-contract.md) — assessment payloads
 - [`handoff-contract.md`](./handoff-contract.md) — handoff payloads
 - [`gates.md`](./gates.md) — gate payloads
+- [`agent-runtime.md`](./agent-runtime.md) — Stage X additive `agent_id` on `session.create`; provider events normalized into existing VAC events.
