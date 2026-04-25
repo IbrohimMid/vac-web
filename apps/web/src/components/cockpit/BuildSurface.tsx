@@ -13,6 +13,7 @@ import { Composer } from '../Composer/Composer';
 import { Transcript } from '../Transcript/Transcript';
 import { useShell } from '../../stores/shell';
 import { useApprovals } from '../../stores/approvals';
+import { useAssessment } from '../../stores/assessment';
 import { useReview } from '../../stores/review';
 import { useRuntime } from '../../stores/runtime';
 import { useHandoff } from '../../stores/handoff';
@@ -201,46 +202,86 @@ function PlanView({ transport }: { transport: TransportHandle }) {
 // ---- Static-data tabs (presentational placeholders) ---------------------
 
 function AgentsView() {
-  // Pending an `agents` store — Phase 8 mock-engine doesn't surface per-agent
-  // state distinctly. For now this mirrors the prototype's tri-lane layout
-  // with "idle" placeholder cards so the surface isn't a blank pane.
-  const lanes = [
-    { name: 'Planner', role: 'tri-lane', state: 'idle', work: 'Awaiting input' },
-    { name: 'Executor', role: 'tri-lane', state: 'idle', work: 'Awaiting input' },
-    { name: 'Reviewer', role: 'tri-lane', state: 'idle', work: 'Awaiting input' },
+  // Tri-lane derived from real stores until upstream agent telemetry ships:
+  //   Planner  ← active assessment run (running family + current check)
+  //   Executor ← handoff packet currently dispatched / executing
+  //   Reviewer ← pending approvals queue depth (human-in-loop check)
+  const runs = useAssessment((s) => s.runs);
+  const activeRunId = useAssessment((s) => s.activeRunId);
+  const packets = useHandoff((s) => s.packets);
+  const order = useHandoff((s) => s.order);
+  const approvalsCount = useApprovals((s) => s.order.length);
+
+  const activeRun = activeRunId ? runs.get(activeRunId) : null;
+  const planner = activeRun
+    ? {
+        state: activeRun.status === 'running' ? 'running' : 'idle',
+        work: activeRun.progress.current
+          ? `${activeRun.swarm} · ${activeRun.progress.current}`
+          : `${activeRun.swarm} · ${activeRun.progress.completed}/${activeRun.progress.total}`,
+      }
+    : { state: 'idle', work: 'Awaiting input' };
+
+  const executingPacket = order
+    .map((id) => packets.get(id))
+    .find((p) => p && (p.status === 'executing' || p.status === 'dispatched'));
+  const executor = executingPacket
+    ? { state: 'running', work: `${executingPacket.title} · ${executingPacket.status}` }
+    : { state: 'idle', work: 'No packet dispatched' };
+
+  const reviewer =
+    approvalsCount > 0
+      ? {
+          state: 'running',
+          work: `${approvalsCount} approval${approvalsCount === 1 ? '' : 's'} pending`,
+        }
+      : { state: 'idle', work: 'No approvals queued' };
+
+  const lanes: Array<{ name: string; role: string; state: string; work: string }> = [
+    { name: 'Planner', role: 'lane A · plan', ...planner },
+    { name: 'Executor', role: 'lane B · write', ...executor },
+    { name: 'Reviewer', role: 'lane C · review', ...reviewer },
   ];
+
   return (
     <div style={{ flex: 1, padding: 18, overflowY: 'auto' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-        {lanes.map((a) => (
-          <div key={a.name} className="card">
-            <div className="card-hd">
-              <div className="msg-avatar agent" style={{ borderRadius: 6 }}>
-                <Icon name="bot" size={13} />
-              </div>
-              <div>
-                <div className="card-title">{a.name}</div>
-                <div className="card-sub">{a.role}</div>
-              </div>
-              <div className="spacer"></div>
-              <span className="badge">
-                <span className="dot" style={{ background: 'var(--ink-4)' }}></span>
-                {a.state}
-              </span>
-            </div>
-            <div className="card-body" style={{ fontSize: 12.5 }}>
-              <div className="kv-row">
-                <span className="k">Working on</span>
-                <span className="v" style={{ fontFamily: 'var(--font-sans)' }}>
-                  {a.work}
+        {lanes.map((a) => {
+          const running = a.state === 'running';
+          return (
+            <div key={a.name} className="card">
+              <div className="card-hd">
+                <div className="msg-avatar agent" style={{ borderRadius: 6 }}>
+                  <Icon name="bot" size={13} />
+                </div>
+                <div>
+                  <div className="card-title">{a.name}</div>
+                  <div className="card-sub">{a.role}</div>
+                </div>
+                <div className="spacer"></div>
+                <span className={`badge ${running ? 'accent' : ''}`}>
+                  <span
+                    className="dot"
+                    style={{ background: running ? 'var(--accent)' : 'var(--ink-4)' }}
+                  ></span>
+                  {a.state}
                 </span>
               </div>
+              <div className="card-body" style={{ fontSize: 12.5 }}>
+                <div className="kv-row">
+                  <span className="k">Working on</span>
+                  <span className="v" style={{ fontFamily: 'var(--font-sans)' }}>
+                    {a.work}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <p className="muted" style={{ marginTop: 18, fontSize: 12 }}>
-        Per-agent state lands when upstream PR #11 ships agent telemetry.
+        Lanes derived from active assessment / packet / approval state.
+        Per-agent token budgets land with upstream agent telemetry.
       </p>
     </div>
   );

@@ -230,7 +230,15 @@ button:focus-visible, [role="button"]:focus-visible, a:focus-visible {
   transition: background .12s ease;
 }
 .gate-pill:hover { background: var(--bg-hover); }
-.gate-pill.active { background: var(--bg-elev); color: var(--ink); box-shadow: var(--shadow-sm); }
+.gate-pill.active {
+  background: var(--bg-elev);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm), 0 0 0 2px var(--accent-ring);
+}
+.gate-pill:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
 .gate-pill .dot { width: 7px; height: 7px; border-radius: 50%; }
 .gate-pill .dot.ok { background: var(--ok); }
 .gate-pill .dot.warn { background: var(--warn); }

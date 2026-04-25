@@ -10,6 +10,8 @@ import { Sidebar } from './components/cockpit/Sidebar';
 import { SurfacePage } from './components/cockpit/SurfacePage';
 import { Topbar as CockpitTopbar } from './components/cockpit/Topbar';
 import { TweaksPanel } from './components/cockpit/TweaksPanel';
+import { RunAssessmentDrawer } from './components/cockpit/RunAssessmentDrawer';
+import { Icon as CockpitIcon } from './components/cockpit/primitives';
 import {
   PersistentRail,
   StickyBanners,
@@ -63,6 +65,7 @@ function App() {
   const [transport, setTransport] = useState<TransportHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tweaksOpen, setTweaksOpen] = useState(false);
+  const [runDrawerOpen, setRunDrawerOpen] = useState(false);
 
   // Apply theme + density + accent to <html data-*> + CSS vars.
   const theme = useCockpit((s) => s.theme);
@@ -183,6 +186,16 @@ function App() {
                 title="Readiness"
                 subtitle="Assessor families, scorecards, and the next thing to do"
                 icon="assess"
+                actions={
+                  <button
+                    className="btn primary"
+                    onClick={() => setRunDrawerOpen(true)}
+                    disabled={!transport}
+                  >
+                    <CockpitIcon name="play" size={11} />
+                    Run sweep
+                  </button>
+                }
               >
                 <ReadinessHub transport={transport} />
               </SurfacePage>
@@ -239,6 +252,12 @@ function App() {
       <TransientToasts />
       <BridgeStatus />
       {tweaksOpen && <TweaksPanel onClose={() => setTweaksOpen(false)} />}
+      {runDrawerOpen && (
+        <RunAssessmentDrawer
+          transport={transport}
+          onClose={() => setRunDrawerOpen(false)}
+        />
+      )}
     </div>
   );
 }
