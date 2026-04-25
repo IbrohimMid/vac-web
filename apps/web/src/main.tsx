@@ -9,6 +9,7 @@ import { Rail } from './components/cockpit/Rail';
 import { Sidebar } from './components/cockpit/Sidebar';
 import { SurfacePage } from './components/cockpit/SurfacePage';
 import { Topbar as CockpitTopbar } from './components/cockpit/Topbar';
+import { TweaksPanel } from './components/cockpit/TweaksPanel';
 import {
   PersistentRail,
   StickyBanners,
@@ -61,6 +62,7 @@ function App() {
   const [paired, setPaired] = useState(false);
   const [transport, setTransport] = useState<TransportHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tweaksOpen, setTweaksOpen] = useState(false);
 
   // Apply theme + density + accent to <html data-*> + CSS vars.
   const theme = useCockpit((s) => s.theme);
@@ -149,11 +151,7 @@ function App() {
     );
   }
 
-  const openTweaks = () => {
-    // Tweaks panel lands in Stage E; for now just open the command palette
-    // so ⌘K + tweaks button share an entry point.
-    useOverlays.getState().open('command_palette', { transport });
-  };
+  const openTweaks = () => setTweaksOpen(true);
 
   return (
     <div
@@ -240,6 +238,7 @@ function App() {
       <ShellDrawer transport={transport} />
       <TransientToasts />
       <BridgeStatus />
+      {tweaksOpen && <TweaksPanel onClose={() => setTweaksOpen(false)} />}
     </div>
   );
 }
