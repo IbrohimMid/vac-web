@@ -38,17 +38,17 @@ interface Props {
   transport: TransportHandle | null;
 }
 
+/**
+ * Public entry point. Splits report-mode out of the hub body so the same
+ * component instance never has to render a different number of hooks across
+ * renders — addressing the Rules-of-Hooks violation flagged in the Stage J
+ * audit. The wrapper itself reads only the two slice fields it needs to
+ * decide which child to mount; ReadinessHubMain owns every other hook.
+ */
 export function ReadinessHub({ transport }: Props) {
-  const runs = useAssessment((s) => s.runs);
-  const runOrder = useAssessment((s) => s.runOrder);
-  const activeRunId = useAssessment((s) => s.activeRunId);
-  const findings = useAssessment((s) => s.findings);
-  const sessionId = useSession((s) => s.sessionId);
   const reportRunId = useAssessmentReport((s) => s.reportRunId);
   const exitReport = useAssessmentReport((s) => s.exitReport);
 
-  // Report-mode short-circuit: if a runId is pinned for report view, render
-  // the detail layout in place. Back button clears the pinned id.
   if (reportRunId) {
     return (
       <AssessmentReportDetail
@@ -58,6 +58,15 @@ export function ReadinessHub({ transport }: Props) {
       />
     );
   }
+  return <ReadinessHubMain transport={transport} />;
+}
+
+function ReadinessHubMain({ transport }: Props) {
+  const runs = useAssessment((s) => s.runs);
+  const runOrder = useAssessment((s) => s.runOrder);
+  const activeRunId = useAssessment((s) => s.activeRunId);
+  const findings = useAssessment((s) => s.findings);
+  const sessionId = useSession((s) => s.sessionId);
 
   const [minSev, setMinSev] = useState<Severity>('info');
   const [categoryFilter, setCategoryFilter] = useState<Category | 'all'>('all');

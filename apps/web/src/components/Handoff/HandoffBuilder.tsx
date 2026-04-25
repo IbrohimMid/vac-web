@@ -3,18 +3,11 @@
 // *different* signer via the PacketDetail view (two-party rule).
 
 import { useEffect, useMemo, useState } from 'react';
-import { useAssessment, type Finding, type Severity } from '../../stores/assessment';
+import { useAssessment } from '../../stores/assessment';
 import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
-
-const SEV_ORDER: Record<Severity, number> = {
-  critical: 4,
-  high: 3,
-  medium: 2,
-  low: 1,
-  info: 0,
-};
+import { isCarryover, visibleHandoffFindings } from './visibleFindings';
 
 interface Props {
   transport: TransportHandle | null;
@@ -48,16 +41,12 @@ export function HandoffBuilder({ transport }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const runFindings = useMemo(() => {
-    const list: Finding[] = [];
-    for (const f of findings.values()) {
-      if (activeRunId && f.run_id !== activeRunId) continue;
-      if (SEV_ORDER[f.severity] < SEV_ORDER.medium) continue;
-      list.push(f);
-    }
-    list.sort((a, b) => SEV_ORDER[b.severity] - SEV_ORDER[a.severity]);
-    return list;
-  }, [findings, activeRunId]);
+  // Visible picker list = active-run medium+ ∪ currently-selected (any run,
+  // any severity). Logic + tests live in visibleFindings.ts.
+  const runFindings = useMemo(
+    () => visibleHandoffFindings(findings.values(), activeRunId, selected),
+    [findings, activeRunId, selected],
+  );
 
   const toggle = (id: string) => {
     setSelected((s) => {
@@ -146,27 +135,44 @@ export function HandoffBuilder({ transport }: Props) {
         Select findings ({selected.size}):
       </div>
       <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 280, overflow: 'auto' }}>
-        {runFindings.map((f) => (
-          <li
-            key={f.id}
-            style={{
-              padding: 6,
-              borderBottom: '1px solid var(--border-1, #2a2a2a)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={selected.has(f.id)}
-              onChange={() => toggle(f.id)}
-              aria-label={`Select ${f.title}`}
-            />
-            <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{f.severity}</span>
-            <span style={{ flex: 1 }}>{f.title}</span>
-          </li>
-        ))}
+        {runFindings.map((f) => {
+          const carryover = isCarryover(f, activeRunId, selected);
+          const fromOtherRun = activeRunId != null && f.run_id !== activeRunId;
+          return (
+            <li
+              key={f.id}
+              style={{
+                padding: 6,
+                borderBottom: '1px solid var(--border-1, #2a2a2a)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(f.id)}
+                onChange={() => toggle(f.id)}
+                aria-label={`Select ${f.title}`}
+              />
+              <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{f.severity}</span>
+              <span style={{ flex: 1 }}>{f.title}</span>
+              {carryover && (
+                <span
+                  className="badge"
+                  title={
+                    fromOtherRun
+                      ? 'Carried over from another run'
+                      : 'Below the default severity floor'
+                  }
+                  style={{ fontSize: 10, padding: '1px 6px' }}
+                >
+                  carryover
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
       {error && <div style={{ color: 'var(--sev-error)', marginTop: 6 }}>{error}</div>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
