@@ -49,7 +49,14 @@ Wire ACP modal-halt permission requests to the existing async approval queue. 5-
 
 ## X.6 — Claude Code real handshake
 
-Spawn the actual Claude Code binary via its `--acp` (or current) flag, verify the handshake, drop the **PROVISIONAL** marker from `agent-runtime.md` once confirmed against a real binary.
+Spawn the actual Claude Code binary, verify the handshake, drop the **PROVISIONAL** marker from `agent-runtime.md` once confirmed against a real binary.
+
+**Status update (2026-04-26).** Verification against Claude Code 2.1.111
+recorded in [`stage-x-claude-acp-verification.md`](./stage-x-claude-acp-verification.md):
+no `--acp` flag exists in the shipping CLI. X.6 must proceed via one of
+the documented fallbacks (`--print --output-format stream-json` adapter,
+MCP server route, or wrapper subprocess). Stream-json envelope captures
+are still required before any code lands.
 
 **Exit.** A scripted test session drives Claude Code through `executor.code@1.0.0` end-to-end and lands a patch via the approval bridge.
 
