@@ -4,7 +4,7 @@ import './styles/tokens.css';
 import './styles/cockpit.css';
 import { BridgeStatus } from './app/BridgeStatus';
 import { PairingPrompt } from './app/PairingPrompt';
-import { Composer } from './components/Composer/Composer';
+import { BuildSurface } from './components/cockpit/BuildSurface';
 import { Rail } from './components/cockpit/Rail';
 import { Sidebar } from './components/cockpit/Sidebar';
 import { Topbar as CockpitTopbar } from './components/cockpit/Topbar';
@@ -16,16 +16,10 @@ import {
 import { OverlayHost } from './components/OverlayHost/OverlayHost';
 import { SessionPicker } from './components/SessionPicker/SessionPicker';
 import { ShellDrawer } from './components/Shell/ShellDrawer';
-import { Transcript } from './components/Transcript/Transcript';
 
 // Phase-3..8 surfaces — each route lazy-loads its primary panel so the
-// initial chunk stays under the bundle budget.
-const ApprovalsTab = lazy(() =>
-  import('./components/Approvals/ApprovalsTab').then((m) => ({ default: m.ApprovalsTab })),
-);
-const ReviewTab = lazy(() =>
-  import('./components/Review/ReviewTab').then((m) => ({ default: m.ReviewTab })),
-);
+// initial chunk stays under the bundle budget. (Approvals + Review live
+// inside BuildSurface so their lazy splits are co-located there.)
 const ReadinessHub = lazy(() =>
   import('./components/Readiness/ReadinessHub').then((m) => ({ default: m.ReadinessHub })),
 );
@@ -184,12 +178,7 @@ function App() {
               <div style={{ padding: 16, color: 'var(--ink-3)' }}>Loading surface…</div>
             }
           >
-            {route === 'build' && (
-              <BuildSurface transport={transport}>
-                <Transcript />
-                <Composer transport={transport} />
-              </BuildSurface>
-            )}
+            {route === 'build' && <BuildSurface transport={transport} />}
             {route === 'assess' && (
               <SurfaceWrap title="Assess">
                 <ReadinessHub transport={transport} />
@@ -227,53 +216,6 @@ function App() {
       <ShellDrawer transport={transport} />
       <TransientToasts />
       <BridgeStatus />
-    </div>
-  );
-}
-
-interface BuildProps {
-  transport: TransportHandle;
-  children: React.ReactNode;
-}
-
-function BuildSurface({ transport, children }: BuildProps) {
-  // Build route: transcript + composer in primary, Approvals + Review surface
-  // as a stacked sub-pane below. Stage C will redesign this into the Workbench
-  // tab layout per the prototype.
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)', padding: 'var(--pad)', minWidth: 0 }}>
-      <section
-        style={{
-          background: 'var(--panel)',
-          borderRadius: 'var(--r-md)',
-          border: '1px solid var(--line)',
-          padding: 'var(--pad)',
-        }}
-      >
-        {children}
-      </section>
-      <section
-        style={{
-          background: 'var(--panel)',
-          borderRadius: 'var(--r-md)',
-          border: '1px solid var(--line)',
-          padding: 'var(--pad)',
-        }}
-      >
-        <h3 style={{ margin: '0 0 var(--gap) 0', fontSize: 14 }}>Approvals</h3>
-        <ApprovalsTab transport={transport} />
-      </section>
-      <section
-        style={{
-          background: 'var(--panel)',
-          borderRadius: 'var(--r-md)',
-          border: '1px solid var(--line)',
-          padding: 'var(--pad)',
-        }}
-      >
-        <h3 style={{ margin: '0 0 var(--gap) 0', fontSize: 14 }}>Review</h3>
-        <ReviewTab transport={transport} />
-      </section>
     </div>
   );
 }
