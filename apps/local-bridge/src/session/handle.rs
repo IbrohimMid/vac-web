@@ -1,5 +1,6 @@
 //! Per-session state + child process handle.
 
+use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::ws::envelope::ServerEvent;
 use bridge_core::{EventRing, StateHolder};
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ pub struct SessionHandle {
     pub id: String,
     pub profile_id: String,
     pub project_root: PathBuf,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
     pub state: Arc<StateHolder>,
     pub ring: Arc<RwLock<EventRing<ServerEvent>>>,
     pub stdin: Arc<Mutex<Option<ChildStdin>>>,
@@ -26,14 +29,25 @@ pub struct SpawnOptions {
     pub session_id: String,
     pub profile_id: String,
     pub project_root: PathBuf,
-    pub engine_bin: PathBuf,
+    pub agent: AgentDefinition,
 }
 
 impl SessionHandle {
     /// Spawn child engine process (mock-engine or vac serve) + wire stdio.
+    ///
+    /// Stage X.1: the engine binary now flows through an
+    /// [`AgentDefinition`] resolved from the runtime registry. The
+    /// effective command line is preserved exactly:
+    ///
+    /// ```text
+    /// <agent.command> <agent.args...> --profile <p> --session-id <s> --project <root>
+    /// ```
+    ///
+    /// `agent.args` defaults to `["--stdio"]` for mock + vac-native via
+    /// the embedded config, matching the pre-X.1 hardcoded arg order.
     pub async fn spawn(opts: SpawnOptions) -> anyhow::Result<SessionHandleRef> {
-        let mut child: Child = Command::new(&opts.engine_bin)
-            .arg("--stdio")
+        let mut cmd = Command::new(&opts.agent.command);
+        cmd.args(&opts.agent.args)
             .arg("--profile")
             .arg(&opts.profile_id)
             .arg("--session-id")
@@ -43,8 +57,8 @@ impl SessionHandle {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        let mut child: Child = cmd.spawn()?;
 
         let stdin = child
             .stdin
@@ -67,11 +81,23 @@ impl SessionHandle {
             id: opts.session_id.clone(),
             profile_id: opts.profile_id.clone(),
             project_root: opts.project_root.clone(),
+            agent_id: opts.agent.id.clone(),
+            agent_kind: opts.agent.kind,
             state: Arc::clone(&state),
             ring: Arc::clone(&ring),
             stdin: Arc::new(Mutex::new(Some(stdin))),
             broadcast: bcast_tx.clone(),
         });
+
+        info!(
+            session_id = %handle.id,
+            profile_id = %handle.profile_id,
+            agent_id = %handle.agent_id,
+            agent_kind = %handle.agent_kind.as_str(),
+            command = %opts.agent.command.display(),
+            project_root = %handle.project_root.display(),
+            "session spawned"
+        );
 
         state.transition(bridge_core::SessionState::Ready).ok();
 

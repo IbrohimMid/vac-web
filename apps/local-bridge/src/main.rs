@@ -1,5 +1,6 @@
 //! vac-bridge daemon entry point.
 
+use local_bridge::agent_runtime::AgentRuntimeRegistry;
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
 use local_bridge::server::{build_app, AppState};
@@ -23,10 +24,30 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    // Locate engine binary: prefer mock-engine in debug; vac in PATH otherwise.
-    let engine_bin = std::env::var("VAC_ENGINE_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| default_engine_bin());
+    // Resolve agent runtime: VAC_ENGINE_BIN (legacy single-binary
+    // override) wins for back-compat; otherwise load the X.1 registry
+    // from VAC_WEB_AGENTS_CONFIG → VAC_CONFIG_DIR/agents.toml →
+    // ~/.config/vac-web/agents.toml. If no config file is found
+    // anywhere, fall back to the historical mock-engine search so
+    // existing dev workflows keep working without a config.
+    let agents: Arc<AgentRuntimeRegistry> = if let Ok(bin) = std::env::var("VAC_ENGINE_BIN") {
+        let path = PathBuf::from(bin);
+        tracing::info!(engine_bin = %path.display(), "VAC_ENGINE_BIN override — synthesizing single-agent registry");
+        Arc::new(synth_legacy_registry(path))
+    } else {
+        let r = AgentRuntimeRegistry::load()?;
+        if matches!(
+            r.source(),
+            local_bridge::agent_runtime::ConfigSource::Embedded
+        ) {
+            let bin = default_engine_bin();
+            tracing::info!(engine_bin = %bin.display(), "no agents.toml found — using discovered engine binary");
+            Arc::new(synth_legacy_registry(bin))
+        } else {
+            r.log_summary();
+            Arc::new(r)
+        }
+    };
 
     let profile_root = PathBuf::from("packages/protocol/v1/profiles");
     let audit_dir = std::env::var("VAC_AUDIT_DIR")
@@ -35,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         started_at: Instant::now(),
-        sessions: SessionRegistry::new(engine_bin),
+        sessions: SessionRegistry::with_runtime(agents),
         auth: AuthState::new_dev(),
         audit: AuditFacility::new(audit_dir),
         pairing: PairingStore::new(),
@@ -58,6 +79,30 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, "vac-bridge started");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Build a one-agent runtime registry around a raw binary path. Mirrors
+/// `SessionRegistry::new(PathBuf)`'s synth, kept inline here so main.rs
+/// can short-circuit the config lookup when `VAC_ENGINE_BIN` is set.
+fn synth_legacy_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
+    use local_bridge::agent_runtime::{
+        AgentDefinition, AgentKind, AgentsConfig, ConfigSource, DEFAULT_PERMISSION_TIMEOUT_MS,
+    };
+    let id = "default".to_string();
+    let agent = AgentDefinition {
+        id: id.clone(),
+        label: "Default engine".into(),
+        kind: AgentKind::VacNative,
+        command: engine_bin,
+        args: vec!["--stdio".into()],
+        enabled: true,
+        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+    };
+    let cfg = AgentsConfig {
+        default_agent_id: id,
+        agents: vec![agent],
+    };
+    AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }
 
 fn default_engine_bin() -> PathBuf {

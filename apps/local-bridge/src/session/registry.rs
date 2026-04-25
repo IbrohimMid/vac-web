@@ -1,6 +1,10 @@
 //! Registry of active sessions keyed by session_id.
 
 use super::handle::{SessionHandle, SessionHandleRef, SpawnOptions};
+use crate::agent_runtime::{
+    AgentDefinition, AgentKind, AgentRuntimeRegistry, AgentsConfig, ConfigSource,
+    DEFAULT_PERMISSION_TIMEOUT_MS,
+};
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,17 +14,32 @@ use tracing::info;
 #[derive(Clone)]
 pub struct SessionRegistry {
     inner: Arc<DashMap<String, SessionHandleRef>>,
-    pub default_engine_bin: PathBuf,
+    agents: Arc<AgentRuntimeRegistry>,
 }
 
 impl SessionRegistry {
+    /// Back-compat constructor preserved for existing callers (tests +
+    /// older embeddings) that still hand a single engine binary path.
+    /// Internally synthesizes a one-agent runtime registry classified
+    /// as `vac-native` so the spawn path looks identical to pre-X.1.
     pub fn new(engine_bin: PathBuf) -> Self {
+        let agents = Arc::new(synth_single_agent_registry(engine_bin));
+        Self::with_runtime(agents)
+    }
+
+    /// Stage X.1 constructor: bridge owns an `AgentRuntimeRegistry`
+    /// loaded from config, and SessionRegistry just borrows it.
+    pub fn with_runtime(agents: Arc<AgentRuntimeRegistry>) -> Self {
         let reg = Self {
             inner: Arc::new(DashMap::new()),
-            default_engine_bin: engine_bin,
+            agents,
         };
         reg.spawn_reaper();
         reg
+    }
+
+    pub fn agents(&self) -> &AgentRuntimeRegistry {
+        &self.agents
     }
 
     pub async fn create(
@@ -29,11 +48,12 @@ impl SessionRegistry {
         project_root: PathBuf,
     ) -> anyhow::Result<SessionHandleRef> {
         let session_id = format!("sess_{}", ulid::Ulid::new());
+        let agent = self.agents.default_agent().clone();
         let opts = SpawnOptions {
             session_id: session_id.clone(),
             profile_id,
             project_root,
-            engine_bin: self.default_engine_bin.clone(),
+            agent,
         };
         let handle = SessionHandle::spawn(opts).await?;
         self.inner.insert(session_id.clone(), Arc::clone(&handle));
@@ -82,4 +102,25 @@ impl SessionRegistry {
             }
         });
     }
+}
+
+/// Build a single-agent runtime registry from a raw binary path. Used
+/// only by the back-compat `SessionRegistry::new(PathBuf)` shim — every
+/// new caller should hand in a real `AgentRuntimeRegistry`.
+fn synth_single_agent_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
+    let id = "default".to_string();
+    let agent = AgentDefinition {
+        id: id.clone(),
+        label: "Default engine".into(),
+        kind: AgentKind::VacNative,
+        command: engine_bin,
+        args: vec!["--stdio".into()],
+        enabled: true,
+        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+    };
+    let cfg = AgentsConfig {
+        default_agent_id: id,
+        agents: vec![agent],
+    };
+    AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }
