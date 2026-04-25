@@ -1,10 +1,7 @@
 //! Registry of active sessions keyed by session_id.
 
 use super::handle::{SessionHandle, SessionHandleRef, SpawnOptions};
-use crate::agent_runtime::{
-    AgentDefinition, AgentKind, AgentRuntimeRegistry, AgentsConfig, ConfigSource,
-    DEFAULT_PERMISSION_TIMEOUT_MS,
-};
+use crate::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry};
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,11 +17,12 @@ pub struct SessionRegistry {
 impl SessionRegistry {
     /// Back-compat constructor preserved for existing callers (tests +
     /// older embeddings) that still hand a single engine binary path.
-    /// Internally synthesizes a one-agent runtime registry classified
-    /// as `vac-native` so the spawn path looks identical to pre-X.1.
+    /// Delegates to [`agent_runtime::synth_legacy_registry`], which
+    /// infers the kind from the binary file name (e.g. `mock-engine`
+    /// → `Mock`) so the spawn path is identical to pre-X.1 *and* the
+    /// kind metadata is accurate for upcoming X.2 policy enforcement.
     pub fn new(engine_bin: PathBuf) -> Self {
-        let agents = Arc::new(synth_single_agent_registry(engine_bin));
-        Self::with_runtime(agents)
+        Self::with_runtime(Arc::new(synth_legacy_registry(engine_bin)))
     }
 
     /// Stage X.1 constructor: bridge owns an `AgentRuntimeRegistry`
@@ -102,25 +100,4 @@ impl SessionRegistry {
             }
         });
     }
-}
-
-/// Build a single-agent runtime registry from a raw binary path. Used
-/// only by the back-compat `SessionRegistry::new(PathBuf)` shim — every
-/// new caller should hand in a real `AgentRuntimeRegistry`.
-fn synth_single_agent_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
-    let id = "default".to_string();
-    let agent = AgentDefinition {
-        id: id.clone(),
-        label: "Default engine".into(),
-        kind: AgentKind::VacNative,
-        command: engine_bin,
-        args: vec!["--stdio".into()],
-        enabled: true,
-        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
-    };
-    let cfg = AgentsConfig {
-        default_agent_id: id,
-        agents: vec![agent],
-    };
-    AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }

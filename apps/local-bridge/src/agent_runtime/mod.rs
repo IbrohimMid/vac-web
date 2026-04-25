@@ -19,4 +19,6 @@ pub use config::{
     MIN_PERMISSION_TIMEOUT_MS,
 };
 pub use errors::{AgentRuntimeError, Result as AgentRuntimeResult};
-pub use registry::{AgentRuntimeRegistry, ConfigSource};
+pub use registry::{
+    infer_legacy_agent_kind, synth_legacy_registry, AgentRuntimeRegistry, ConfigSource,
+};

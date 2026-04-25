@@ -1,6 +1,6 @@
 //! vac-bridge daemon entry point.
 
-use local_bridge::agent_runtime::AgentRuntimeRegistry;
+use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
 use local_bridge::server::{build_app, AppState};
@@ -36,10 +36,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(synth_legacy_registry(path))
     } else {
         let r = AgentRuntimeRegistry::load()?;
-        if matches!(
-            r.source(),
-            local_bridge::agent_runtime::ConfigSource::Embedded
-        ) {
+        if matches!(r.source(), ConfigSource::Embedded) {
             let bin = default_engine_bin();
             tracing::info!(engine_bin = %bin.display(), "no agents.toml found — using discovered engine binary");
             Arc::new(synth_legacy_registry(bin))
@@ -79,30 +76,6 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, "vac-bridge started");
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-/// Build a one-agent runtime registry around a raw binary path. Mirrors
-/// `SessionRegistry::new(PathBuf)`'s synth, kept inline here so main.rs
-/// can short-circuit the config lookup when `VAC_ENGINE_BIN` is set.
-fn synth_legacy_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
-    use local_bridge::agent_runtime::{
-        AgentDefinition, AgentKind, AgentsConfig, ConfigSource, DEFAULT_PERMISSION_TIMEOUT_MS,
-    };
-    let id = "default".to_string();
-    let agent = AgentDefinition {
-        id: id.clone(),
-        label: "Default engine".into(),
-        kind: AgentKind::VacNative,
-        command: engine_bin,
-        args: vec!["--stdio".into()],
-        enabled: true,
-        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
-    };
-    let cfg = AgentsConfig {
-        default_agent_id: id,
-        agents: vec![agent],
-    };
-    AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }
 
 fn default_engine_bin() -> PathBuf {

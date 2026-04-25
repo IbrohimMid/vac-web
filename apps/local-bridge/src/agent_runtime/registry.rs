@@ -5,7 +5,9 @@
 //! registry exposes `default_agent` + `get` so future stages can plug
 //! in user selection without touching SessionRegistry.
 
-use super::config::{AgentDefinition, AgentsConfig, EMBEDDED_DEFAULT_TOML};
+use super::config::{
+    AgentDefinition, AgentKind, AgentsConfig, DEFAULT_PERMISSION_TIMEOUT_MS, EMBEDDED_DEFAULT_TOML,
+};
 use super::errors::{AgentRuntimeError, Result};
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -43,18 +45,20 @@ impl AgentRuntimeRegistry {
         Self { config, source }
     }
 
-    /// Resolve config from env → XDG → home → embedded default. Each
-    /// step is tried in order; the first existing path wins. Missing
-    /// files are skipped silently; *parse* errors short-circuit.
+    /// Resolve config from env → XDG → home → embedded default.
+    ///
+    /// `VAC_WEB_AGENTS_CONFIG` is treated as an *explicit* operator
+    /// intent: if it's set, the path **must** exist and parse, else
+    /// `load()` errors. The lower-priority `VAC_CONFIG_DIR/agents.toml`
+    /// and `~/.config/vac-web/agents.toml` lookups remain best-effort:
+    /// missing files fall through to the next source.
     pub fn load() -> Result<Self> {
         if let Some(p) = std::env::var_os("VAC_WEB_AGENTS_CONFIG") {
             let path = PathBuf::from(p);
-            if path.exists() {
-                return Self::load_from_path(&path).map(|cfg| Self {
-                    config: cfg,
-                    source: ConfigSource::EnvFile(path),
-                });
-            }
+            return Self::load_from_path(&path).map(|cfg| Self {
+                config: cfg,
+                source: ConfigSource::EnvFile(path),
+            });
         }
         if let Some(dir) = std::env::var_os("VAC_CONFIG_DIR") {
             let path = PathBuf::from(dir).join("agents.toml");
@@ -131,6 +135,52 @@ impl AgentRuntimeRegistry {
             "agent runtime registry loaded"
         );
     }
+}
+
+/// Infer the [`AgentKind`] for a legacy single-binary engine path.
+///
+/// Used by the back-compat synth path (`VAC_ENGINE_BIN` override and
+/// `SessionRegistry::new(PathBuf)` shim). Looks at the binary's file
+/// name: `mock-engine` → `Mock`, anything else → `VacNative`.
+///
+/// Accuracy matters because Stage X.2 will enforce
+/// `allowed_agent_kinds` per profile — misclassifying mock-engine as
+/// vac-native would let policy decisions fire on the wrong kind.
+pub fn infer_legacy_agent_kind(command: &Path) -> AgentKind {
+    let file = command
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    if file == "mock-engine" || file.contains("mock-engine") {
+        AgentKind::Mock
+    } else {
+        AgentKind::VacNative
+    }
+}
+
+/// Build a one-agent [`AgentRuntimeRegistry`] around a raw binary path.
+///
+/// Single source of truth for the back-compat synth used by both
+/// `main.rs` (when `VAC_ENGINE_BIN` is set or no agents.toml is found)
+/// and `SessionRegistry::new(PathBuf)`. Centralizing avoids drift in
+/// `kind` / `args` / timeout / source between call sites.
+pub fn synth_legacy_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
+    let id = "default".to_string();
+    let kind = infer_legacy_agent_kind(&engine_bin);
+    let agent = AgentDefinition {
+        id: id.clone(),
+        label: "Default engine".into(),
+        kind,
+        command: engine_bin,
+        args: vec!["--stdio".into()],
+        enabled: true,
+        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+    };
+    let cfg = AgentsConfig {
+        default_agent_id: id,
+        agents: vec![agent],
+    };
+    AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }
 
 fn home_config_path() -> PathBuf {
@@ -242,6 +292,52 @@ command = "custom-engine"
         let _g = isolated_env();
         let reg = AgentRuntimeRegistry::load().unwrap();
         assert!(reg.get("ghost").is_err());
+    }
+
+    #[test]
+    fn explicit_env_config_missing_errors() {
+        let _g = isolated_env();
+        std::env::set_var(
+            "VAC_WEB_AGENTS_CONFIG",
+            "/definitely/missing/agents-x1-test.toml",
+        );
+        let err = AgentRuntimeRegistry::load().unwrap_err();
+        assert!(
+            matches!(err, AgentRuntimeError::Read { .. }),
+            "expected Read error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn infer_kind_classifies_mock_engine_as_mock() {
+        assert_eq!(
+            infer_legacy_agent_kind(Path::new("/usr/bin/mock-engine")),
+            AgentKind::Mock
+        );
+        assert_eq!(
+            infer_legacy_agent_kind(Path::new("./target/debug/mock-engine")),
+            AgentKind::Mock
+        );
+    }
+
+    #[test]
+    fn infer_kind_classifies_vac_as_vac_native() {
+        assert_eq!(
+            infer_legacy_agent_kind(Path::new("/usr/local/bin/vac")),
+            AgentKind::VacNative
+        );
+        assert_eq!(
+            infer_legacy_agent_kind(Path::new("vac")),
+            AgentKind::VacNative
+        );
+    }
+
+    #[test]
+    fn synth_legacy_uses_inferred_kind() {
+        let mock = synth_legacy_registry(PathBuf::from("/path/to/mock-engine"));
+        assert_eq!(mock.default_agent().kind, AgentKind::Mock);
+        let native = synth_legacy_registry(PathBuf::from("/path/to/vac"));
+        assert_eq!(native.default_agent().kind, AgentKind::VacNative);
     }
 
     #[test]
