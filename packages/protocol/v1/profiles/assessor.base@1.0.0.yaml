@@ -101,6 +101,14 @@ network_egress:
 
 approval_required_for: []
 
+# Stage X.2 — agent-kind compatibility. assessor.* run read-only and
+# the X.0 design lock denies generic ACP executors for assessor profiles
+# (see docs/agent-runtime.md). X.7 will re-open this for a strictly
+# read-only ACP assessment-worker mode.
+allowed_agent_kinds:
+  - mock
+  - vac-native
+
 resource_limits:
   max_session_wallclock_ms: 1800000
   max_tool_calls: 1500

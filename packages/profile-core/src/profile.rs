@@ -42,6 +42,15 @@ pub struct CapabilityProfile {
     #[serde(default)]
     pub approval_required_for: Vec<String>,
 
+    /// Stage X.2 — agent runtime kinds permitted to back a session
+    /// for this profile. Stored as kebab-case strings ("mock",
+    /// "vac-native", "acp"). Default-deny: an empty list (or omitted
+    /// field) means *no* agent kind may run this profile, so every
+    /// shipped profile must opt in explicitly. See
+    /// [`crate::enforce::enforce_agent_kind`].
+    #[serde(default)]
+    pub allowed_agent_kinds: Vec<String>,
+
     #[serde(default)]
     pub resource_limits: Option<ResourceLimits>,
     #[serde(default)]
@@ -322,6 +331,15 @@ fn merge_with_parent(
         }
     }
 
+    // allowed_agent_kinds: child *narrows* the parent set. If the child
+    // omits the field, parent's set carries through. If the child
+    // declares it, the effective set is the intersection so a child
+    // can never re-enable a kind the parent denied.
+    if !child.allowed_agent_kinds.is_empty() {
+        out.allowed_agent_kinds
+            .retain(|k| child.allowed_agent_kinds.contains(k));
+    }
+
     Ok(out)
 }
 
@@ -339,6 +357,17 @@ fn validate_consistency(p: &CapabilityProfile) -> Result<()> {
         }
         if !p.connectors.write.is_empty() {
             bail!("assessor profile {} declares connector writes", p.id);
+        }
+    }
+    // Validate agent-kind names. Empty list is allowed (default-deny).
+    for k in &p.allowed_agent_kinds {
+        match k.as_str() {
+            "mock" | "vac-native" | "acp" => {}
+            other => bail!(
+                "profile {} has allowed_agent_kinds entry '{}' (must be one of mock|vac-native|acp)",
+                p.id,
+                other
+            ),
         }
     }
     Ok(())

@@ -5,6 +5,7 @@ use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::AuditSeverity;
+use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
 use serde_json::json;
 use tracing::warn;
 
@@ -99,6 +100,58 @@ pub async fn dispatch_command(
                     },
                     events,
                 );
+            }
+
+            // Stage X.2 — enforce profile.allowed_agent_kinds against
+            // the agent that would actually back this session. Since
+            // X.4 hasn't landed `agent_id` on the wire yet, we resolve
+            // the bridge's default agent here. When agent_id ships,
+            // resolve via the registry instead and keep this check.
+            let agent = state.sessions.agents().default_agent();
+            let agent_kind_str = agent.kind.as_str();
+            match CapabilityProfile::load(&profile_id, &state.profile_root) {
+                Ok(profile) => match enforce_agent_kind(&profile, agent_kind_str) {
+                    Decision::Allow => {}
+                    Decision::Deny { code, reason } => {
+                        state.audit.log(
+                            &cmd.session_id,
+                            "agent",
+                            AuditSeverity::Warn,
+                            json!({
+                                "decision": "deny",
+                                "code": code,
+                                "reason": reason,
+                                "profile_id": profile_id,
+                                "agent_id": agent.id,
+                                "agent_kind": agent_kind_str,
+                            }),
+                        );
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: code.into(),
+                                    message: reason,
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                },
+                Err(e) => {
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "profile.load_failed".into(),
+                                message: e.to_string(),
+                            }),
+                        },
+                        events,
+                    );
+                }
             }
 
             match state

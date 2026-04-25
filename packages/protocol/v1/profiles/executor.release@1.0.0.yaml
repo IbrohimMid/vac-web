@@ -76,6 +76,14 @@ approval_required_for:
   - publish.*
   - connector.write.*
 
+# Stage X.2 — agent-kind compatibility. executor.release retains
+# release authority on first-party runtimes only; ACP providers stay
+# denied per the X.0 design lock until two-party + signed deploy paths
+# are validated end-to-end.
+allowed_agent_kinds:
+  - mock
+  - vac-native
+
 resource_limits:
   max_session_wallclock_ms: 3600000
   max_tool_calls: 1000

@@ -4,7 +4,7 @@
 //! Run: `cargo test -p red-team --features redteam`.
 
 use profile_core::{
-    enforce::{enforce_fs_read, enforce_shell, enforce_tool},
+    enforce::{enforce_agent_kind, enforce_fs_read, enforce_shell, enforce_tool},
     profile::CapabilityProfile,
     Decision,
 };
@@ -212,6 +212,120 @@ fn rt_extension_assessor_egress_constrained_to_family_hosts() {
         enforce_network(&rtd, "api.github.com", "POST").is_deny(),
         "assessor cannot POST"
     );
+}
+
+// --- Stage X.2 — agent runtime kind compatibility (cases 121–124) ---
+
+const RT_121: TestCaseMeta = TestCaseMeta::new(
+    "RT-121",
+    "assessor.rtd + acp denied",
+    Layer::Bridge,
+    "assessor.rtd@1.0.0",
+    Severity::Critical,
+);
+
+const RT_122: TestCaseMeta = TestCaseMeta::new(
+    "RT-122",
+    "executor.code + acp allowed",
+    Layer::Bridge,
+    "executor.code@1.0.0",
+    Severity::High,
+);
+
+const RT_123: TestCaseMeta = TestCaseMeta::new(
+    "RT-123",
+    "executor.release + acp denied",
+    Layer::Bridge,
+    "executor.release@1.0.0",
+    Severity::Critical,
+);
+
+const RT_124: TestCaseMeta = TestCaseMeta::new(
+    "RT-124",
+    "executor.migration + acp denied",
+    Layer::Bridge,
+    "executor.migration@1.0.0",
+    Severity::Critical,
+);
+
+#[test]
+fn rt_121_assessor_rtd_acp_denied() {
+    let p = load(RT_121.profile);
+    let d = enforce_agent_kind(&p, "acp");
+    assert_denied(&d, &RT_121);
+    if let Decision::Deny { code, .. } = d {
+        assert_eq!(code, "agent.kind_not_allowed");
+    }
+    // Sister assessor families must inherit the same denial.
+    for fam in [
+        "assessor.security@1.0.0",
+        "assessor.ux@1.0.0",
+        "assessor.pm@1.0.0",
+        "assessor.release@1.0.0",
+    ] {
+        let p = load(fam);
+        assert!(
+            enforce_agent_kind(&p, "acp").is_deny(),
+            "{fam} + acp must be denied"
+        );
+        // ...while first-party kinds remain allowed.
+        assert!(
+            enforce_agent_kind(&p, "mock").is_allow(),
+            "{fam} + mock must be allowed"
+        );
+        assert!(
+            enforce_agent_kind(&p, "vac-native").is_allow(),
+            "{fam} + vac-native must be allowed"
+        );
+    }
+}
+
+#[test]
+fn rt_122_executor_code_acp_allowed() {
+    let p = load(RT_122.profile);
+    assert!(
+        enforce_agent_kind(&p, "acp").is_allow(),
+        "executor.code + acp must be allowed (Build / Handoff path)"
+    );
+    assert!(enforce_agent_kind(&p, "mock").is_allow());
+    assert!(enforce_agent_kind(&p, "vac-native").is_allow());
+    eprintln!("[{}] ✓ acp allowed + mock + vac-native allowed", RT_122.id);
+}
+
+#[test]
+fn rt_123_executor_release_acp_denied() {
+    let p = load(RT_123.profile);
+    let d = enforce_agent_kind(&p, "acp");
+    assert_denied(&d, &RT_123);
+    assert!(enforce_agent_kind(&p, "mock").is_allow());
+    assert!(enforce_agent_kind(&p, "vac-native").is_allow());
+}
+
+#[test]
+fn rt_124_executor_migration_acp_denied() {
+    let p = load(RT_124.profile);
+    let d = enforce_agent_kind(&p, "acp");
+    assert_denied(&d, &RT_124);
+    assert!(enforce_agent_kind(&p, "mock").is_allow());
+    assert!(enforce_agent_kind(&p, "vac-native").is_allow());
+}
+
+#[test]
+fn rt_extension_unknown_agent_kind_denied() {
+    // Typo / future kind not in the canonical set must default-deny
+    // for every shipped profile.
+    for id in [
+        "assessor.rtd@1.0.0",
+        "executor.code@1.0.0",
+        "executor.release@1.0.0",
+        "executor.migration@1.0.0",
+    ] {
+        let p = load(id);
+        assert!(
+            enforce_agent_kind(&p, "wat").is_deny(),
+            "unknown kind must be denied for {id}"
+        );
+    }
 }
 
 #[test]

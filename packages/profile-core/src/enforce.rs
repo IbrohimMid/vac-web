@@ -31,6 +31,28 @@ impl Decision {
     }
 }
 
+/// Stage X.2: check whether an agent runtime kind is permitted to back
+/// a session running this profile. Default-deny: an empty
+/// `allowed_agent_kinds` list rejects every kind, so every shipped
+/// profile must opt in explicitly to mock / vac-native / acp.
+///
+/// `kind` must already be a kebab-case canonical string (matching
+/// `agent_runtime::AgentKind::as_str()`): one of "mock" | "vac-native"
+/// | "acp". Anything else is denied with the same code so callers
+/// don't need a separate path for typo'd kinds.
+pub fn enforce_agent_kind(p: &CapabilityProfile, kind: &str) -> Decision {
+    if p.allowed_agent_kinds.iter().any(|k| k == kind) {
+        return Decision::allow();
+    }
+    Decision::deny(
+        "agent.kind_not_allowed",
+        format!(
+            "agent kind '{kind}' is not in profile {}'s allowed_agent_kinds",
+            p.id
+        ),
+    )
+}
+
 /// Check whether a tool name is permitted. Deny-wins semantics:
 /// explicit deny match → deny; else allow-list match → allow; else deny.
 pub fn enforce_tool(p: &CapabilityProfile, tool: &str) -> Decision {

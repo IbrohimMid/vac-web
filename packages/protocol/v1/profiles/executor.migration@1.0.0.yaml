@@ -98,3 +98,9 @@ audit:
   log_tool_args: full
   subsystem_tag: migration
   retain_for_days: 365
+
+# Stage X.2 — agent-kind compatibility. Schema migrations remain
+# first-party only; ACP providers cannot back this profile.
+allowed_agent_kinds:
+  - mock
+  - vac-native

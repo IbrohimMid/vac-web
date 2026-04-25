@@ -82,6 +82,14 @@ approval_required_for:
   - move_file
   - shell.exec
 
+# Stage X.2 — agent-kind compatibility. executor.code is the canonical
+# Build/Handoff executor and is the only profile cleared for ACP
+# (Claude Code / OpenCode / Codex) initially.
+allowed_agent_kinds:
+  - mock
+  - vac-native
+  - acp
+
 resource_limits:
   max_session_wallclock_ms: 7200000
   max_tool_calls: 5000
