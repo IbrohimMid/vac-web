@@ -1,6 +1,6 @@
 {
   "id": "cmd_01J0000000000000000000X4SC",
-  "session_id": "",
+  "session_id": "sess_01J0000000000000000000X4SC",
   "type": "session.create",
   "payload": {
     "profile_id": "executor.code@1.0.0",
