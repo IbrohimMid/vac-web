@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles/tokens.css';
+import './styles/cockpit.css';
 import { BridgeStatus } from './app/BridgeStatus';
 import { PairingPrompt } from './app/PairingPrompt';
 import { ActivityRail } from './components/ActivityRail/ActivityRail';
