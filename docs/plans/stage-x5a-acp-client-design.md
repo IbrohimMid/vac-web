@@ -204,14 +204,73 @@ adopted now.
 
 ## 8. Open items before X.5b
 
-- `session/request_permission` round-trip under auth — needs a
-  logged-in `claude` to capture the real `toolCall` shape with
-  options.
-- Failure modes: kill mid-prompt, malformed envelope, agent-side
-  unhandled error — verify mpsc/oneshot pump tolerates each.
-- Decide whether `packages/acp-types` is hand-rolled or codegen'd via
-  `typify` from `schema/schema.json`. (Spike kept everything as
-  `Value` for speed.)
+### 8.1 Failure-mode captures (CLOSED — captured against `claude-agent-acp@0.31.0`)
+
+| Scenario | What the bridge will see | Bridge handling |
+| -------- | ------------------------ | --------------- |
+| Non-JSON line on stdin | `stderr: "Failed to parse JSON message: ... SyntaxError"`, **no wire reply**. Agent stays alive. | Bridge already serializes `serde_json::to_string`; this can only fire if a peer corrupts the stream. Treat as `transcript.error` if observed; do not crash. |
+| JSON line missing `jsonrpc` / `method` | `stderr: "Invalid message { ... }"`, no wire reply. | Same as above. |
+| Unknown method (e.g. `unknown/method`) | Standard JSON-RPC error: `code:-32601, message:"\"Method not found\": <m>", data:{ method: <m> }`. | Surface as `agent.protocol_unsupported` — already exists from X.3. |
+| Missing required params (e.g. `session/prompt` without `sessionId`/`prompt`) | `code:-32602, message:"Invalid params", data:{_errors:[],<field>:{_errors:["Invalid input: expected ..., received undefined"]}}`. zod-style. | Map to `agent.protocol_invalid_params` (new). Bridge constructs every request with typed structs so this only fires on contract drift. |
+| Bad `sessionId` on `session/prompt` | `code:-32603, message:"Internal error", data:{details:"Session not found"}`. | Surface as `session.not_found` — bridge issues `session/cancel` for the lost id and asks user to retry. |
+| Child SIGKILL'd mid-prompt | Child exits, stdout closes. No graceful envelope. | Existing `transcript.error{reason:"child_exited"}` watchdog (X.3) fires. The pending oneshot waiter must resolve with an error so callers don't hang — see implementation outline §7. |
+
+Verbatim captures live in operator-runnable form at
+`/tmp/acp-{spike,kill-mid}.sh` during the spike pass; not committed.
+Conclusion: every failure mode is either already handled by X.3's
+watchdog or maps cleanly onto an existing or single new error code.
+
+### 8.2 `session/request_permission` round-trip under auth (STILL OPEN)
+
+Capture deferred to X.5c. The X.5b scope (initialize / session/new /
+session/prompt / session/cancel / receive session/update) does **not**
+need this envelope: the Agent only sends `session/request_permission`
+when a tool call wants to mutate state, which X.5b's read-only prompt
+flow doesn't trigger.
+
+When X.5c starts, run `claude /login`, then drive a prompt that
+forces a tool call and capture the request + the four standard
+outcomes (`{outcome:{outcome:"selected",optionId:"<id>"}}`,
+`{outcome:{outcome:"cancelled"}}`, etc).
+
+### 8.3 ACP type strategy — DECISION
+
+**X.5b adopts hand-rolled minimal Rust types**, not full schema
+codegen. `_meta` and any field whose schema we don't actively read
+stay as `serde_json::Value` so vendor extensions (e.g.
+`agentCapabilities._meta.claudeCode.promptQueueing`) pass through
+intact.
+
+The minimum surface for X.5b:
+
+```text
+InitializeRequest, InitializeResponse
+NewSessionRequest, NewSessionResponse
+PromptRequest, PromptResponse
+CancelNotification
+SessionNotification (envelope) + SessionUpdate (tagged enum)
+JSON-RPC envelopes: Request, Response::{Result, Error}, Notification
+```
+
+Permissions, file-system, terminal, elicitation, providers, NES, and
+the rest of `session/*` (load/fork/list/resume/set_*) are added as
+they're needed in X.5c onward.
+
+Why hand-rolled now:
+
+- Zero new build-time dependencies (`typify` would pull in proc-macro
+  + schemars at minimum).
+- We can ship X.5b without running a code generator in CI.
+- Hand-roll lets us pick `serde_json::Value` for `_meta` etc — codegen
+  would either expose untyped extensions or block on them.
+- The surface is tiny (six request/response pairs, eleven SessionUpdate
+  variants). Keeping pace with upstream is one PR per release at most.
+- If drift ever hurts, switching to `typify` later is mechanical: the
+  message shapes are already canonical from `schema/schema.json`.
+
+Codegen is **deferred** to a later hardening pass — likely once we add
+file-system + terminal handlers in X.5c, where the type surface
+roughly doubles.
 
 ## 9. Cross-links
 
