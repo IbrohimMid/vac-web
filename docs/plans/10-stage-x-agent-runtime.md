@@ -92,26 +92,32 @@ that speaks real ACP) so X.3 tests still anchor the contract.
 `newSession` → `prompt` against an in-process ACP fake using the
 official SDK shape and observes the response on the bridge side.
 
-### X.5b — Spawn `claude-code-acp` provider
+### X.5b — Spawn `claude-agent-acp` provider
 
 Add an entry to the `agents.toml` example pointing the `acp` runtime
-at `claude-code-acp` (or successor name). Bridge resolves and spawns
-the binary using the Stage X.1 registry. All existing `--profile /
+at the npm-installed binary `claude-agent-acp` (latest published as
+`@agentclientprotocol/claude-agent-acp@0.31.0`; the `claude-code-acp`
+binary from the deprecated `@zed-industries/claude-code-acp` package
+is supported by command name only). Bridge resolves and spawns the
+binary using the Stage X.1 registry. All existing `--profile /
 --session-id / --project` arg conventions are dropped on this path —
 the ACP client tells the agent its working directory through
-`NewSessionRequest.cwd`, not CLI args.
+`session/new` `params.cwd`, not CLI args.
 
 The bridge:
 
-- runs `initialize` once at agent startup, caches `agentCapabilities`,
-- opens one ACP session per VAC `session.create`,
-- forwards browser `message.submit` to ACP `prompt`,
-- forwards browser `message.cancel_stream` to ACP `cancel`.
+- sends `initialize` once at agent startup, caches `agentCapabilities`
+  (incl. the `_meta.claudeCode.promptQueueing` extension surfaced by
+  v0.31.0),
+- opens one ACP session per VAC `session.create` via `session/new`,
+- forwards browser `message.submit` to ACP `session/prompt`,
+- forwards browser `message.cancel_stream` to ACP `session/cancel`.
 
 **Exit.** A scripted Build session under `executor.code@1.0.0` +
 `agent_id="claude"` + `agent_kind="acp"` reaches the live
-`claude-code-acp` binary, sends one prompt, and receives at least one
-`agent_message_chunk` SessionUpdate.
+`claude-agent-acp` binary, sends one prompt, and receives at least
+one `session/update` notification with
+`update.sessionUpdate="agent_message_chunk"`.
 
 ### X.5c — SessionUpdate / RequestPermission mapping
 
@@ -120,20 +126,22 @@ Translate the eleven ACP `SessionUpdate` variants and the
 No new browser-facing protocol commands; the mapping table lives in
 [`stage-x-claude-acp-verification.md` §12.3](./stage-x-claude-acp-verification.md):
 
-- `agent_message_chunk` / `agent_thought_chunk` → `transcript.delta`
-  (the latter carries an optional `kind="thought"`).
+- `agent_message_chunk` / `agent_thought_chunk` (variants of
+  `session/update`) → `transcript.delta` (the thought variant carries
+  an optional `kind="thought"`).
 - `tool_call` / `tool_call_update` → drive `review.changeset_updated`
   for fs writes, `runtime.job_log` for shell/terminal.
 - `plan` → `plan.updated`.
 - `usage_update` → existing agents-lane token-usage telemetry, when
   present (no fakes — see Build red-team B12).
-- `requestPermission` → `approval.pending`; outcome resolves the ACP
-  request with either `{ outcome: "selected", optionId }` (approve) or
-  `{ outcome: "cancelled" }` (deny / timeout).
-- `readTextFile` / `writeTextFile` → bridge serves these from the
-  pinned project root, applies `profile_layer` enforcement, and
-  surfaces every write through `review.changeset_updated`.
-- terminal RPCs → spawned under `runtime.*`, output piped to
+- `session/request_permission` (separate JSON-RPC request, not a
+  session/update variant) → `approval.pending`; outcome resolves the
+  ACP request with either `{ outcome: "selected", optionId }`
+  (approve) or `{ outcome: "cancelled" }` (deny / timeout).
+- `fs/read_text_file` / `fs/write_text_file` → bridge serves these
+  from the pinned project root, applies `profile_layer` enforcement,
+  and surfaces every write through `review.changeset_updated`.
+- `terminal/*` → spawned under `runtime.*`, output piped to
   `runtime.job_log`, kill on `runtime.cancel_job`.
 
 **Exit.** Red-team cases 125–128 pass: ACP write requests block until

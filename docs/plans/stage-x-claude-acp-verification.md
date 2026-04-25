@@ -1,16 +1,51 @@
 # Stage X.5 / X.6 — Real Claude Code ACP Verification Note
 
-> **Update 2026-04-26 (research finding).** The Agent Client Protocol is
-> a real, documented protocol with a public TypeScript SDK
-> (`@agentclientprotocol/sdk`). Zed ships a Claude adapter
-> (`@zed-industries/claude-code-acp`, now renamed to
-> `@agentclientprotocol/claude-agent-acp`) that implements the Agent
-> side of ACP and drives the Claude Code SDK underneath. **This is the
-> path we should take**: VAC bridge becomes an ACP *Client*, spawns the
-> packaged Agent, and speaks the official protocol. The
-> `claude --print --output-format stream-json` adapter (previously §11
-> recommendation) is now demoted to a fallback used only if the Agent
-> binary cannot be installed in the target environment. See §12.
+> ## Corrected diagnosis (2026-04-26)
+>
+> ```text
+> WRONG (earlier framing in §3/§4):
+>   VAC can't use ACP because Claude Code doesn't support it.
+>
+> RIGHT:
+>   The `claude` binary doesn't expose `--acp`, but Claude Code can be
+>   used via a separate ACP adapter package. Zed already ships and
+>   uses that adapter. VAC's gap isn't Claude support — it's that the
+>   bridge has no official ACP *client* driver to speak to the
+>   adapter.
+> ```
+>
+> Zed's path:
+>
+> ```text
+> Zed
+>   → official ACP client (Rust, in zed.dev source)
+>   → @agentclientprotocol/claude-agent-acp  (was: @zed-industries/claude-code-acp)
+>   → @anthropic-ai/claude-agent-sdk
+>   → Claude Code
+> ```
+>
+> VAC's current path:
+>
+> ```text
+> VAC Web
+>   → local-bridge
+>   → mock ACP scaffold (toy wire shape — not ACP)
+> ```
+>
+> VAC's target path:
+>
+> ```text
+> VAC Web
+>   → local-bridge
+>   → official ACP client driver (Rust port OR Node sidecar over @agentclientprotocol/sdk)
+>   → @agentclientprotocol/claude-agent-acp
+>   → @anthropic-ai/claude-agent-sdk
+> ```
+>
+> **Implication:** the `claude --print --output-format stream-json`
+> recommendation in the previous draft of §11 is **demoted to a
+> fallback**. Primary path is the official ACP transport, identical
+> in concept to what Zed already does. See §12 for evidence.
 
 **Status.** Pre-implementation evidence collection. **No code changes** land
 until every section below is filled in against a real `claude` binary. The
@@ -341,14 +376,29 @@ side so callers see one stable interface.
 
 ## 12. Official ACP path — research findings (2026-04-26)
 
-### 12.1 Packages
+### 12.1 Packages — observed via `npm view` + local install
 
-| Package | Version observed | Role |
-| ------- | ---------------- | ---- |
-| `@agentclientprotocol/sdk` | `0.14.1` | Protocol definition + TS client/server runtime |
-| `@zed-industries/claude-code-acp` | `0.16.2` | ACP Agent that drives Claude Code SDK |
-| `@agentclientprotocol/claude-agent-acp` | (rename) | New name of the package above; migrate before pinning |
-| `@anthropic-ai/claude-agent-sdk` | (transitive) | Claude SDK used by the ACP Agent under the hood |
+| Package | Latest | Binary | Role |
+| ------- | ------ | ------ | ---- |
+| `@agentclientprotocol/sdk` | **`0.20.0`** (3 days ago) | (library) | Protocol definition + TS client/server runtime |
+| `@agentclientprotocol/claude-agent-acp` | **`0.31.0`** (2 days ago) | `claude-agent-acp` | **Pin against this.** ACP Agent driving `@anthropic-ai/claude-agent-sdk`. |
+| `@zed-industries/claude-code-acp` | `0.16.2` (DEPRECATED) | `claude-code-acp` | Old name. npm prints "renamed to @agentclientprotocol/claude-agent-acp". Don't pin. |
+| `@anthropic-ai/claude-agent-sdk` | `0.2.119` (transitive) | (library) | Claude SDK used by the ACP Agent under the hood |
+
+`agents.toml` example for X.5b:
+
+```toml
+[agents.claude]
+kind = "acp"
+label = "Claude Code"
+command = "claude-agent-acp"
+args = []
+enabled = true
+permission_timeout_ms = 300000
+```
+
+Bridge stays unchanged when the npm package's binary name changes —
+just edit the `command` field.
 
 The shipping CLI:
 
@@ -364,81 +414,165 @@ The binary entrypoint immediately calls `runAcp()` from
 `acp-agent.js`, which wires `AgentSideConnection` from
 `@agentclientprotocol/sdk` to stdin/stdout (ndjson stream).
 
-### 12.2 Captured `initialize` round-trip
+### 12.2 Captured `initialize` round-trips
 
-Sent (line-delimited JSON-RPC 2.0 over stdin):
+Both packages tested locally. Wire is line-delimited JSON-RPC 2.0
+over stdin/stdout (ndjson). Stderr is for logs only — `dist/index.js`
+explicitly redirects all `console.*` to stderr to keep stdout
+ACP-clean.
+
+#### `@zed-industries/claude-code-acp@0.16.2` (legacy)
+
+Request:
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":true,"writeTextFile":true},"terminal":false}}}
 ```
 
-Received (single line on stdout, formatted here for readability):
+Response (formatted):
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
+  "jsonrpc": "2.0", "id": 1,
   "result": {
     "protocolVersion": 1,
     "agentCapabilities": {
       "promptCapabilities": { "image": true, "embeddedContext": true },
       "mcpCapabilities": { "http": true, "sse": true },
       "loadSession": true,
-      "sessionCapabilities": {
-        "fork": {},
-        "list": {},
-        "resume": {}
-      }
+      "sessionCapabilities": { "fork": {}, "list": {}, "resume": {} }
     },
     "agentInfo": {
       "name": "@zed-industries/claude-code-acp",
       "title": "Claude Code",
       "version": "0.16.2"
     },
-    "authMethods": [
-      {
-        "description": "Run `claude /login` in the terminal",
-        "name": "Log in with Claude Code",
-        "id": "claude-login"
-      }
-    ]
+    "authMethods": [{
+      "id": "claude-login",
+      "name": "Log in with Claude Code",
+      "description": "Run `claude /login` in the terminal"
+    }]
   }
 }
 ```
 
-This is the smoking gun: real ACP, real protocol version 1, real
-JSON-RPC 2.0 framing over ndjson, working without auth (auth is only
-needed at `prompt` time). Any X.5 design must match this.
+#### `@agentclientprotocol/claude-agent-acp@0.31.0` (current)
 
-### 12.3 `@agentclientprotocol/sdk` v0.14.1 method surface
+Same request, response:
 
-Captured from `dist/acp.d.ts` and `schema/schema.json` shipped in the
-installed package.
+```json
+{
+  "jsonrpc": "2.0", "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "_meta": { "claudeCode": { "promptQueueing": true } },
+      "promptCapabilities": { "image": true, "embeddedContext": true },
+      "mcpCapabilities": { "http": true, "sse": true },
+      "loadSession": true,
+      "sessionCapabilities": { "fork": {}, "list": {}, "resume": {}, "close": {} }
+    },
+    "agentInfo": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "title": "Claude Agent",
+      "version": "0.31.0"
+    },
+    "authMethods": []
+  }
+}
+```
 
-**Agent → Client requests** (Client implements):
+Notable diffs in 0.31.0 vs 0.16.2:
 
-| Method | Required params | Purpose |
-| ------ | --------------- | ------- |
-| `sessionUpdate` (notification) | `sessionId, update` | Streamed updates from agent. Tagged union — see §12.4. |
-| `requestPermission` | `sessionId, toolCall, options` | **Modal halt** — agent waits for `outcome`. This is the X.5 bridge target. |
-| `readTextFile` | `sessionId, path` (optional `line`, `limit`) | Agent asks editor to read on its behalf (deny-listed paths enforced client-side). |
-| `writeTextFile` | `sessionId, path, content` | Same, write side. |
-| `createTerminal` | `sessionId, command` (optional `args, cwd, env, outputByteLimit`) | Spawn a terminal under client supervision. |
-| `terminalOutput` | — | Read terminal output. |
-| `releaseTerminal` / `waitForTerminalExit` / `killTerminalCommand` | — | Lifecycle. |
+- New vendor extension: `agentCapabilities._meta.claudeCode.promptQueueing`.
+- New session capability: `sessionCapabilities.close: {}`.
+- `agentInfo.title` is now `"Claude Agent"` (was `"Claude Code"`).
+- `authMethods` came back empty in this run (auth state depends on
+  whatever credentials Claude already has on disk — capture varies).
 
-**Client → Agent requests** (Agent implements):
+**X.5a target: 0.31.0 wire shape.** Bridge code must tolerate the
+`_meta` extension and the `close` capability.
 
-| Method | Required params | Purpose |
-| ------ | --------------- | ------- |
-| `initialize` | `protocolVersion` | Capability handshake. Captured above. |
-| `newSession` | `cwd, mcpServers` | Open a new session. Returns `sessionId`, optional `models`, `modes`, `configOptions`. |
-| `loadSession` (capability-gated) | `sessionId, …` | Resume a stored session. |
-| `setSessionMode` (optional) | — | Switch model mode. |
-| `prompt` | `sessionId, prompt` | Send user turn; result carries `stopReason` + `usage`. |
-| `cancel` (notification) | `sessionId` | Abort current turn. |
+#### Wire framing observation
 
-**`SessionUpdate` discriminator** (`update.sessionUpdate` field):
+ACP is JSON-RPC 2.0 with the standard `id / method / params / result /
+error` shape. There is no length-prefix; framing is one envelope per
+`\n`. Stderr is allowed and does not interfere with the protocol.
+
+### 12.3 `@agentclientprotocol/sdk` v0.20.0 wire methods
+
+Wire-method names captured **directly from the JSON schema shipped
+inside the SDK package** (`schema/schema.json`). The TypeScript
+camelCase type names (`newSession`, `sessionUpdate`, …) do **not**
+match the JSON-RPC method strings. Confirmed empirically: sending
+`{"method":"newSession"}` gets `-32601 Method not found`; sending
+`{"method":"session/new"}` is accepted.
+
+**Authoritative wire-method strings (use these verbatim):**
+
+```text
+initialize                         (camelCase exception)
+
+session/new
+session/load
+session/prompt
+session/cancel              (notification, client → agent)
+session/update              (notification, agent → client)
+session/request_permission  (agent → client)
+session/close
+session/fork
+session/list
+session/resume
+session/set_mode
+session/set_model
+session/set_config_option
+
+fs/read_text_file
+fs/write_text_file
+
+terminal/create
+terminal/output
+terminal/release
+terminal/wait_for_exit
+terminal/kill
+
+elicitation/create
+elicitation/complete
+
+providers/list
+providers/set
+providers/disable
+
+nes/start                          (next-edit-suggestion)
+nes/accept
+nes/reject
+nes/suggest
+nes/close
+```
+
+**Client must implement (agent → client):**
+
+| Wire method | Required params | Purpose |
+| ----------- | --------------- | ------- |
+| `session/update` (notif.) | `sessionId, update` | Streamed updates from agent. Tagged union — see §12.4. |
+| `session/request_permission` | `sessionId, toolCall, options` | **Modal halt** — agent waits for `outcome`. The X.5c approval-bridge target. |
+| `fs/read_text_file` | `sessionId, path` (opt. `line`, `limit`) | Agent asks editor to read; client-side deny-globs enforced. |
+| `fs/write_text_file` | `sessionId, path, content` | Same, write side. Surface every write through `review.changeset_updated`. |
+| `terminal/create` | `sessionId, command` (opt. `args, cwd, env, outputByteLimit`) | Spawn a terminal under client supervision. |
+| `terminal/output` / `release` / `wait_for_exit` / `kill` | — | Lifecycle. |
+
+**Agent must implement (client → agent):**
+
+| Wire method | Required params | Purpose |
+| ----------- | --------------- | ------- |
+| `initialize` | `protocolVersion` | Capability handshake. Captured in §12.2. |
+| `session/new` | `cwd, mcpServers` | Open a new session. Returns `sessionId`, optional `models, modes, configOptions`. |
+| `session/load` (capability-gated) | `sessionId, …` | Resume a stored session. |
+| `session/set_mode` (optional) | — | Switch model mode. |
+| `session/prompt` | `sessionId, prompt` | Send user turn; result carries `stopReason + usage`. |
+| `session/cancel` (notif.) | `sessionId` | Abort current turn. |
+
+**`session/update` notification — `update.sessionUpdate` discriminator** (note the JSON-RPC method is `session/update`; the discriminator field inside `update` is still camelCase `sessionUpdate`):
 
 ```text
 user_message_chunk         agent_message_chunk         agent_thought_chunk
