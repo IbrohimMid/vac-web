@@ -2,8 +2,9 @@
 // Submission is `handoff.create` (author signature). Approval requires a
 // *different* signer via the PacketDetail view (two-party rule).
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAssessment, type Finding, type Severity } from '../../stores/assessment';
+import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
@@ -24,7 +25,22 @@ export function HandoffBuilder({ transport }: Props) {
   const activeRunId = useAssessment((s) => s.activeRunId);
   const sessionId = useSession((s) => s.sessionId);
 
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Pre-fill from the report-selection slice on mount; once consumed, the
+  // slice is cleared so navigating back-and-forth doesn't keep re-applying
+  // stale selection. The reportSelection store is the single source of truth
+  // for "findings the user wants in a packet" — useAttachments stays out of
+  // this domain.
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const initial = useAssessmentReport.getState().selectedFindingIds;
+    return new Set(initial);
+  });
+  useEffect(() => {
+    if (useAssessmentReport.getState().selectedFindingIds.size > 0) {
+      useAssessmentReport.getState().clearSelection();
+    }
+    // Run only on mount; intentional empty deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [title, setTitle] = useState('');
   const [authorName, setAuthorName] = useState('');
   const [targetProfile, setTargetProfile] = useState('executor.code@1.0.0');

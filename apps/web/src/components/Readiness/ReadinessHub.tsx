@@ -1,9 +1,9 @@
 // Readiness Hub: verdict header + 5 scorecards + virtualized findings list.
 
-import { useMemo, useRef, useState } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useMemo, useState } from 'react';
 import { AssessmentDiff } from './AssessmentDiff';
-import { FindingCard } from './FindingCard';
+import { AssessmentReportDetail } from './AssessmentReportDetail';
+import { FindingsList } from './FindingsList';
 import {
   ASSESSOR_FAMILIES,
   useAssessment,
@@ -13,6 +13,7 @@ import {
   type Severity,
   type Verdict,
 } from '../../stores/assessment';
+import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
@@ -43,6 +44,20 @@ export function ReadinessHub({ transport }: Props) {
   const activeRunId = useAssessment((s) => s.activeRunId);
   const findings = useAssessment((s) => s.findings);
   const sessionId = useSession((s) => s.sessionId);
+  const reportRunId = useAssessmentReport((s) => s.reportRunId);
+  const exitReport = useAssessmentReport((s) => s.exitReport);
+
+  // Report-mode short-circuit: if a runId is pinned for report view, render
+  // the detail layout in place. Back button clears the pinned id.
+  if (reportRunId) {
+    return (
+      <AssessmentReportDetail
+        runId={reportRunId}
+        transport={transport}
+        onBack={exitReport}
+      />
+    );
+  }
 
   const [minSev, setMinSev] = useState<Severity>('info');
   const [categoryFilter, setCategoryFilter] = useState<Category | 'all'>('all');
@@ -172,6 +187,7 @@ function RecentAssessmentsTimeline() {
   const runs = useAssessment((s) => s.runs);
   const runOrder = useAssessment((s) => s.runOrder);
   const findings = useAssessment((s) => s.findings);
+  const enterReport = useAssessmentReport((s) => s.enterReport);
   // Most recent 6 completed runs, newest first.
   const rows = runOrder
     .slice()
@@ -239,6 +255,14 @@ function RecentAssessmentsTimeline() {
                   {r.verdict}
                 </span>
               )}
+              <button
+                className="btn sm ghost"
+                onClick={() => enterReport(r.id)}
+                style={{ marginLeft: 'auto', fontSize: 11 }}
+                aria-label={`View report for run ${r.id}`}
+              >
+                View report
+              </button>
             </div>
           );
         })}
@@ -373,54 +397,3 @@ function Filters({
   );
 }
 
-function FindingsList({
-  findings,
-  transport,
-}: {
-  findings: Finding[];
-  transport: TransportHandle | null;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const v = useVirtualizer({
-    count: findings.length,
-    getScrollElement: () => ref.current,
-    estimateSize: () => 120,
-    overscan: 8,
-  });
-  if (findings.length === 0) {
-    return (
-      <div style={{ padding: 16, color: 'var(--text-2)' }}>
-        No findings (yet) at current filters.
-      </div>
-    );
-  }
-  return (
-    <div ref={ref} style={{ maxHeight: 520, overflow: 'auto' }}>
-      <div
-        role="list"
-        aria-label="Findings"
-        style={{ height: v.getTotalSize(), position: 'relative' }}
-      >
-        {v.getVirtualItems().map((item) => {
-          const f = findings[item.index];
-          if (!f) return null;
-          return (
-            <div
-              key={item.key}
-              role="listitem"
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                transform: `translateY(${item.start}px)`,
-              }}
-            >
-              <FindingCard finding={f} transport={transport} />
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
