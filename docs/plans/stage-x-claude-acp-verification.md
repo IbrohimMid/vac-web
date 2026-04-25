@@ -1,5 +1,17 @@
 # Stage X.5 / X.6 — Real Claude Code ACP Verification Note
 
+> **Update 2026-04-26 (research finding).** The Agent Client Protocol is
+> a real, documented protocol with a public TypeScript SDK
+> (`@agentclientprotocol/sdk`). Zed ships a Claude adapter
+> (`@zed-industries/claude-code-acp`, now renamed to
+> `@agentclientprotocol/claude-agent-acp`) that implements the Agent
+> side of ACP and drives the Claude Code SDK underneath. **This is the
+> path we should take**: VAC bridge becomes an ACP *Client*, spawns the
+> packaged Agent, and speaks the official protocol. The
+> `claude --print --output-format stream-json` adapter (previously §11
+> recommendation) is now demoted to a fallback used only if the Agent
+> binary cannot be installed in the target environment. See §12.
+
 **Status.** Pre-implementation evidence collection. **No code changes** land
 until every section below is filled in against a real `claude` binary. The
 agent runtime design lock at [`../agent-runtime.md`](../agent-runtime.md) marks
@@ -291,67 +303,202 @@ become the X.5/X.6 design lock.
 
 ## 10. Go / no-go for X.5/X.6
 
-- [x] §2–§4 produce a stable ACP invocation
-      → **negative result**: no `--acp` in 2.1.111. §11 fallback selected.
-- [ ] §5 captures one round-trip without errors
-      → **next task**: capture `claude --print --output-format stream-json` round-trip.
-- [ ] §6 inventory has every envelope we plan to map
-- [ ] §7 permission envelope is documented (request + grant + deny)
-- [ ] §8 covers at least two failure modes
-- [ ] §9 decisions are filled in
+Updated after §12 research:
 
-If every box is checked → X.5 implementation can begin.
-If any are open → keep this note, do not write code yet.
+- [x] §2–§3 produce a stable ACP invocation
+      → `claude-code-acp` from `@zed-industries/claude-code-acp@0.16.2`
+      (renaming to `@agentclientprotocol/claude-agent-acp`).
+- [x] §12.2 captures one round-trip without errors
+      → `initialize` request + response captured verbatim.
+- [x] §12.3 inventory covers every envelope we plan to map
+      → 11 SessionUpdate variants + the four agent methods + the four
+      client methods + permission/file/terminal RPCs.
+- [x] §12.3 permission envelope documented at the schema level
+      → `RequestPermissionRequest { sessionId, toolCall, options }` →
+      `RequestPermissionResponse { outcome }`. **Live capture under
+      auth still required before X.5b coding.**
+- [ ] §8 failure modes captured against real Agent
+      → next: kill mid-prompt, malformed JSON, auth failure.
+- [x] §12.5 decision recorded.
 
-**Current state: 1/6. Do not start X.5.**
+State: **5/6.** Authority granted to plan X.5a–X.5c (see
+[`./10-stage-x-agent-runtime.md`](./10-stage-x-agent-runtime.md)). Live
+permission capture under a logged-in `claude` is the gate before X.5b
+implementation begins.
 
-## 11. Fallback path — selected after §3/§4 captures
+## 11. ~~Fallback path — selected after §3/§4 captures~~ DEMOTED
 
-§3/§4 confirm Claude Code 2.1.111 has no `--acp`. Three viable paths:
+The earlier recommendation (`claude --print --output-format stream-json`)
+is **demoted to a fallback**. Reason: the Agent Client Protocol exists
+as a documented standard with a published TypeScript SDK and a
+ready-made Claude adapter. We should target the standard, not invent a
+private one on top of stream-json.
 
-1. **`--print` + `stream-json` adapter (recommended).**
-   Drive Claude with:
-   ```bash
-   claude --print \
-     --input-format stream-json \
-     --output-format stream-json \
-     --include-partial-messages \
-     --include-hook-events \
-     --permission-mode dontAsk \
-     [--add-dir <project_root>]
-   ```
-   Wrap this behind a tiny adapter subprocess that translates between
-   our internal ACP-shaped envelope (the one mock-acp speaks today)
-   and Claude's stream-json events. The `dontAsk` permission-mode + a
-   bridge-side approval queue gives us the §7 path.
-   - Pros: native Claude binary, no version pin.
-   - Cons: stream-json schema is Anthropic-private; capture in §6/§7
-     before coding. `dontAsk` semantics need inspection — does it deny
-     silently, or does it surface a hook/event we can trap?
+The stream-json route is preserved here only as a contingency for
+environments where the ACP adapter cannot be installed. If used, it
+must wear the same `@agentclientprotocol/sdk` *shape* on the bridge
+side so callers see one stable interface.
 
-2. **MCP server route.** Run Claude with `--mcp-config` pointing at a
-   local MCP server hosted by `local-bridge`. The bridge's MCP server
-   becomes the permission/tool boundary; Claude calls our tools, we
-   approve/deny.
-   - Pros: MCP is a documented protocol; approval semantics are explicit.
-   - Cons: inverts the topology — Claude is the parent, bridge is a
-     server. Doesn't match the X.0 "bridge spawns ACP child" model.
+## 12. Official ACP path — research findings (2026-04-26)
 
-3. **Wrapper subprocess.** Same shape as path 1 but the adapter is a
-   distinct binary (`vac-claude-adapter`) we ship, configured via
-   `agents.toml` like any other agent. Cleanest separation; highest
-   maintenance cost.
+### 12.1 Packages
 
-**Decision (provisional, requires sign-off before X.5 starts):** path 1
-inline inside the bridge's existing AcpDriver, with `dontAsk` +
-`--permission-mode` reserved for the X.5 permission bridge. Switch to
-path 3 only if path 1 introduces a circular dependency on Anthropic
-schema changes.
+| Package | Version observed | Role |
+| ------- | ---------------- | ---- |
+| `@agentclientprotocol/sdk` | `0.14.1` | Protocol definition + TS client/server runtime |
+| `@zed-industries/claude-code-acp` | `0.16.2` | ACP Agent that drives Claude Code SDK |
+| `@agentclientprotocol/claude-agent-acp` | (rename) | New name of the package above; migrate before pinning |
+| `@anthropic-ai/claude-agent-sdk` | (transitive) | Claude SDK used by the ACP Agent under the hood |
 
-Whichever fallback is chosen, **rewrite §4–§7 against the chosen
-transport** before considering X.5 implementable. §5–§7 captures
-against `--print --output-format stream-json` are the next concrete
-task.
+The shipping CLI:
+
+```bash
+npm install -g @zed-industries/claude-code-acp
+# observed deprecation:
+#   "This package has been renamed to @agentclientprotocol/claude-agent-acp."
+which claude-code-acp
+# → <prefix>/bin/claude-code-acp
+```
+
+The binary entrypoint immediately calls `runAcp()` from
+`acp-agent.js`, which wires `AgentSideConnection` from
+`@agentclientprotocol/sdk` to stdin/stdout (ndjson stream).
+
+### 12.2 Captured `initialize` round-trip
+
+Sent (line-delimited JSON-RPC 2.0 over stdin):
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":true,"writeTextFile":true},"terminal":false}}}
+```
+
+Received (single line on stdout, formatted here for readability):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "promptCapabilities": { "image": true, "embeddedContext": true },
+      "mcpCapabilities": { "http": true, "sse": true },
+      "loadSession": true,
+      "sessionCapabilities": {
+        "fork": {},
+        "list": {},
+        "resume": {}
+      }
+    },
+    "agentInfo": {
+      "name": "@zed-industries/claude-code-acp",
+      "title": "Claude Code",
+      "version": "0.16.2"
+    },
+    "authMethods": [
+      {
+        "description": "Run `claude /login` in the terminal",
+        "name": "Log in with Claude Code",
+        "id": "claude-login"
+      }
+    ]
+  }
+}
+```
+
+This is the smoking gun: real ACP, real protocol version 1, real
+JSON-RPC 2.0 framing over ndjson, working without auth (auth is only
+needed at `prompt` time). Any X.5 design must match this.
+
+### 12.3 `@agentclientprotocol/sdk` v0.14.1 method surface
+
+Captured from `dist/acp.d.ts` and `schema/schema.json` shipped in the
+installed package.
+
+**Agent → Client requests** (Client implements):
+
+| Method | Required params | Purpose |
+| ------ | --------------- | ------- |
+| `sessionUpdate` (notification) | `sessionId, update` | Streamed updates from agent. Tagged union — see §12.4. |
+| `requestPermission` | `sessionId, toolCall, options` | **Modal halt** — agent waits for `outcome`. This is the X.5 bridge target. |
+| `readTextFile` | `sessionId, path` (optional `line`, `limit`) | Agent asks editor to read on its behalf (deny-listed paths enforced client-side). |
+| `writeTextFile` | `sessionId, path, content` | Same, write side. |
+| `createTerminal` | `sessionId, command` (optional `args, cwd, env, outputByteLimit`) | Spawn a terminal under client supervision. |
+| `terminalOutput` | — | Read terminal output. |
+| `releaseTerminal` / `waitForTerminalExit` / `killTerminalCommand` | — | Lifecycle. |
+
+**Client → Agent requests** (Agent implements):
+
+| Method | Required params | Purpose |
+| ------ | --------------- | ------- |
+| `initialize` | `protocolVersion` | Capability handshake. Captured above. |
+| `newSession` | `cwd, mcpServers` | Open a new session. Returns `sessionId`, optional `models`, `modes`, `configOptions`. |
+| `loadSession` (capability-gated) | `sessionId, …` | Resume a stored session. |
+| `setSessionMode` (optional) | — | Switch model mode. |
+| `prompt` | `sessionId, prompt` | Send user turn; result carries `stopReason` + `usage`. |
+| `cancel` (notification) | `sessionId` | Abort current turn. |
+
+**`SessionUpdate` discriminator** (`update.sessionUpdate` field):
+
+```text
+user_message_chunk         agent_message_chunk         agent_thought_chunk
+tool_call                  tool_call_update            plan
+available_commands_update  current_mode_update         config_option_update
+session_info_update        usage_update
+```
+
+Eleven variants. The mappings below tell us how to pump these into VAC
+events without inventing semantics:
+
+| ACP variant | VAC event |
+| ----------- | --------- |
+| `agent_message_chunk` | `transcript.delta` (existing) |
+| `agent_thought_chunk` | `transcript.delta` with `kind="thought"` (new flag, optional) |
+| `tool_call` / `tool_call_update` | drives `review.changeset_updated` + `runtime.job_log` depending on `ToolKind` |
+| `plan` | `plan.updated` (existing in protocol catalog) |
+| `available_commands_update` | informational — surface to Composer slash palette later |
+| `current_mode_update` | informational — surface to Build agent lane |
+| `usage_update` | `agents.lane_state` token-usage field (optional) |
+| `session_info_update` | session metadata audit log only |
+
+`requestPermission` arrives as a *separate* request (not a SessionUpdate
+variant) and is the X.5 wire target — bridge's existing
+`approval.pending` queue fills `outcome`.
+
+### 12.4 Authentication
+
+The Agent advertises one auth method id `"claude-login"` whose
+description is `"Run \`claude /login\` in the terminal"`. The
+Anthropic Claude Code CLI is the underlying transport; auth state is
+shared with whatever credentials `claude` already has on disk. For
+VAC's purposes this means:
+
+- If the operator has run `claude /login` on the host, the ACP Agent
+  will Just Work for prompts.
+- If not, `prompt` will fail with an `authenticate` requirement; the
+  bridge surfaces it as a notify-event and points the user at the
+  CLI.
+
+### 12.5 Decision (post-research)
+
+We target the **official ACP** path:
+
+1. Bridge becomes an ACP **Client** using a Rust port (or a small Node
+   sidecar that re-uses `@agentclientprotocol/sdk` directly).
+2. Bridge spawns `claude-code-acp` (or successor
+   `@agentclientprotocol/claude-agent-acp`) as the configured `acp`
+   agent in `agents.toml`. Args are resolved by the registry.
+3. Bridge translates between ACP `SessionUpdate` / `requestPermission`
+   / file-system / terminal RPCs and existing VAC events
+   (`transcript.*`, `review.*`, `runtime.*`, `approval.*`).
+4. Stream-json adapter from the demoted §11 stays as fallback only.
+
+**Implication for X.5 / X.6:** the existing `mock-acp` driver was a
+useful scaffold but the wire shape it speaks (`{type:"prompt", text}`
+↔ `{type:"assistant_message_chunk", text}`) is **not ACP**. X.5a
+re-targets the AcpDriver onto the real ACP wire. mock-acp can be
+upgraded later to speak real ACP for offline tests; for now we keep it
+to anchor the X.3 contract while X.5 work proceeds.
 
 ---
 
