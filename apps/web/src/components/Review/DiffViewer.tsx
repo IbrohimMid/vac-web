@@ -44,19 +44,28 @@ export function DiffViewer({ params, dismiss }: OverlayRenderProps) {
       role="dialog"
       aria-modal="true"
       aria-label={`Diff: ${path ?? 'unknown'}`}
+      className="card"
       style={dialogStyle}
     >
-      <header style={headerStyle}>
-        <strong style={{ fontFamily: 'monospace' }}>{path}</strong>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={revert} disabled={!transport}>
-            Revert file
-          </button>
-          <button onClick={dismiss}>Close</button>
-        </div>
+      <header className="card-hd">
+        <span
+          className="badge"
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5 }}
+        >
+          {path}
+        </span>
+        <div className="spacer"></div>
+        <button className="btn" onClick={revert} disabled={!transport}>
+          Revert file
+        </button>
+        <button className="btn ghost" onClick={dismiss}>
+          Close
+        </button>
       </header>
       {!diff ? (
-        <p style={{ padding: 16 }}>Loading diff…</p>
+        <p className="muted" style={{ padding: 16, fontSize: 13, margin: 0 }}>
+          Loading diff…
+        </p>
       ) : useVirtual ? (
         <VirtualDiff lines={lines} />
       ) : (
@@ -67,7 +76,16 @@ export function DiffViewer({ params, dismiss }: OverlayRenderProps) {
         </pre>
       )}
       {diff?.truncated && (
-        <p style={{ padding: 8, fontSize: 12, color: 'var(--sev-warn)' }}>
+        <p
+          style={{
+            padding: '8px 16px',
+            fontSize: 12,
+            color: 'var(--warn)',
+            margin: 0,
+            background: 'var(--warn-soft)',
+            borderTop: '1px solid var(--warn)',
+          }}
+        >
           Diff truncated — file too large to render fully.
         </p>
       )}
@@ -109,35 +127,45 @@ function VirtualDiff({ lines }: { lines: string[] }) {
 function DiffLine({ text }: { text: string }) {
   const first = text[0];
   let color: string | undefined;
-  if (first === '+') color = 'var(--sev-ok)';
-  else if (first === '-') color = 'var(--sev-error)';
-  else if (first === '@') color = 'var(--sev-info)';
-  return <div style={{ color, whiteSpace: 'pre', fontFamily: 'monospace', fontSize: 12 }}>{text || ' '}</div>;
+  let bg: string | undefined;
+  if (first === '+') {
+    color = 'var(--ok)';
+    bg = 'var(--ok-soft)';
+  } else if (first === '-') {
+    color = 'var(--crit)';
+    bg = 'var(--crit-soft)';
+  } else if (first === '@') {
+    color = 'var(--info)';
+  }
+  return (
+    <div
+      style={{
+        color,
+        background: bg,
+        whiteSpace: 'pre',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 12,
+        lineHeight: '18px',
+        padding: '0 8px',
+      }}
+    >
+      {text || ' '}
+    </div>
+  );
 }
 
 const dialogStyle: React.CSSProperties = {
-  background: 'var(--bg-1, #1a1a1a)',
-  color: 'var(--text-1)',
-  border: '1px solid var(--border-1, #333)',
-  borderRadius: 8,
   width: 'min(900px, 92vw)',
   maxHeight: '85vh',
   display: 'flex',
   flexDirection: 'column',
 };
 
-const headerStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  padding: '8px 16px',
-  borderBottom: '1px solid var(--border-1, #333)',
-};
-
 const preStyle: React.CSSProperties = {
-  background: 'var(--bg-2, #111)',
-  padding: 8,
+  background: 'var(--bg-sunken)',
+  padding: '8px 0',
   margin: 0,
   overflow: 'auto',
   flex: 1,
+  borderTop: '1px solid var(--line)',
 };

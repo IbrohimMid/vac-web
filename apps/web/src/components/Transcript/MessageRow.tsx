@@ -3,6 +3,7 @@ import { renderMarkdownAsync } from '../../markdown/async';
 import { renderStreaming } from '../../markdown/streaming';
 import { useTranscript } from '../../stores/transcript';
 import { ColdMessage } from './ColdMessage';
+import { ToolCallBlock } from './ToolCallBlock';
 
 export function MessageRow({ id }: { id: string }) {
   const msg = useTranscript((s) => s.messages.get(id));
@@ -55,6 +56,7 @@ export function MessageRow({ id }: { id: string }) {
           {msg.state === 'streaming' && <span style={{ opacity: 0.5 }}>▍</span>}
         </div>
       )}
+      {msg.toolCall && <ToolCallBlock tc={msg.toolCall} />}
     </div>
   );
 }

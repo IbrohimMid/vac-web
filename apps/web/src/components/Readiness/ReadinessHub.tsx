@@ -161,9 +161,89 @@ export function ReadinessHub({ transport }: Props) {
           <FindingsList findings={filtered} transport={transport} />
             </>
           )}
+          <RecentAssessmentsTimeline />
         </>
       )}
     </div>
+  );
+}
+
+function RecentAssessmentsTimeline() {
+  const runs = useAssessment((s) => s.runs);
+  const runOrder = useAssessment((s) => s.runOrder);
+  const findings = useAssessment((s) => s.findings);
+  // Most recent 6 completed runs, newest first.
+  const rows = runOrder
+    .slice()
+    .reverse()
+    .map((id) => runs.get(id))
+    .filter((r): r is NonNullable<typeof r> => !!r)
+    .slice(0, 6);
+  if (rows.length === 0) return null;
+
+  // Per-run finding counts for the right-side detail.
+  const countByRun = new Map<string, { crit: number; high: number; total: number }>();
+  for (const f of findings.values()) {
+    const cur = countByRun.get(f.run_id) ?? { crit: 0, high: 0, total: 0 };
+    cur.total++;
+    if (f.severity === 'critical') cur.crit++;
+    else if (f.severity === 'high') cur.high++;
+    countByRun.set(f.run_id, cur);
+  }
+
+  const verdictBadge = (v: string | undefined) => {
+    if (v === 'pass') return 'ok';
+    if (v === 'warn') return 'warn';
+    if (v === 'fail') return 'crit';
+    return '';
+  };
+
+  return (
+    <section style={{ marginTop: 18 }}>
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: 14 }}>Recent assessments</h3>
+        <span className="muted" style={{ fontSize: 12 }}>
+          last {rows.length}
+        </span>
+      </header>
+      <div className="timeline-card">
+        {rows.map((r) => {
+          const counts = countByRun.get(r.id) ?? { crit: 0, high: 0, total: 0 };
+          const sevDot =
+            counts.crit > 0 ? 'crit' : counts.high > 0 ? 'high' : counts.total > 0 ? 'med' : 'low';
+          return (
+            <div key={r.id} className="timeline-row">
+              <span className={`sev-dot ${sevDot}`}></span>
+              <span className="when">
+                {r.started_at} ·{' '}
+                <span className="actor">{r.swarm.toUpperCase()}</span>
+              </span>
+              <span>
+                <strong>{r.swarm} · {r.status}</strong>
+                {' '}
+                <span className="muted">
+                  {counts.total} finding{counts.total === 1 ? '' : 's'}
+                  {counts.crit > 0 && ` · ${counts.crit} critical`}
+                  {counts.high > 0 && ` · ${counts.high} high`}
+                </span>
+              </span>
+              {r.verdict && (
+                <span className={`badge ${verdictBadge(r.verdict)}`}>
+                  {r.verdict}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

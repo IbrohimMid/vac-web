@@ -4,6 +4,16 @@ import { create } from 'zustand';
 
 export type Role = 'user' | 'assistant' | 'tool';
 
+export interface ToolCall {
+  /** e.g. "vil_codegen.handler" */
+  name: string;
+  /** Display string for args (already-formatted by emitter). */
+  args: string;
+  status: 'ok' | 'pending' | 'error';
+  /** Optional expandable body — stdout/stderr/diff, plain text. */
+  output?: string;
+}
+
 export interface Message {
   id: string;
   role: Role;
@@ -15,6 +25,8 @@ export interface Message {
   renderedHTML?: string;
   /** True once moved out of hot window. */
   isCold: boolean;
+  /** Inline tool call attached to this message (Stage H). */
+  toolCall?: ToolCall;
 }
 
 export const HOT_WINDOW_SIZE = 50;
