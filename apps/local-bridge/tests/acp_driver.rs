@@ -152,6 +152,70 @@ async fn next_event_of_type(ws: &mut Ws, type_name: &str) -> Value {
 }
 
 #[tokio::test]
+async fn x3_acp_browser_message_submit_routed_to_acp_prompt() {
+    // End-to-end: browser-side `message.submit` → bridge translator
+    // → SessionHandle::send_client_command → ACP `prompt` envelope on
+    // the child's stdin → transcript.delta + transcript.completed.
+    // No direct send_to_engine bypass.
+    let (url, _state) = start_bridge_with(build_acp_registry(vec![])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    // Normal protocol command — exactly the shape a browser client
+    // would send.
+    let cmd = json!({
+        "v": 1,
+        "id": "cmd_msgsubmit",
+        "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "hello from browser" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let delta = next_event_of_type(&mut ws, "transcript.delta").await;
+    assert!(delta["payload"]["delta"].is_string());
+    let _completed = next_event_of_type(&mut ws, "transcript.completed").await;
+}
+
+#[tokio::test]
+async fn x3_acp_unsupported_command_returns_protocol_unsupported() {
+    // Non-message.submit commands are not yet wired for ACP — bridge
+    // must surface a typed `agent.protocol_unsupported` rather than
+    // silently forwarding a JSON-RPC frame the ACP child can't parse.
+    let (url, _state) = start_bridge_with(build_acp_registry(vec![])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1,
+        "id": "cmd_runtime",
+        "type": "runtime.list_jobs",
+        "session_id": session_id,
+        "payload": {}
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    loop {
+        let Some(msg) = tokio::time::timeout(T, ws.next()).await.unwrap() else {
+            panic!("ws closed");
+        };
+        let Message::Text(txt) = msg.unwrap() else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        if v.get("ackOf") == Some(&json!("cmd_runtime")) {
+            assert_eq!(v["ok"], json!(false));
+            assert_eq!(v["error"]["code"], json!("agent.protocol_unsupported"));
+            return;
+        }
+    }
+}
+
+#[tokio::test]
 async fn x3_acp_session_streams_transcript_delta() {
     let (url, state) = start_bridge_with(build_acp_registry(vec![])).await;
     let mut ws = connect_hello(&url).await;

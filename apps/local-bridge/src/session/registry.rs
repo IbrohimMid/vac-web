@@ -67,6 +67,12 @@ impl SessionRegistry {
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
             None => self.agents.default_agent().clone(),
         };
+        // Lower-level guard: even if a future caller bypasses the
+        // translator's `agent.disabled` ack, the registry itself must
+        // refuse to spawn a disabled agent.
+        if !agent.enabled {
+            anyhow::bail!("agent.disabled: agent `{}` is disabled", agent.id);
+        }
         let opts = SpawnOptions {
             session_id: session_id.clone(),
             profile_id,

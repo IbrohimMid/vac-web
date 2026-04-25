@@ -257,6 +257,30 @@ async fn x4_disabled_agent_id_errors() {
 }
 
 #[tokio::test]
+async fn x4_registry_create_with_agent_rejects_disabled_at_lower_level() {
+    // Defense-in-depth: even if a future caller bypasses the
+    // translator's `agent.disabled` ack path, SessionRegistry must
+    // refuse to spawn a disabled agent. We invoke the registry
+    // directly, no WS, no translator.
+    let (_url, state) = start_bridge(multi_agent_registry()).await;
+    let result = state
+        .sessions
+        .create_with_agent(
+            "executor.code@1.0.0".into(),
+            std::path::PathBuf::from("/tmp/x"),
+            Some("disabled-claude"),
+        )
+        .await;
+    let err = match result {
+        Ok(_) => panic!("disabled agent must not spawn"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("agent.disabled"), "unexpected error: {msg}");
+    assert_eq!(state.sessions.count(), 0, "no session should be tracked");
+}
+
+#[tokio::test]
 async fn x4_explicit_acp_against_assessor_profile_denied_by_x2() {
     // X.4 selects the agent; X.2 denies the kind/profile combo.
     let (url, _state) = start_bridge(multi_agent_registry()).await;

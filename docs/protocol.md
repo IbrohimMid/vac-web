@@ -54,6 +54,10 @@
 | `connector.unavailable` | Connector disconnected or unhealthy |
 | `connector.rate_limited` | Backoff required |
 | `evidence.stale_hard_expire` | Cannot proceed with stale hard-expire evidence |
+| `agent.not_registered` | **Stage X.4** — `session.create` payload `agent_id` does not match any agent in the runtime registry |
+| `agent.disabled` | **Stage X.4** — selected `agent_id` exists but is `enabled = false` |
+| `agent.kind_not_allowed` | **Stage X.2** — resolved agent kind is not in the profile's `allowed_agent_kinds` list (default-deny) |
+| `agent.protocol_unsupported` | **Stage X.3** — command is not yet wired for the backing agent's wire dialect (e.g. ACP scaffold accepts `message.submit` only until X.5 widens it) |
 | `internal` | Unexpected bridge error |
 
 ---
@@ -92,7 +96,7 @@ Authentication: JWT in `Sec-WebSocket-Protocol` header (or first frame) — see 
 
 | Command | Payload | Notes |
 |---|---|---|
-| `session.create` | `{ projectRoot, profileId, handoffId?, title? }` | Returns `sessionId`. `handoffId` required iff `profileId` class is executor. |
+| `session.create` | `{ project_root, profile_id, handoff_id?, title?, agent_id? }` | Returns `session_id`. `handoff_id` required iff `profile_id` class is executor. **Stage X.4** — `agent_id` is additive: when omitted, the bridge spawns its default agent; when present, it must resolve via the `AgentRuntimeRegistry` to an enabled agent whose kind is in `profile.allowed_agent_kinds` (else see §6 errors). See sample [`packages/protocol/v1/_samples/command/valid-session-create-agent-id.json`](../packages/protocol/v1/_samples/command/valid-session-create-agent-id.json). |
 | `session.resume` | `{ sessionId }` | Attach to existing session |
 | `session.list` | `{ filter? }` | — |
 | `session.snapshot` | `{ sessionId }` | Request full snapshot resync |
@@ -230,7 +234,7 @@ Authentication: JWT in `Sec-WebSocket-Protocol` header (or first frame) — see 
 
 | Event | Payload |
 |---|---|
-| `session.ready` | `{ sessionId, profileId, profileHash, projectRoot }` |
+| `session.ready` | `{ session_id, profile_id, profile_hash?, project_root?, agent_id, agent_kind }` — **Stage X.4** adds `agent_id` (registry id of the agent backing this session) and `agent_kind` (`"mock"` \| `"vac-native"` \| `"acp"`) so clients can render runtime affordances and gate UI. |
 | `session.snapshot` | full SessionSnapshot |
 | `session.updated` | `{ fields: {...} }` |
 | `session.closed` | `{ reason }` |

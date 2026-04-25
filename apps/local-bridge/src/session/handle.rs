@@ -1,7 +1,7 @@
 //! Per-session state + child process handle.
 
 use crate::agent_runtime::{AgentDefinition, AgentKind};
-use crate::ws::envelope::ServerEvent;
+use crate::ws::envelope::{ClientCommand, ServerEvent};
 use bridge_core::{EventRing, StateHolder};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -182,6 +182,56 @@ impl SessionHandle {
         stdin.write_all(b"\n").await?;
         stdin.flush().await?;
         Ok(())
+    }
+
+    /// Translate a browser-side `ClientCommand` into the wire dialect
+    /// of the backing agent and forward it to the child's stdin.
+    ///
+    /// - `Mock` / `VacNative` → JSON-RPC notification
+    ///   `{"jsonrpc":"2.0","id":<cmd.id>,"method":<cmd.cmd_type>,"params":<cmd.payload>}`.
+    ///   Preserves the historical wire shape mock-engine + `vac serve`
+    ///   already speak.
+    /// - `Acp` → ACP envelope. Currently only `message.submit` is
+    ///   mapped (Stage X.3 scaffold) to:
+    ///   `{"type":"prompt","text":<payload.text>,"mentions":<payload.mentions?>,"attachments":<payload.attachments?>}`.
+    ///   Other commands return `agent.protocol_unsupported` until X.5
+    ///   widens the ACP envelope set (tool/permission/file-write
+    ///   translation lands there).
+    pub async fn send_client_command(&self, cmd: &ClientCommand) -> anyhow::Result<()> {
+        match self.agent_kind {
+            AgentKind::Mock | AgentKind::VacNative => {
+                let rpc = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": cmd.id,
+                    "method": cmd.cmd_type,
+                    "params": cmd.payload,
+                });
+                self.send_to_engine(&rpc.to_string()).await
+            }
+            AgentKind::Acp => match cmd.cmd_type.as_str() {
+                "message.submit" => {
+                    let text = cmd
+                        .payload
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let mut envelope = serde_json::json!({
+                        "type": "prompt",
+                        "text": text,
+                    });
+                    if let Some(m) = cmd.payload.get("mentions").cloned() {
+                        envelope["mentions"] = m;
+                    }
+                    if let Some(a) = cmd.payload.get("attachments").cloned() {
+                        envelope["attachments"] = a;
+                    }
+                    self.send_to_engine(&envelope.to_string()).await
+                }
+                other => anyhow::bail!(
+                    "agent.protocol_unsupported: command '{other}' is not yet wired for ACP (X.5 scope)"
+                ),
+            },
+        }
     }
 
     pub async fn close_stdin(&self) {

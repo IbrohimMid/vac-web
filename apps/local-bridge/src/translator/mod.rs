@@ -396,14 +396,11 @@ pub async fn dispatch_command(
                     events,
                 );
             };
-            // Map to JSON-RPC request.
-            let rpc = json!({
-                "jsonrpc": "2.0",
-                "id": cmd.id,
-                "method": cmd.cmd_type,
-                "params": cmd.payload,
-            });
-            match handle.send_to_engine(&rpc.to_string()).await {
+            // Stage X.3 — translate to the agent's wire dialect rather
+            // than forwarding raw JSON-RPC. SessionHandle decides
+            // (mock/vac-native: JSON-RPC; acp: ACP envelope) and
+            // surfaces `agent.protocol_unsupported` for unmapped cmds.
+            match handle.send_client_command(&cmd).await {
                 Ok(()) => (
                     ServerAck {
                         ack_of: cmd.id.clone(),
@@ -412,17 +409,25 @@ pub async fn dispatch_command(
                     },
                     events,
                 ),
-                Err(e) => (
-                    ServerAck {
-                        ack_of: cmd.id.clone(),
-                        ok: false,
-                        error: Some(ErrorInfo {
-                            code: "engine.unreachable".into(),
-                            message: e.to_string(),
-                        }),
-                    },
-                    events,
-                ),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let code = if msg.starts_with("agent.protocol_unsupported") {
+                        "agent.protocol_unsupported"
+                    } else {
+                        "engine.unreachable"
+                    };
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: code.into(),
+                                message: msg,
+                            }),
+                        },
+                        events,
+                    )
+                }
             }
         }
     }

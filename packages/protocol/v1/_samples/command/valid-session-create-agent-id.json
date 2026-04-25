@@ -1,0 +1,11 @@
+{
+  "id": "cmd_01J0000000000000000000X4SC",
+  "session_id": "",
+  "type": "session.create",
+  "payload": {
+    "profile_id": "executor.code@1.0.0",
+    "project_root": "/repo/payments-svc",
+    "agent_id": "claude"
+  },
+  "v": 1
+}
