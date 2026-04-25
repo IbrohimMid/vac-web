@@ -31,9 +31,13 @@ SSOT documentation for the `vac-web` delivery cockpit. Read in this order if new
 13. **[red-team-test-plan.md](./red-team-test-plan.md)** — adversarial test matrix.
 14. **[perf-test-plan.md](./perf-test-plan.md)** — performance benchmarks + CI gates.
 
+## Product specs (per-surface)
+
+15. **[product-specs/](./product-specs/)** — Assess, Handoff, Release, Build product specs (Stage X-aware).
+
 ## Execution
 
-15. **[roadmap.md](./roadmap.md)** — phased execution plan, milestones, dependencies.
+16. **[roadmap.md](./roadmap.md)** — phased execution plan, milestones, dependencies.
 
 ---
 
