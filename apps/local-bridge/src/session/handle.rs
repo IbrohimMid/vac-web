@@ -2,7 +2,7 @@
 
 use crate::agent_runtime::acp::{
     classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical,
-    sha256_hex_canonical_excluding, AcpClient, ClientCapabilities, ContentBlock,
+    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, ClientCapabilities, ContentBlock,
     FsClientCapabilities, InitializeRequest, NewSessionRequest, PermissionRequest, PromptRequest,
     SessionNotification, ToolKind, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES,
     TOOL_CALL_HASH_DROP_FIELDS,
@@ -74,6 +74,8 @@ pub struct AcpRuntime {
     pub(crate) approval_by_full_hash: dashmap::DashMap<String, ResolvedApprovalCacheEntry>,
     /// X.5c.2 audit sink. None disables the tool.* audit rows.
     pub(crate) audit: Option<Arc<crate::audit::AuditFacility>>,
+    /// ACP wire tap for debug logging and `acp.debug_message` emission.
+    pub(crate) debug: Option<Arc<AcpDebugLog>>,
 }
 
 const APPROVAL_CORRELATION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -504,6 +506,13 @@ async fn emit_to(
     let _ = bcast.send(with_seq);
 }
 
+fn acp_debug_enabled() -> bool {
+    matches!(
+        std::env::var("VAC_WEB_ACP_DEBUG").ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
 /// JSON-RPC notification line processor — used for Mock + VacNative
 /// engines. The mock-engine + future `vac serve --stdio` both speak
 /// `{"jsonrpc":"2.0","method":"…","params":{…}}`; we pass-through
@@ -903,7 +912,13 @@ impl SessionHandle {
     /// --project` because the ACP client conveys cwd via
     /// `session/new.params.cwd`.
     async fn spawn_acp(opts: SpawnOptions) -> anyhow::Result<SessionHandleRef> {
-        let (client, mut child) = AcpClient::spawn(&opts.agent.command, &opts.agent.args, &[])?;
+        let debug = AcpDebugLog::new(acp_debug_enabled());
+        let (client, mut child) = AcpClient::spawn(
+            &opts.agent.command,
+            &opts.agent.args,
+            &[],
+            Some(Arc::clone(&debug)),
+        )?;
 
         // Handshake.
         let init_req = InitializeRequest {
@@ -947,6 +962,7 @@ impl SessionHandle {
             approval_by_tool_call_id: dashmap::DashMap::new(),
             approval_by_full_hash: dashmap::DashMap::new(),
             audit: opts.audit.clone(),
+            debug: Some(Arc::clone(&debug)),
         });
 
         // Resolve workflow spec. Unknown ids are rejected upstream at the
@@ -990,6 +1006,16 @@ impl SessionHandle {
             audit: opts.audit.clone(),
             assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
+
+        if let Some(debug) = acp_runtime.debug.as_ref() {
+            debug
+                .attach_session(
+                    handle.id.clone(),
+                    Arc::clone(&handle.ring),
+                    handle.broadcast.clone(),
+                )
+                .await;
+        }
 
         info!(
             session_id = %handle.id,

@@ -29,6 +29,7 @@
 //! SessionHandle
 //! ```
 
+use super::debug::{AcpDebugDirection, AcpDebugLog};
 use super::types::*;
 use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
@@ -99,6 +100,7 @@ impl AcpClient {
         command: &std::path::Path,
         args: &[String],
         env: &[(String, String)],
+        debug: Option<Arc<AcpDebugLog>>,
     ) -> Result<(Self, Child)> {
         let mut cmd = Command::new(command);
         cmd.args(args)
@@ -124,7 +126,7 @@ impl AcpClient {
         let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
 
         // Writer task — owns stdin, receives ndjson lines from a channel.
-        spawn_writer(stdin, stdin_rx);
+        spawn_writer(stdin, stdin_rx, debug.clone());
 
         // Reader task — owns stdout, dispatches responses/notifications.
         // Hand the reader a clone of the writer channel so it can answer
@@ -138,12 +140,16 @@ impl AcpClient {
             updates_tx.clone(),
             stdin_tx.clone(),
             perm_tx,
+            debug.clone(),
         );
 
         // Stderr pump — bridge debug logs only.
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(l)) = lines.next_line().await {
+                if let Some(debug) = debug.as_ref() {
+                    debug.record_stderr_line(&l).await;
+                }
                 debug!(target: "acp.stderr", "{l}");
             }
         });
@@ -276,9 +282,20 @@ impl AcpClient {
     }
 }
 
-fn spawn_writer(mut stdin: ChildStdin, mut rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
+fn spawn_writer(
+    mut stdin: ChildStdin,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    debug: Option<Arc<AcpDebugLog>>,
+) {
     tokio::spawn(async move {
         while let Some(bytes) = rx.recv().await {
+            if let Some(debug) = debug.as_ref() {
+                if let Ok(line) = std::str::from_utf8(&bytes) {
+                    debug
+                        .record_wire_line(AcpDebugDirection::Outgoing, line)
+                        .await;
+                }
+            }
             if let Err(e) = stdin.write_all(&bytes).await {
                 warn!(error=%e, "acp writer: stdin write failed");
                 return;
@@ -299,12 +316,18 @@ fn spawn_reader(
     updates: broadcast::Sender<SessionNotification>,
     writer_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     permission_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
+    debug: Option<Arc<AcpDebugLog>>,
 ) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
+                    if let Some(debug) = debug.as_ref() {
+                        debug
+                            .record_wire_line(AcpDebugDirection::Incoming, &line)
+                            .await;
+                    }
                     if let Err(e) =
                         dispatch_line(&line, &pending, &updates, &writer_tx, &permission_tx).await
                     {

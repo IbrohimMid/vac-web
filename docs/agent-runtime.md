@@ -989,10 +989,13 @@ pnpm --filter @vac-web/web build
 Provider smoke (skip in CI unless binary present):
 
 ```bash
-VAC_WEB_DEFAULT_AGENT=claude \
+VAC_WEB_ACP_DEBUG=1 \
 VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude.toml \
 cargo test -p local-bridge claude_acp_smoke -- --ignored
 ```
+
+See [`docs/acp-smoke.md`](./acp-smoke.md) for the full chat-only smoke
+workflow, including the OpenCode variant and expected debug events.
 
 Browser smoke X.3+:
 

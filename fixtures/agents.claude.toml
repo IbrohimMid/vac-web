@@ -1,0 +1,12 @@
+default_agent = "claude"
+
+[agents.claude]
+kind = "acp"
+label = "Claude Code"
+command = "claude"
+args = ["--acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["ANTHROPIC_*", "CLAUDE_*"]
+cwd_mode = "project-root"
