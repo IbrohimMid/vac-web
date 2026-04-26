@@ -1,6 +1,6 @@
 # Shipped — state of the codebase
 
-Snapshot of what's already in `main` as of commit `cd1ff13`. New plans assume this baseline. For commit-level detail use `git log`.
+Snapshot of what's already in `main`. For commit-level detail use `git log`.
 
 ## Foundations (Phase 0)
 
@@ -89,16 +89,24 @@ Introduced in `feat(bridge): introduce VIL-style workflow layer for cockpit orch
 - **Tests**: backend spec parser tests, adapter tests, executor advance tests, FE store tests, FE WorkflowRail DOM render tests.
 - **Guard**: no `vil_vwfd` dependency, no workflow provisioning, no X.5c.3, no Stage K.
 
-## Workflow selection + rich artifacts
+## Workflow selection baseline — locked at `230850a`
 
 - **Default workflow** changed from `build.basic` to `build.observe-tools`.
-- **New bundled spec** `build.full-cockpit`: prompt → observe tools → collect review → collect runtime → gate decision → end.
-- **Session create workflow selection**: `session.create` accepts optional `workflow_id`. If found in the bundled registry, that spec is used for the session's WorkflowProcess; if not found, `session.create` acks `ok=false` with `error.code="workflow.not_found"` and no session is created. `session.ready` includes `workflow_id` and `workflow_name`.
-- **`SessionHandle.workflow_spec_id`**: handle tracks the active spec id; included in `session.ready` payload.
-- **Richer artifact payloads**: `workflow.artifact.created` now includes `source_event_type` and `ts` in addition to existing fields.
-- **FE**: `useSession` store gains `workflowId`; populated from `session.ready`.
-- **FE WorkflowRail**: shows spec name, compact run_id (last 6 chars), artifact kind chips (review_diff, runtime_log, approval, tool_activity), updated empty state "Waiting for prompt to start workflow".
+- **New bundled spec** `build.full-cockpit`: prompt → observe tools → collect review → collect runtime → gate decision → end. Total bundled specs: 6.
+- **Session create workflow selection**: `session.create` accepts optional `workflow_id`. If found in the bundled registry, that spec is used for the session's WorkflowProcess. **If not found or if the id is a path/URL/arbitrary string, `session.create` acks `ok=false` with `error.code="workflow.not_found"` and no session is created.** There is no fallback to a default for an invalid id — rejection is strict.
+- **`SessionHandle.workflow_spec_id`**: handle tracks the active spec id; included in `session.ready` payload along with `workflow_name`.
+- **FE**: `useSession` store gains `workflowId` and `workflowName`; populated from `session.ready`.
+- **FE WorkflowRail**: shows spec name, compact run_id (last 6 chars), artifact kind chips (review_diff, runtime_log, approval, tool_activity), updated empty state.
+- **`system.capabilities`**: emits bundled `workflows` list (id, name, default flag) so FE can populate a selector without hardcoding.
 - **Guard**: allowlisted + bundled-only. No upload endpoint, no file path/URL/raw YAML from client.
+
+## Workflow artifact navigation + selector UI
+
+- **Artifact chips navigable**: WorkflowRail artifact chips are now clickable buttons that navigate to the relevant workbench tab (`review_diff` → Review, `runtime_log` → Runtime, `approval` → Approvals, `tool_activity` → Transcript). Tooltip shows `source_event_type`.
+- **New artifact kinds in executor**: `tool.observed` creates `tool_activity` artifacts (when `observe_tool_activity` step is active); `approval.pending` creates `approval` artifacts (when `await_approval` step is active).
+- **Artifact metadata**: `review_diff` artifacts carry `review_diff_count`; `runtime_log` artifacts carry `runtime_command_preview` (first 120 chars of command); `approval` artifacts carry `approval_id`. Raw output and raw diffs are never included.
+- **Workflow selector UI**: SessionPicker now shows a Workflow dropdown (Tool Observation default, Full Cockpit Build, Approval-Gated Edit, Basic Build) and sends `workflow_id` in `session.create`.
+- **Guard**: invalid workflow_id from UI is structurally impossible (selector only offers bundled ids).
 
 ## Held / not started
 
