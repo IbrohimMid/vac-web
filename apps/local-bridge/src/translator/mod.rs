@@ -773,17 +773,11 @@ pub async fn dispatch_command(
                         }
                     }
 
-                    let executor_cmd = ClientCommand {
-                        id: format!("cmd_{}", Ulid::new()),
-                        session_id: executor_handle.id.clone(),
-                        cmd_type: "handoff.dispatch_local".into(),
-                        payload: build_executor_dispatch_payload(
-                            &cmd.payload,
-                            &packet,
-                            &cmd.session_id,
-                        ),
-                        v: 1,
-                    };
+                    let executor_cmd = build_executor_submit_command(
+                        &executor_handle.id,
+                        &packet,
+                        &cmd.session_id,
+                    );
                     match executor_handle.send_client_command(&executor_cmd).await {
                         Ok(()) => (
                             ServerAck {
@@ -1325,36 +1319,22 @@ async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
     let _ = handle.broadcast.send(with_seq);
 }
 
-fn build_executor_dispatch_payload(
-    payload: &serde_json::Value,
+fn build_executor_submit_command(
+    executor_session_id: &str,
     packet: &crate::handoff::packet::Packet,
     source_session_id: &str,
-) -> serde_json::Value {
-    let mut out = if payload.is_object() {
-        payload.clone()
-    } else {
-        json!({})
-    };
-    if let Some(obj) = out.as_object_mut() {
-        obj.insert("packet_id".into(), json!(packet.id.clone()));
-        obj.insert("source_session_id".into(), json!(source_session_id));
-        obj.insert(
-            "executor_profile_id".into(),
-            json!(packet.target.executor_profile_id.clone()),
-        );
-        obj.insert(
-            "project_key".into(),
-            json!(format!(
-                "{}::{}",
-                packet.pin.repo_ref, packet.pin.base_commit_sha
-            )),
-        );
-        obj.insert(
-            "prompt".into(),
-            json!(crate::handoff::build_executor_initial_prompt(packet)),
-        );
+) -> ClientCommand {
+    ClientCommand {
+        id: format!("cmd_{}", Ulid::new()),
+        session_id: executor_session_id.to_string(),
+        cmd_type: "message.submit".into(),
+        payload: json!({
+            "text": crate::handoff::build_executor_initial_prompt(packet),
+            "handoff_packet_id": packet.id.clone(),
+            "source_session_id": source_session_id,
+        }),
+        v: 1,
     }
-    out
 }
 
 fn parse_execution_outcome(payload: &serde_json::Value, fallback_status: &str) -> ExecutionOutcome {
@@ -1618,5 +1598,114 @@ async fn relay_executor_event(
             true
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handoff::packet::{
+        HandoffApproval, HandoffConnectorSnapshot, HandoffPin, HandoffTarget, Packet, PacketStatus,
+        PacketTask, PinPolicy,
+    };
+    use serde_json::json;
+
+    fn sample_packet() -> Packet {
+        let now = "2026-04-24T10:00:00Z".to_string();
+        Packet {
+            id: "pkt_01JTEST000000000001".into(),
+            title: "Fix handoff dispatch".into(),
+            summary: Some("Make execution provider-agnostic".into()),
+            source_run_ids: vec!["run_01JTEST000000000002".into()],
+            accepted_finding_ids: vec!["finding_1".into()],
+            created_by: "author".into(),
+            created_at: now.clone(),
+            pin: HandoffPin {
+                repo_ref: "branch:main".into(),
+                base_commit_sha: "a".repeat(40),
+                worktree_digest: "b".repeat(64),
+                assessment_snapshot_at: now.clone(),
+                connector_snapshots: vec![HandoffConnectorSnapshot {
+                    connector_id: "github_default".into(),
+                    kind: "github".into(),
+                    snapshot_id: "snap_1".into(),
+                    captured_at: now.clone(),
+                    etag: None,
+                }],
+                expires_at: "2026-05-01T10:30:00Z".into(),
+                invalidate_on_repo_change: false,
+                invalidation_policy: PinPolicy::Strict,
+            },
+            tasks: vec![PacketTask {
+                id: "task_1".into(),
+                title: "Update the handoff state".into(),
+                rationale: "exercise the execution loop".into(),
+                source_finding_ids: vec!["finding_1".into()],
+                evidence_refs: vec![json!({ "uri": "file:///README.md" })],
+                steps: vec!["Inspect the packet".into(), "Apply the fix".into()],
+                constraints: vec!["Stay within scope".into()],
+                risk_notes: vec![],
+                est_effort: None,
+                depends_on: vec![],
+                touches_paths: vec!["apps/web/src/**".into()],
+                requires_approval_per_step: false,
+                rollback_steps: vec!["Revert the last commit".into()],
+            }],
+            order_hint: None,
+            target: HandoffTarget {
+                kind: "dispatch_to_local_vac".into(),
+                executor_profile_id: "executor.code@1.0.0".into(),
+                session_title: Some("Executor".into()),
+            },
+            approval: HandoffApproval {
+                required: true,
+                approvers: vec![],
+                approver_notes: None,
+                approved_at: None,
+                two_party: false,
+                required_roles: vec![],
+            },
+            status: PacketStatus::Approved,
+            state_history: vec![],
+            signers: vec![],
+            required_signers: 0,
+            execution_session_id: None,
+            execution_progress: None,
+            execution_outcome: None,
+            convergence_count: 0,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn handoff_dispatch_to_acp_uses_message_submit_not_handoff_dispatch_local() {
+        let packet = sample_packet();
+        let cmd = build_executor_submit_command("sess_executor", &packet, "sess_source");
+
+        assert_eq!(cmd.cmd_type, "message.submit");
+        assert_eq!(cmd.session_id, "sess_executor");
+        assert_eq!(
+            cmd.payload["handoff_packet_id"],
+            json!("pkt_01JTEST000000000001")
+        );
+        assert_eq!(cmd.payload["source_session_id"], json!("sess_source"));
+        let prompt = cmd.payload["text"].as_str().expect("prompt text");
+        assert!(prompt.contains("VAC Web Handoff Packet"));
+        assert!(prompt.contains("Packet: pkt_01JTEST000000000001"));
+    }
+
+    #[test]
+    fn executor_dispatch_payload_contains_structured_handoff_prompt() {
+        let packet = sample_packet();
+        let prompt = crate::handoff::build_executor_initial_prompt(&packet);
+
+        assert!(prompt.contains("VAC Web Handoff Packet"));
+        assert!(prompt.contains("Title: Fix handoff dispatch"));
+        assert!(prompt.contains("Pinned repo: branch:main @ "));
+        assert!(prompt.contains("Rules:"));
+        assert!(prompt.contains("Tasks:"));
+        assert!(prompt.contains("Evidence refs:"));
+        assert!(prompt.contains("Touches paths:"));
+        assert!(prompt.contains("Rollback:"));
     }
 }

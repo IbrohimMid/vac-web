@@ -400,7 +400,11 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
     }
 }
 
-fn handle_message_submit(id: Option<Value>, _params: Value, state: &mut State) -> Vec<String> {
+fn handle_message_submit(id: Option<Value>, params: Value, state: &mut State) -> Vec<String> {
+    if is_handoff_execution_submit(&params) {
+        return handle_handoff_message_submit(id, params, state);
+    }
+
     let msg_id = state.next_msg_id();
     let tc_id = state.next_tool_call_id();
     let mut out = Vec::with_capacity(10);
@@ -448,6 +452,115 @@ fn handle_message_submit(id: Option<Value>, _params: Value, state: &mut State) -
     out.push(emit_response(
         id.unwrap_or(Value::Null),
         json!({ "ok": true, "message_id": msg_id }),
+    ));
+    out
+}
+
+fn is_handoff_execution_submit(params: &Value) -> bool {
+    params
+        .get("handoff_packet_id")
+        .and_then(|v| v.as_str())
+        .is_some()
+        || params
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|text| text.contains("VAC Web Handoff Packet"))
+            .unwrap_or(false)
+}
+
+fn handle_handoff_message_submit(
+    id: Option<Value>,
+    params: Value,
+    state: &mut State,
+) -> Vec<String> {
+    let pid = params
+        .get("handoff_packet_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pkt_unknown")
+        .to_string();
+    let force_failure = params
+        .get("force_failure")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || params
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .map(|mode| mode == "fail")
+            .unwrap_or(false);
+    state.counter += 1;
+    let exec_sid = format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter);
+    let mut out = vec![emit_notification(
+        "handoff.execution_progress",
+        json!({
+            "packet_id": pid,
+            "executor_session_id": exec_sid,
+            "task_id": "t1",
+            "current_task": "t1",
+            "status": "started",
+            "completed": 0,
+            "total": 1,
+        }),
+    )];
+
+    if force_failure {
+        out.push(emit_notification(
+            "handoff.execution_progress",
+            json!({
+                "packet_id": pid,
+                "executor_session_id": exec_sid,
+                "task_id": "t1",
+                "current_task": "t1",
+                "status": "failed",
+                "completed": 0,
+                "total": 1,
+            }),
+        ));
+        out.push(emit_notification(
+            "handoff.failed",
+            json!({
+                "packet_id": pid,
+                "executor_session_id": exec_sid,
+                "status": "failed",
+                "outcome": {
+                    "status": "failed",
+                    "tasks_completed": [],
+                    "tasks_failed": ["t1"],
+                    "changeset_summary": "mock execution failed"
+                }
+            }),
+        ));
+    } else {
+        out.push(emit_notification(
+            "handoff.execution_progress",
+            json!({
+                "packet_id": pid,
+                "executor_session_id": exec_sid,
+                "task_id": "t1",
+                "current_task": "t1",
+                "status": "completed",
+                "completed": 1,
+                "total": 1,
+            }),
+        ));
+        out.push(emit_notification(
+            "handoff.completed",
+            json!({
+                "packet_id": pid,
+                "executor_session_id": exec_sid,
+                "status": "completed",
+                "outcome": {
+                    "status": "success",
+                    "tasks_completed": ["t1"],
+                    "tasks_failed": [],
+                    "changeset_summary": "mock execution complete"
+                }
+            }),
+        ));
+    }
+
+    out.push(emit_response(
+        id.unwrap_or(Value::Null),
+        json!({ "ok": true, "executor_session_id": exec_sid }),
     ));
     out
 }
@@ -1277,4 +1390,53 @@ fn handle_mention_search(id: Option<Value>, params: Value) -> Vec<String> {
         ),
         emit_response(id.unwrap_or(Value::Null), json!({ "ok": true })),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mock_executor_progress_still_completes_from_message_submit() {
+        let mut state = State::new(7, "sess_1".into(), None, None);
+        let line = json!({
+            "jsonrpc": "2.0",
+            "id": "cmd_1",
+            "method": "message.submit",
+            "params": {
+                "text": "VAC Web Handoff Packet\nPacket: pkt_01\n",
+                "handoff_packet_id": "pkt_01",
+                "source_session_id": "sess_source"
+            }
+        })
+        .to_string();
+
+        let outputs = handle(&line, &mut state);
+        let frames: Vec<Value> = outputs
+            .iter()
+            .map(|frame| serde_json::from_str(frame).expect("valid json"))
+            .collect();
+
+        assert!(frames.iter().any(|frame| {
+            frame.get("method") == Some(&json!("handoff.execution_progress"))
+                && frame["params"]["status"] == json!("started")
+                && frame["params"]["packet_id"] == json!("pkt_01")
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.get("method") == Some(&json!("handoff.execution_progress"))
+                && frame["params"]["status"] == json!("completed")
+                && frame["params"]["packet_id"] == json!("pkt_01")
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.get("method") == Some(&json!("handoff.completed"))
+                && frame["params"]["status"] == json!("completed")
+                && frame["params"]["outcome"]["status"] == json!("success")
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.get("id") == Some(&json!("cmd_1"))
+                && frame["result"]["ok"] == json!(true)
+                && frame["result"]["executor_session_id"].is_string()
+        }));
+    }
 }

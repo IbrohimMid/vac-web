@@ -221,7 +221,7 @@ fn build_entry(direction: AcpDebugDirection, line: &str) -> AcpDebugMessage {
                 (false, false) => AcpDebugMessageType::Notification,
             };
             let params_preview = sanitize_preview(&payload_source);
-            let params_hash = sha256_hex_canonical(&payload_source);
+            let params_hash = sha256_hex_canonical(&params_preview);
             AcpDebugMessage {
                 direction,
                 message_type,
@@ -257,7 +257,7 @@ fn build_text_entry(
     let ts = chrono::Utc::now().to_rfc3339();
     let preview = truncate_string(&redact_raw_output(line), PREVIEW_STRING_CAP);
     let params_preview = Value::String(preview);
-    let params_hash = sha256_hex_canonical(&Value::String(line.to_string()));
+    let params_hash = sha256_hex_canonical(&params_preview);
     AcpDebugMessage {
         direction,
         message_type,
@@ -373,5 +373,29 @@ mod tests {
         assert_eq!(event.payload["message_type"], json!("request"));
         assert_eq!(event.payload["method"], json!("session/new"));
         assert!(event.payload["params_hash"].as_str().unwrap().len() >= 32);
+    }
+
+    #[tokio::test]
+    async fn hashes_redacted_preview_instead_of_raw_payload() {
+        let log = Arc::new(AcpDebugLog::with_capacity(true, 4));
+        log.record_wire_line(
+            AcpDebugDirection::Outgoing,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"api_key":"sk-secret-123","text":"hello"}}"#,
+        )
+        .await;
+
+        let snapshot = log.snapshot().await;
+        let entry = snapshot.last().expect("debug entry");
+        let raw_hash = sha256_hex_canonical(&json!({
+            "api_key": "sk-secret-123",
+            "text": "hello"
+        }));
+
+        assert_ne!(entry.params_hash, raw_hash);
+        assert_eq!(entry.params_preview["api_key"], json!("<REDACTED>"));
+        assert_eq!(
+            entry.params_hash,
+            sha256_hex_canonical(&entry.params_preview)
+        );
     }
 }
