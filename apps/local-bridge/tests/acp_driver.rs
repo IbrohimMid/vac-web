@@ -513,6 +513,86 @@ async fn x5c1_explicit_reject_option_on_approve_is_kind_mismatch() {
 }
 
 #[tokio::test]
+async fn x5c1_no_duplicate_pending_event_after_invalid_override() {
+    // X.5c.1 invariant: the bridge must NOT re-emit `approval.pending`
+    // after a failed validation. The pending entry is preserved, the
+    // approval_id is reusable, but the UI should keep its existing
+    // pending card — never render a duplicate.
+    //
+    // Flow: trigger permission → bad override (kind mismatch) → ack
+    // fails → drain WS for a short window and assert no second
+    // `approval.pending` for the same approval_id arrives → send a
+    // valid reject with the original approval_id → resolves cleanly.
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "trigger" }
+    });
+    ws.send(Message::Text(cmd.to_string().into())).await.unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bad = json!({
+        "v": 1, "id": "cmd_bad", "type": "approval.reject",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id, "option_id": "allow" }
+    });
+    ws.send(Message::Text(bad.to_string().into())).await.unwrap();
+    let ack = await_ack(&mut ws, "cmd_bad").await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("approval.option_kind_mismatch"));
+
+    // Drain the WS for ~600ms. Any approval.pending that mentions the
+    // same approval_id (or any new approval.pending at all, since the
+    // mock issues exactly one) is a contract violation.
+    let drain_until = tokio::time::Instant::now() + Duration::from_millis(600);
+    loop {
+        let remaining = drain_until.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Text(txt)))) => {
+                let v: Value = serde_json::from_str(&txt).unwrap();
+                if v.get("type") == Some(&json!("approval.pending")) {
+                    panic!("unexpected duplicate approval.pending after bad override: {v}");
+                }
+                // Tolerate transient debug events; assert no surprise
+                // resolution either.
+                if v.get("type") == Some(&json!("approval.resolved")) {
+                    panic!("unexpected approval.resolved before retry: {v}");
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // Retry with a valid (default) reject using the same approval_id —
+    // bridge resolves cleanly without needing a fresh pending event.
+    let retry = json!({
+        "v": 1, "id": "cmd_retry", "type": "approval.reject",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id }
+    });
+    ws.send(Message::Text(retry.to_string().into())).await.unwrap();
+    let resolved = next_event_matching(&mut ws, |v| {
+        v.get("type") == Some(&json!("approval.resolved"))
+            && v["payload"]["outcome"] == json!("rejected")
+    })
+    .await;
+    assert_eq!(resolved["payload"]["approval_id"], json!(approval_id));
+    assert_eq!(resolved["payload"]["option_id"], json!("reject"));
+}
+
+#[tokio::test]
 async fn x5c1_invalid_override_does_not_disarm_timeout() {
     // X.5c.1 lock-blocker regression. A bad explicit option_id must
     // NOT remove the pending approval or abort its auto-cancel timer.
