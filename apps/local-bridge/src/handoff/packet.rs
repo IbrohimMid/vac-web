@@ -5,6 +5,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Canonical signer identity for dedup + author self-sign deny.
+///
+/// The bridge treats whitespace and case as cosmetic. Two display names that
+/// only differ in surrounding whitespace or letter case must collapse to the
+/// same actor id, otherwise an attacker could bypass the self-sign deny by
+/// submitting `"ALICE"` or `"  alice "` instead of `"alice"`.
+pub fn canonical_signer_id(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinPolicy {

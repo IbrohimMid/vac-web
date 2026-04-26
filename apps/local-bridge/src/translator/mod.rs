@@ -565,28 +565,115 @@ pub async fn dispatch_command(
                     );
                     // Forward to runtime provider for actual execution.
                     match _handle.send_client_command(&cmd).await {
-                        Ok(()) => (
-                            ServerAck {
-                                ack_of: cmd.id.clone(),
-                                ok: true,
-                                error: None,
-                            },
-                            events,
-                        ),
-                        Err(e) => (
-                            ServerAck {
-                                ack_of: cmd.id.clone(),
-                                ok: false,
-                                error: Some(ErrorInfo {
-                                    code: "engine.unreachable".into(),
-                                    message: e.to_string(),
+                        Ok(()) => {
+                            // Provider accepted the dispatch; transition
+                            // approved → dispatched and emit upserted + status.
+                            match state
+                                .handoff
+                                .mark_dispatched(&packet_id, &cmd.session_id, now)
+                            {
+                                crate::handoff::HandoffDispatchOutcome::Ok {
+                                    upsert_event,
+                                    status_event,
+                                    ..
+                                } => {
+                                    events.push(upsert_event);
+                                    events.push(status_event);
+                                    (
+                                        ServerAck {
+                                            ack_of: cmd.id.clone(),
+                                            ok: true,
+                                            error: None,
+                                        },
+                                        events,
+                                    )
+                                }
+                                crate::handoff::HandoffDispatchOutcome::Err { code, message } => {
+                                    state.audit.log(
+                                        &cmd.session_id,
+                                        "handoff",
+                                        bridge_core::AuditSeverity::Warn,
+                                        serde_json::json!({
+                                            "event": "handoff.dispatch_state_error",
+                                            "packet_id": packet_id,
+                                            "code": code,
+                                            "reason": message,
+                                        }),
+                                    );
+                                    (
+                                        ServerAck {
+                                            ack_of: cmd.id.clone(),
+                                            ok: false,
+                                            error: Some(ErrorInfo { code, message }),
+                                        },
+                                        events,
+                                    )
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // Provider rejected or was unreachable. Packet must
+                            // stay in `approved`; only record the auditable
+                            // history entry and emit upserted + status so the
+                            // FE can surface the rejection.
+                            let detail = e.to_string();
+                            if let crate::handoff::HandoffDispatchRejectOutcome::Ok {
+                                upsert_event,
+                                status_event,
+                                ..
+                            } = state.handoff.record_dispatch_rejected(
+                                &packet_id,
+                                "provider_error",
+                                Some(detail.clone()),
+                                &cmd.session_id,
+                                now,
+                            ) {
+                                events.push(upsert_event);
+                                events.push(status_event);
+                            }
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.dispatch_rejected",
+                                    "packet_id": packet_id,
+                                    "code": "engine.unreachable",
+                                    "reason_tag": "provider_error",
+                                    "reason": detail,
                                 }),
-                            },
-                            events,
-                        ),
+                            );
+                            (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "engine.unreachable".into(),
+                                        message: detail,
+                                    }),
+                                },
+                                events,
+                            )
+                        }
                     }
                 }
                 Err(dispatch_err) => {
+                    let reason_tag = dispatch_err.reason_tag();
+                    let reason_msg = dispatch_err.message();
+                    if let crate::handoff::HandoffDispatchRejectOutcome::Ok {
+                        upsert_event,
+                        status_event,
+                        ..
+                    } = state.handoff.record_dispatch_rejected(
+                        &packet_id,
+                        reason_tag,
+                        Some(reason_msg.clone()),
+                        &cmd.session_id,
+                        now,
+                    ) {
+                        events.push(upsert_event);
+                        events.push(status_event);
+                    }
                     state.audit.log(
                         &cmd.session_id,
                         "handoff",
@@ -595,7 +682,8 @@ pub async fn dispatch_command(
                             "event": "handoff.dispatch_rejected",
                             "packet_id": packet_id,
                             "code": dispatch_err.code(),
-                            "reason": dispatch_err.message(),
+                            "reason_tag": reason_tag,
+                            "reason": reason_msg,
                         }),
                     );
                     (
@@ -604,7 +692,7 @@ pub async fn dispatch_command(
                             ok: false,
                             error: Some(ErrorInfo {
                                 code: dispatch_err.code().into(),
-                                message: dispatch_err.message(),
+                                message: reason_msg,
                             }),
                         },
                         events,

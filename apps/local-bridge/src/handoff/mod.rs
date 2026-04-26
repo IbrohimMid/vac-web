@@ -22,7 +22,9 @@ pub mod validate;
 
 use crate::ws::envelope::ServerEvent;
 use chrono::{DateTime, Utc};
-use packet::{Packet, PacketStateHistoryEntry, PacketStatus, PinPolicy, Signer};
+use packet::{
+    canonical_signer_id, Packet, PacketStateHistoryEntry, PacketStatus, PinPolicy, Signer,
+};
 use pin::compute_pin;
 use registry::HandoffRegistry;
 use serde_json::json;
@@ -85,6 +87,34 @@ pub enum HandoffApproveOutcome {
 
 #[allow(clippy::large_enum_variant)]
 pub enum HandoffRejectOutcome {
+    Ok {
+        packet: Packet,
+        upsert_event: ServerEvent,
+        status_event: ServerEvent,
+    },
+    Err {
+        code: String,
+        message: String,
+    },
+}
+
+/// Outcome of `mark_dispatched` — `approved` → `dispatched` transition.
+#[allow(clippy::large_enum_variant)]
+pub enum HandoffDispatchOutcome {
+    Ok {
+        packet: Packet,
+        upsert_event: ServerEvent,
+        status_event: ServerEvent,
+    },
+    Err {
+        code: String,
+        message: String,
+    },
+}
+
+/// Outcome of `record_dispatch_rejected` — no status change, history entry only.
+#[allow(clippy::large_enum_variant)]
+pub enum HandoffDispatchRejectOutcome {
     Ok {
         packet: Packet,
         upsert_event: ServerEvent,
@@ -468,12 +498,20 @@ impl HandoffService {
                 },
             },
             status: PacketStatus::PendingApproval,
-            state_history: vec![packet::PacketStateHistoryEntry {
-                state: "draft".to_string(),
-                at: now_ts.clone(),
-                by: Some(params.author.to_string()),
-                reason: None,
-            }],
+            state_history: vec![
+                packet::PacketStateHistoryEntry {
+                    state: "draft".to_string(),
+                    at: now_ts.clone(),
+                    by: Some(params.author.to_string()),
+                    reason: None,
+                },
+                packet::PacketStateHistoryEntry {
+                    state: "pending_approval".to_string(),
+                    at: now_ts.clone(),
+                    by: Some(params.author.to_string()),
+                    reason: Some("created".to_string()),
+                },
+            ],
             signers: vec![packet::Signer {
                 name: params.author.to_string(),
                 role: "author".to_string(),
@@ -531,52 +569,67 @@ impl HandoffService {
                 message: "approver name is required".into(),
             };
         }
+        let signer_actor_id = canonical_signer_id(signer_name);
+        let author_actor_id = canonical_signer_id(&packet.created_by);
 
-        if packet.created_by.trim() == trimmed {
+        if author_actor_id == signer_actor_id {
             return HandoffApproveOutcome::Err {
                 code: "handoff.self_sign_denied".into(),
                 message: "author cannot approve their own handoff packet".into(),
             };
         }
 
-        if matches!(
-            packet.status,
-            PacketStatus::Rejected
-                | PacketStatus::Expired
-                | PacketStatus::Invalidated
-                | PacketStatus::Dispatched
-                | PacketStatus::Executing
-                | PacketStatus::Completed
-                | PacketStatus::Failed
-        ) {
+        // Explicit state matrix: approve is only valid from `pending_approval`.
+        // Anything else (draft, approved, rejected, terminal) must error rather
+        // than silently no-op so the FE/audit log records the rejection.
+        if packet.status != PacketStatus::PendingApproval {
             return HandoffApproveOutcome::Err {
                 code: "handoff.invalid_state".into(),
-                message: format!("cannot approve packet in state {}", packet.status.as_str()),
+                message: format!(
+                    "approve requires status=pending_approval, got {}",
+                    packet.status.as_str()
+                ),
+            };
+        }
+
+        // Reject duplicate signers under the canonical id (trim + case-insensitive).
+        // Without this, a malicious or buggy client could cross the
+        // required_signers threshold by re-submitting the same human as
+        // "alice" / "ALICE" / "  alice  ".
+        if packet
+            .signers
+            .iter()
+            .any(|s| canonical_signer_id(&s.name) == signer_actor_id)
+        {
+            return HandoffApproveOutcome::Err {
+                code: "handoff.duplicate_signer".into(),
+                message: format!("signer {trimmed} has already approved this packet"),
             };
         }
 
         let now_str = now.to_rfc3339();
         let mut became_approved = false;
         let updated = self.registry.update(packet_id, |p| {
-            if !p.signers.iter().any(|s| s.name.trim() == trimmed) {
-                p.signers.push(Signer {
-                    name: trimmed.clone(),
-                    role: if signer_role.trim().is_empty() {
-                        "approver".to_string()
-                    } else {
-                        signer_role.to_string()
-                    },
-                    signed_at: now_str.clone(),
-                    reason: signer_reason.clone(),
-                });
-            }
-            if !p.approval.approvers.iter().any(|a| a.trim() == trimmed) {
+            p.signers.push(Signer {
+                name: trimmed.clone(),
+                role: if signer_role.trim().is_empty() {
+                    "approver".to_string()
+                } else {
+                    signer_role.to_string()
+                },
+                signed_at: now_str.clone(),
+                reason: signer_reason.clone(),
+            });
+            if !p
+                .approval
+                .approvers
+                .iter()
+                .any(|a| canonical_signer_id(a) == signer_actor_id)
+            {
                 p.approval.approvers.push(trimmed.clone());
             }
-            if matches!(
-                p.status,
-                PacketStatus::PendingApproval | PacketStatus::Draft
-            ) && (p.signers.len() as u32) >= p.required_signers.max(1)
+            if p.status == PacketStatus::PendingApproval
+                && (p.signers.len() as u32) >= p.required_signers.max(1)
             {
                 p.status = PacketStatus::Approved;
                 p.approval.approved_at = Some(now_str.clone());
@@ -647,16 +700,17 @@ impl HandoffService {
             };
         }
 
-        if matches!(
-            packet.status,
-            PacketStatus::Dispatched
-                | PacketStatus::Executing
-                | PacketStatus::Completed
-                | PacketStatus::Failed
-        ) {
+        // Explicit state matrix: reject is only valid from `pending_approval`.
+        // Once a packet has been approved, dispatched, or already terminal, the
+        // reject path must error so callers must use a follow-up workflow
+        // (cancel/expire) instead of silently rewriting state.
+        if packet.status != PacketStatus::PendingApproval {
             return HandoffRejectOutcome::Err {
                 code: "handoff.invalid_state".into(),
-                message: format!("cannot reject packet in state {}", packet.status.as_str()),
+                message: format!(
+                    "reject requires status=pending_approval, got {}",
+                    packet.status.as_str()
+                ),
             };
         }
 
@@ -755,6 +809,146 @@ impl HandoffService {
 
         Ok(packet)
     }
+
+    /// Transition `approved` → `dispatched` after the runtime provider has
+    /// accepted the dispatch. Records a `dispatched` state-history entry with
+    /// reason `dispatch_allowed` and emits `handoff.upserted` + `handoff.status`.
+    ///
+    /// This must NOT be called when the provider rejected or was unreachable;
+    /// in that path use `record_dispatch_rejected` instead so the packet stays
+    /// in `approved` and an auditable history entry is written.
+    pub fn mark_dispatched(
+        &self,
+        packet_id: &str,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> HandoffDispatchOutcome {
+        let Some(packet) = self.registry.get(packet_id) else {
+            return HandoffDispatchOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        };
+
+        if packet.status != PacketStatus::Approved {
+            return HandoffDispatchOutcome::Err {
+                code: "handoff.invalid_state".into(),
+                message: format!(
+                    "dispatch requires status=approved, got {}",
+                    packet.status.as_str()
+                ),
+            };
+        }
+
+        let now_str = now.to_rfc3339();
+        let updated = self.registry.update(packet_id, |p| {
+            p.status = PacketStatus::Dispatched;
+            p.state_history.push(PacketStateHistoryEntry {
+                state: "dispatched".to_string(),
+                at: now_str.clone(),
+                by: None,
+                reason: Some("dispatch_allowed".to_string()),
+            });
+            p.updated_at = now_str.clone();
+        });
+        if !updated {
+            return HandoffDispatchOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        }
+
+        let updated_packet = match self.registry.get(packet_id) {
+            Some(p) => p,
+            None => {
+                return HandoffDispatchOutcome::Err {
+                    code: "handoff.not_found".into(),
+                    message: format!("packet {packet_id} not found"),
+                }
+            }
+        };
+
+        let upsert_event = make_event(
+            session_id,
+            "handoff.upserted",
+            build_upsert_payload(&updated_packet),
+            now,
+        );
+        let status_evt = status_event(&updated_packet, session_id, now);
+
+        HandoffDispatchOutcome::Ok {
+            packet: updated_packet,
+            upsert_event,
+            status_event: status_evt,
+        }
+    }
+
+    /// Record a `dispatch_rejected` history entry without transitioning status.
+    ///
+    /// Used when `check_dispatch` returns an error (drift / expired /
+    /// not_approved / pin_incomplete) or the runtime provider rejects /
+    /// is unreachable (provider_error). The packet stays in its current
+    /// status (typically `approved`); only the auditable history is appended.
+    pub fn record_dispatch_rejected(
+        &self,
+        packet_id: &str,
+        reason_tag: &str,
+        detail: Option<String>,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> HandoffDispatchRejectOutcome {
+        if self.registry.get(packet_id).is_none() {
+            return HandoffDispatchRejectOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        }
+
+        let now_str = now.to_rfc3339();
+        let reason_str = match detail {
+            Some(d) if !d.is_empty() => format!("{reason_tag}: {d}"),
+            _ => reason_tag.to_string(),
+        };
+        let updated = self.registry.update(packet_id, |p| {
+            p.state_history.push(PacketStateHistoryEntry {
+                state: "dispatch_rejected".to_string(),
+                at: now_str.clone(),
+                by: None,
+                reason: Some(reason_str.clone()),
+            });
+            p.updated_at = now_str.clone();
+        });
+        if !updated {
+            return HandoffDispatchRejectOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        }
+
+        let updated_packet = match self.registry.get(packet_id) {
+            Some(p) => p,
+            None => {
+                return HandoffDispatchRejectOutcome::Err {
+                    code: "handoff.not_found".into(),
+                    message: format!("packet {packet_id} not found"),
+                }
+            }
+        };
+
+        let upsert_event = make_event(
+            session_id,
+            "handoff.upserted",
+            build_upsert_payload(&updated_packet),
+            now,
+        );
+        let status_evt = status_event(&updated_packet, session_id, now);
+
+        HandoffDispatchRejectOutcome::Ok {
+            packet: updated_packet,
+            upsert_event,
+            status_event: status_evt,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -784,6 +978,18 @@ impl DispatchError {
             Self::PinIncomplete => "pin is incomplete".to_string(),
             Self::PinExpired => "pin has expired".to_string(),
             Self::PinDrift { reason } => reason.clone(),
+        }
+    }
+
+    /// Short, stable tag for `state_history.reason` and audit logs.
+    /// One of: `not_found`, `not_approved`, `pin_incomplete`, `expired`, `drift`.
+    pub fn reason_tag(&self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::NotApproved => "not_approved",
+            Self::PinIncomplete => "pin_incomplete",
+            Self::PinExpired => "expired",
+            Self::PinDrift { .. } => "drift",
         }
     }
 }
@@ -1071,10 +1277,413 @@ mod tests {
                 packet: updated, ..
             } => {
                 assert_eq!(updated.status, PacketStatus::Rejected);
+                // Reject must record a `rejected` history entry with reason.
+                let last = updated.state_history.last().expect("history");
+                assert_eq!(last.state, "rejected");
+                assert_eq!(last.reason.as_deref(), Some("insufficient evidence"));
             }
             HandoffRejectOutcome::Err { code, message } => {
                 panic!("reject failed: {code}: {message}")
             }
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // State machine hardening tests
+    // ---------------------------------------------------------------------
+
+    fn create_pending_packet(svc: &HandoffService, root: &std::path::Path) -> Packet {
+        let HandoffCreateOutcome::Ok { packet, .. } = svc.create_handoff(HandoffCreateParams {
+            payload: &sample_payload(),
+            project_root: root,
+            session_id: "s1",
+            author: "alice",
+            now: Utc::now(),
+        }) else {
+            panic!("create failed");
+        };
+        packet
+    }
+
+    #[test]
+    fn create_seeds_draft_then_pending_approval_history() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        // First two state_history entries must record the draft → pending_approval
+        // transition done at creation. This is the auditable record that the
+        // packet did pass through `draft` rather than appearing fully-formed
+        // in `pending_approval`.
+        assert!(
+            packet.state_history.len() >= 2,
+            "expected at least 2 history entries, got {:?}",
+            packet.state_history
+        );
+        assert_eq!(packet.state_history[0].state, "draft");
+        assert_eq!(packet.state_history[1].state, "pending_approval");
+        assert_eq!(packet.state_history[1].reason.as_deref(), Some("created"));
+        assert_eq!(packet.status, PacketStatus::PendingApproval);
+    }
+
+    #[test]
+    fn approve_dedups_canonical_signer_id() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+
+        // First approve from `bob` flips to Approved (required_signers=1 for
+        // non-two-party; author counted, plus one external = 2 ≥ 1).
+        let HandoffApproveOutcome::Ok {
+            packet: after_first,
+            ..
+        } = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now())
+        else {
+            panic!("first approve must succeed");
+        };
+        assert_eq!(after_first.status, PacketStatus::Approved);
+
+        // Second approve from canonical-equivalent `BOB ` must be rejected
+        // with a stable `handoff.duplicate_signer` code, not silently no-op.
+        // (It would also be rejected by the state matrix because the packet
+        // is now Approved, but duplicate_signer is the more specific signal.)
+        let result =
+            svc.approve_handoff(&after_first.id, "BOB ", "approver", None, "s1", Utc::now());
+        match result {
+            HandoffApproveOutcome::Err { code, .. } => {
+                assert!(
+                    code == "handoff.duplicate_signer" || code == "handoff.invalid_state",
+                    "expected duplicate_signer or invalid_state, got {code}"
+                );
+            }
+            HandoffApproveOutcome::Ok { .. } => panic!("duplicate signer must be rejected"),
+        }
+    }
+
+    #[test]
+    fn approve_dedups_canonical_signer_id_pre_threshold() {
+        // Force two_party so required_signers=2 and a single external
+        // approver is not enough — lets us hit the duplicate guard *before*
+        // the packet flips to Approved (so invalid_state can't shadow it).
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let mut payload = sample_payload();
+        payload["approval"] = json!({ "two_party": true });
+        let HandoffCreateOutcome::Ok { packet, .. } = svc.create_handoff(HandoffCreateParams {
+            payload: &payload,
+            project_root: &root,
+            session_id: "s1",
+            author: "alice",
+            now: Utc::now(),
+        }) else {
+            panic!("create failed");
+        };
+
+        let HandoffApproveOutcome::Ok {
+            packet: after_first,
+            became_approved,
+            ..
+        } = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now())
+        else {
+            panic!("first approve must succeed");
+        };
+        assert!(
+            became_approved,
+            "two_party with author+bob = 2 >= 2 should flip"
+        );
+        // For two-party with a pre-signed author, even the first non-author
+        // approval is enough. So we instead simulate a fresh pending packet
+        // with required_signers=3 by mutating registry directly.
+        let _ = after_first; // suppress unused
+
+        // Build another packet and bump required_signers via the registry so
+        // we can test pre-threshold dedup cleanly.
+        let HandoffCreateOutcome::Ok { packet: p2, .. } = svc.create_handoff(HandoffCreateParams {
+            payload: &sample_payload(),
+            project_root: &root,
+            session_id: "s1",
+            author: "alice",
+            now: Utc::now(),
+        }) else {
+            panic!("create p2 failed");
+        };
+        let bumped = svc.registry.update(&p2.id, |p| {
+            p.required_signers = 3;
+        });
+        assert!(bumped);
+
+        // First approve adds bob; status stays PendingApproval (signers=2 < 3).
+        let HandoffApproveOutcome::Ok {
+            became_approved, ..
+        } = svc.approve_handoff(&p2.id, "bob", "approver", None, "s1", Utc::now())
+        else {
+            panic!("first approve on p2 must succeed");
+        };
+        assert!(!became_approved);
+
+        // Second approve from `  BOB " must be deduped — packet still PendingApproval.
+        let result = svc.approve_handoff(&p2.id, "  BOB ", "approver", None, "s1", Utc::now());
+        match result {
+            HandoffApproveOutcome::Err { code, .. } => {
+                assert_eq!(code, "handoff.duplicate_signer");
+            }
+            HandoffApproveOutcome::Ok { .. } => panic!("canonical-dup signer must be rejected"),
+        }
+        // Status untouched.
+        let after = svc.registry.get(&p2.id).expect("packet present");
+        assert_eq!(after.status, PacketStatus::PendingApproval);
+        // Only one external signer recorded.
+        let bobs = after
+            .signers
+            .iter()
+            .filter(|s| canonical_signer_id(&s.name) == "bob")
+            .count();
+        assert_eq!(bobs, 1, "canonical dedup must keep exactly one bob signer");
+    }
+
+    #[test]
+    fn approve_self_sign_blocks_case_variant() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        // Author is `alice`. Submitting `ALICE` (case variant) must hit
+        // the self-sign deny via the canonical id, not bypass to approve.
+        let result = svc.approve_handoff(&packet.id, "ALICE", "approver", None, "s1", Utc::now());
+        match result {
+            HandoffApproveOutcome::Err { code, .. } => {
+                assert_eq!(code, "handoff.self_sign_denied");
+            }
+            HandoffApproveOutcome::Ok { .. } => panic!("case-variant self-sign must be denied"),
+        }
+    }
+
+    #[test]
+    fn approve_rejects_invalid_state_transition_from_draft() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        // Force packet back to Draft to simulate an invalid transition request.
+        let mutated = svc.registry.update(&packet.id, |p| {
+            p.status = PacketStatus::Draft;
+        });
+        assert!(mutated);
+
+        // approve must error with handoff.invalid_state — draft → approved
+        // is NOT a permitted transition (must go through pending_approval).
+        let result = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now());
+        match result {
+            HandoffApproveOutcome::Err { code, message } => {
+                assert_eq!(code, "handoff.invalid_state");
+                assert!(
+                    message.contains("pending_approval"),
+                    "error must name expected source state, got {message}"
+                );
+            }
+            HandoffApproveOutcome::Ok { .. } => {
+                panic!("draft → approved transition must be rejected")
+            }
+        }
+        // Status must be unchanged (still Draft).
+        let after = svc.registry.get(&packet.id).expect("packet present");
+        assert_eq!(after.status, PacketStatus::Draft);
+    }
+
+    #[test]
+    fn approve_rejects_already_approved() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        let _ = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now());
+        // Re-approving an already-approved packet must error rather than
+        // silently appending another signer.
+        let result = svc.approve_handoff(&packet.id, "carol", "approver", None, "s1", Utc::now());
+        match result {
+            HandoffApproveOutcome::Err { code, .. } => {
+                assert_eq!(code, "handoff.invalid_state");
+            }
+            HandoffApproveOutcome::Ok { .. } => {
+                panic!("approve from approved state must be rejected")
+            }
+        }
+    }
+
+    #[test]
+    fn reject_rejects_invalid_state_transition_from_approved() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        let _ = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now());
+        // approved → rejected is not a permitted transition.
+        let result = svc.reject_handoff(
+            &packet.id,
+            "carol",
+            Some("changed mind".into()),
+            "s1",
+            Utc::now(),
+        );
+        match result {
+            HandoffRejectOutcome::Err { code, .. } => {
+                assert_eq!(code, "handoff.invalid_state");
+            }
+            HandoffRejectOutcome::Ok { .. } => {
+                panic!("approved → rejected transition must be denied")
+            }
+        }
+    }
+
+    #[test]
+    fn mark_dispatched_flips_approved_to_dispatched_with_history() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        let _ = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now());
+
+        let outcome = svc.mark_dispatched(&packet.id, "s1", Utc::now());
+        let HandoffDispatchOutcome::Ok {
+            packet: dispatched,
+            upsert_event,
+            status_event,
+        } = outcome
+        else {
+            panic!("mark_dispatched on Approved must succeed");
+        };
+        assert_eq!(dispatched.status, PacketStatus::Dispatched);
+        // History must include `dispatched` with reason `dispatch_allowed`.
+        let last = dispatched.state_history.last().expect("history");
+        assert_eq!(last.state, "dispatched");
+        assert_eq!(last.reason.as_deref(), Some("dispatch_allowed"));
+        // Events must reflect the new status.
+        assert_eq!(upsert_event.event_type, "handoff.upserted");
+        assert_eq!(status_event.event_type, "handoff.status");
+        assert_eq!(
+            status_event.payload.get("status").and_then(|v| v.as_str()),
+            Some("dispatched")
+        );
+    }
+
+    #[test]
+    fn mark_dispatched_rejects_when_not_approved() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        // Pending (no approve) — mark_dispatched must error and NOT flip status.
+        let outcome = svc.mark_dispatched(&packet.id, "s1", Utc::now());
+        match outcome {
+            HandoffDispatchOutcome::Err { code, .. } => {
+                assert_eq!(code, "handoff.invalid_state");
+            }
+            HandoffDispatchOutcome::Ok { .. } => {
+                panic!("mark_dispatched without approval must be rejected")
+            }
+        }
+        let after = svc.registry.get(&packet.id).expect("packet present");
+        assert_eq!(after.status, PacketStatus::PendingApproval);
+        assert!(after.state_history.iter().all(|h| h.state != "dispatched"));
+    }
+
+    #[test]
+    fn record_dispatch_rejected_writes_history_without_status_change() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        let _ = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now());
+
+        // Simulate dispatch rejection due to drift.
+        let outcome = svc.record_dispatch_rejected(
+            &packet.id,
+            "drift",
+            Some("base sha moved".into()),
+            "s1",
+            Utc::now(),
+        );
+        let HandoffDispatchRejectOutcome::Ok {
+            packet: after,
+            upsert_event,
+            status_event,
+        } = outcome
+        else {
+            panic!("record_dispatch_rejected must succeed");
+        };
+        // Status must remain Approved — packet must NOT be dispatched.
+        assert_eq!(after.status, PacketStatus::Approved);
+        // History must contain a dispatch_rejected entry with the reason tag.
+        let last = after.state_history.last().expect("history");
+        assert_eq!(last.state, "dispatch_rejected");
+        let reason = last.reason.as_deref().unwrap_or_default();
+        assert!(
+            reason.starts_with("drift"),
+            "reason must start with drift tag, got {reason}"
+        );
+        // Events emitted for FE.
+        assert_eq!(upsert_event.event_type, "handoff.upserted");
+        assert_eq!(status_event.event_type, "handoff.status");
+        // Status event still reports `approved`, since status unchanged.
+        assert_eq!(
+            status_event.payload.get("status").and_then(|v| v.as_str()),
+            Some("approved")
+        );
+    }
+
+    #[test]
+    fn dispatch_error_reason_tags_are_stable() {
+        // These tags are wired into translator audit logs and state_history
+        // reasons — changing them is a wire-format break.
+        assert_eq!(DispatchError::NotFound.reason_tag(), "not_found");
+        assert_eq!(DispatchError::NotApproved.reason_tag(), "not_approved");
+        assert_eq!(DispatchError::PinIncomplete.reason_tag(), "pin_incomplete");
+        assert_eq!(DispatchError::PinExpired.reason_tag(), "expired");
+        assert_eq!(
+            DispatchError::PinDrift { reason: "x".into() }.reason_tag(),
+            "drift"
+        );
+    }
+
+    #[test]
+    fn full_lifecycle_writes_history_for_each_transition() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_pending_packet(&svc, &root);
+        let _ = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now());
+        let _ = svc.record_dispatch_rejected(
+            &packet.id,
+            "provider_error",
+            Some("engine offline".into()),
+            "s1",
+            Utc::now(),
+        );
+        let HandoffDispatchOutcome::Ok {
+            packet: final_packet,
+            ..
+        } = svc.mark_dispatched(&packet.id, "s1", Utc::now())
+        else {
+            panic!("mark_dispatched after recover must succeed");
+        };
+
+        let states: Vec<&str> = final_packet
+            .state_history
+            .iter()
+            .map(|h| h.state.as_str())
+            .collect();
+        // Required ordered subsequence:
+        //   draft → pending_approval → approved → dispatch_rejected → dispatched
+        let expected = [
+            "draft",
+            "pending_approval",
+            "approved",
+            "dispatch_rejected",
+            "dispatched",
+        ];
+        let mut idx = 0;
+        for s in &states {
+            if idx < expected.len() && *s == expected[idx] {
+                idx += 1;
+            }
+        }
+        assert_eq!(
+            idx,
+            expected.len(),
+            "history missing required transition; got {:?}",
+            states
+        );
+        assert_eq!(final_packet.status, PacketStatus::Dispatched);
     }
 }
