@@ -1,8 +1,9 @@
 // VIL-style workflow rail — shows the current session's workflow run
-// as a step list with status badges. Read-only observer.
+// as a step list with status badges. Artifact chips navigate workbench tabs.
 
 import { useWorkflow, type WorkflowStep, type WorkflowArtifact } from '../../stores/workflow';
 import { useSession } from '../../stores/session';
+import { useWorkbench, type WorkbenchTab } from '../../stores/workbench';
 
 const KIND_LABEL: Record<string, string> = {
   trigger: 'Start',
@@ -29,10 +30,23 @@ const ARTIFACT_KIND_CHIPS: Record<string, string> = {
   tool_activity: 'tool activity',
 };
 
-function ArtifactKindChip({ kind }: { kind: string }) {
+const ARTIFACT_KIND_TAB: Record<string, WorkbenchTab> = {
+  review_diff: 'review',
+  runtime_log: 'runtime',
+  approval: 'approvals',
+  tool_activity: 'transcript',
+};
+
+function ArtifactKindChip({ artifact }: { artifact: WorkflowArtifact }) {
+  const select = useWorkbench((s) => s.select);
+  const tab = ARTIFACT_KIND_TAB[artifact.kind] ?? 'transcript';
+  const label = ARTIFACT_KIND_CHIPS[artifact.kind] ?? artifact.kind;
+  const tooltip = artifact.source_event_type ?? artifact.kind;
   return (
-    <span
-      className={`workflow-artifact-chip workflow-artifact-chip--${kind}`}
+    <button
+      className={`workflow-artifact-chip workflow-artifact-chip--${artifact.kind}`}
+      title={tooltip}
+      onClick={() => select(tab)}
       style={{
         fontSize: 10,
         padding: '1px 5px',
@@ -40,10 +54,12 @@ function ArtifactKindChip({ kind }: { kind: string }) {
         background: 'var(--surface-2)',
         color: 'var(--text-2)',
         marginRight: 4,
+        border: '1px solid transparent',
+        cursor: 'pointer',
       }}
     >
-      {ARTIFACT_KIND_CHIPS[kind] ?? kind}
-    </span>
+      {label}
+    </button>
   );
 }
 
@@ -77,14 +93,20 @@ function StepRow({ step }: { step: WorkflowStep }) {
 }
 
 function ArtifactRow({ artifact }: { artifact: WorkflowArtifact }) {
+  const meta =
+    artifact.runtime_command_preview
+      ? artifact.runtime_command_preview
+      : artifact.review_diff_count != null
+        ? `${artifact.review_diff_count} file${artifact.review_diff_count !== 1 ? 's' : ''}`
+        : artifact.tool_call_id.slice(0, 8) + '…';
   return (
     <div
       className="workflow-artifact-row"
       style={{ display: 'flex', gap: 6, padding: '2px 0 2px 16px', fontSize: 12, color: 'var(--text-2)', alignItems: 'center' }}
     >
       <span>↳</span>
-      <ArtifactKindChip kind={artifact.kind} />
-      <code style={{ fontSize: 11, opacity: 0.7 }}>{artifact.tool_call_id.slice(0, 8)}…</code>
+      <ArtifactKindChip artifact={artifact} />
+      <code style={{ fontSize: 11, opacity: 0.7 }}>{meta}</code>
     </div>
   );
 }
