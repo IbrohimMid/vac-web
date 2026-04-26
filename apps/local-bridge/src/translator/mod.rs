@@ -461,6 +461,7 @@ pub async fn dispatch_command(
                 crate::handoff::HandoffCreateOutcome::Ok {
                     ref packet,
                     ref upsert_event,
+                    ref status_event,
                 } => {
                     state.audit.log(
                         &cmd.session_id,
@@ -479,18 +480,7 @@ pub async fn dispatch_command(
                             "finding_count": packet.accepted_finding_ids.len(),
                         }),
                     );
-                    let mut evts = vec![upsert_event.clone()];
-                    evts.push(ServerEvent {
-                        seq: 0,
-                        session_id: cmd.session_id.clone(),
-                        event_type: "handoff.status".into(),
-                        payload: serde_json::json!({
-                            "packet_id": packet.id,
-                            "status": packet.status.as_str(),
-                        }),
-                        v: 1,
-                        ts: now.to_rfc3339(),
-                    });
+                    let evts = vec![upsert_event.clone(), status_event.clone()];
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -555,7 +545,13 @@ pub async fn dispatch_command(
                 );
             }
 
-            match state.handoff.check_dispatch(&packet_id) {
+            let project_root = state
+                .sessions
+                .project_root(&cmd.session_id)
+                .unwrap_or_else(|| std::path::PathBuf::from(""));
+            let now = chrono::Utc::now();
+
+            match state.handoff.check_dispatch(&packet_id, &project_root, now) {
                 Ok(packet) => {
                     state.audit.log(
                         &cmd.session_id,
@@ -615,6 +611,246 @@ pub async fn dispatch_command(
                     )
                 }
             }
+        }
+        "handoff.approve" => {
+            if state.sessions.get(&cmd.session_id).is_none() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            let packet_id = cmd
+                .payload
+                .get("packet_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if packet_id.is_empty() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "handoff.invalid_payload".into(),
+                            message: "packet_id is required".into(),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            let approver = cmd
+                .payload
+                .get("approver")
+                .or_else(|| cmd.payload.get("signer"))
+                .or_else(|| cmd.payload.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let role = cmd
+                .payload
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("approver")
+                .to_string();
+            let reason = cmd
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            let now = chrono::Utc::now();
+            let outcome = state.handoff.approve_handoff(
+                &packet_id,
+                &approver,
+                &role,
+                reason,
+                &cmd.session_id,
+                now,
+            );
+            let (ack, extra_events) = match outcome {
+                crate::handoff::HandoffApproveOutcome::Ok {
+                    ref packet,
+                    ref upsert_event,
+                    ref status_event,
+                    became_approved,
+                } => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Info,
+                        serde_json::json!({
+                            "event": "handoff.approved",
+                            "packet_id": packet.id,
+                            "approver": approver,
+                            "role": role,
+                            "signers": packet.signers.len(),
+                            "required_signers": packet.required_signers,
+                            "status": packet.status.as_str(),
+                            "became_approved": became_approved,
+                        }),
+                    );
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        vec![upsert_event.clone(), status_event.clone()],
+                    )
+                }
+                crate::handoff::HandoffApproveOutcome::Err {
+                    ref code,
+                    ref message,
+                } => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Warn,
+                        serde_json::json!({
+                            "event": "handoff.approve_failed",
+                            "packet_id": packet_id,
+                            "code": code,
+                            "reason": message,
+                        }),
+                    );
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: code.clone(),
+                                message: message.clone(),
+                            }),
+                        },
+                        vec![],
+                    )
+                }
+            };
+            events.extend(extra_events);
+            (ack, events)
+        }
+        "handoff.reject" => {
+            if state.sessions.get(&cmd.session_id).is_none() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            let packet_id = cmd
+                .payload
+                .get("packet_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if packet_id.is_empty() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "handoff.invalid_payload".into(),
+                            message: "packet_id is required".into(),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            let rejector = cmd
+                .payload
+                .get("rejector")
+                .or_else(|| cmd.payload.get("by"))
+                .or_else(|| cmd.payload.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let reason = cmd
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            let now = chrono::Utc::now();
+            let outcome = state.handoff.reject_handoff(
+                &packet_id,
+                &rejector,
+                reason.clone(),
+                &cmd.session_id,
+                now,
+            );
+            let (ack, extra_events) = match outcome {
+                crate::handoff::HandoffRejectOutcome::Ok {
+                    ref packet,
+                    ref upsert_event,
+                    ref status_event,
+                } => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Info,
+                        serde_json::json!({
+                            "event": "handoff.rejected",
+                            "packet_id": packet.id,
+                            "rejector": rejector,
+                            "reason": reason,
+                        }),
+                    );
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        vec![upsert_event.clone(), status_event.clone()],
+                    )
+                }
+                crate::handoff::HandoffRejectOutcome::Err {
+                    ref code,
+                    ref message,
+                } => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Warn,
+                        serde_json::json!({
+                            "event": "handoff.reject_failed",
+                            "packet_id": packet_id,
+                            "code": code,
+                            "reason": message,
+                        }),
+                    );
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: code.clone(),
+                                message: message.clone(),
+                            }),
+                        },
+                        vec![],
+                    )
+                }
+            };
+            events.extend(extra_events);
+            (ack, events)
         }
         _ => {
             // Forward to engine via session handle.
