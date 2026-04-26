@@ -87,6 +87,18 @@ Ported from the `/vacweb` prototype into the live cockpit, gz initial bundle hel
 
 **Boundary preserved:** No `fs/read_text_file`, `fs/write_text_file`, or `terminal/*` ACP capabilities enabled. No mid-session agent switch, no provisionable workflow, no Stage K reopen. Reauth action itself (the `session.authenticate` command and its UI affordance) is the next milestone — this lock covers metadata surfacing only.
 
+## ACP reauth action flow — locked at `6dbb97f`
+
+**ACP Reauth Action Flow — Stage X.5d slice 2.** Lifts the metadata-only surface from `753301e` into a working bridge-owned reauth path without opening fs/terminal capability.
+
+- `6dbb97f` — `feat(acp): wire bridge-owned session.authenticate reauth flow`. Adds an ACP-side `AuthenticateRequest`/`AuthenticateResponse` type pair (camelCase wire) and `AcpClient::authenticate()` forwarder. `profile_layer::KNOWN_COMMANDS` gains `"session.authenticate"`. New `SessionHandle::authenticate_via_acp(method_id)` enforces the behaviour matrix: non-ACP session → `auth.not_supported`; missing `auth_method_id` → `auth.invalid_payload` (translator-level); unknown id → `auth.method_not_advertised`; `terminal` method → `auth.terminal_capability_disabled` (HOLD); `env_var` method → `auth.env_var_recreate_required` carrying `vars` (soft path; live adapter restart deferred); `agent` method → direct adapter `authenticate({ methodId })` passthrough — the OAuth Claude Pro/Max path; adapter JSON-RPC failure → classified bridge code (default `agent.protocol_error`). `translator/mod.rs` audits + emits `session.auth_requested`, `session.auth_updated`, and `session.auth_failed` ServerEvents on every dispatch. `session` module re-exports `AuthenticateError` / `AuthenticateOutcome`.
+- FE store `useSession` gains `authStatus` / `authError` / `lastAuthMethodId` setters; `clear()` resets the new fields. `domain/sessions/handlers.ts` mirrors the three lifecycle events into the store. New `apps/web/src/components/cockpit/ReauthAction.tsx` renders one button per advertised method, dispatches `session.authenticate` through the existing transport, and surfaces structured failure codes; `SessionPicker` active-session banner wires it next to the auth badge. New tests: handlers cover the three lifecycle events; `ReauthAction` covers visibility gating, bridge dispatch, transport-layer rejection, and failure surface.
+- Plan `docs/plans/stage-x5d-acp-reauth-flow.md` updated with the slice 2 behaviour matrix and explicit notes on what stays deferred.
+
+**Verification gates:** `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo nextest run --workspace` (304/304), `cargo nextest run -p red-team --features redteam` (20/20), `pnpm --filter @vac-web/web typecheck`, `pnpm --filter @vac-web/web test` (331/331), `pnpm --filter @vac-web/web build`. Smoke (`cargo test -p local-bridge claude_acp_smoke -- --ignored --nocapture`) and FE localhost validation deferred to a follow-up dogfood pass per user direction.
+
+**Boundary preserved:** No `fs/read_text_file`, `fs/write_text_file`, or `terminal/*` ACP capabilities enabled. Control-plane authority stays in the bridge; mid-session agent switch still rejected; no Stage K reopen. Live `env_var` adapter restart and the full `terminal` auth leg remain explicitly deferred.
+
 ## VIL-style workflow layer
 
 Introduced in `feat(bridge): introduce VIL-style workflow layer for cockpit orchestration`:
