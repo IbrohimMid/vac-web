@@ -70,9 +70,37 @@ pub fn v1_actions() -> Vec<ActionSpec> {
     ]
 }
 
+pub fn bundled_workflows() -> Value {
+    use crate::workflows::WorkflowRegistry;
+    let default_id = WorkflowRegistry::default_build_spec_id();
+    let reg = WorkflowRegistry::global();
+    let ordered = [
+        "build.observe-tools",
+        "build.full-cockpit",
+        "build.approval-gated-edit",
+        "build.basic",
+        "assess.report",
+        "handoff.package",
+    ];
+    let list: Vec<Value> = ordered
+        .iter()
+        .filter_map(|id| {
+            reg.get(id).map(|spec| {
+                json!({
+                    "id": id,
+                    "name": spec.metadata.name,
+                    "default": *id == default_id,
+                })
+            })
+        })
+        .collect();
+    json!(list)
+}
+
 pub fn capabilities_payload() -> Value {
     json!({
         "actions": v1_actions(),
         "features": ["session", "message", "approval", "replay"],
+        "workflows": bundled_workflows(),
     })
 }
