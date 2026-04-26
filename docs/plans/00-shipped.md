@@ -76,6 +76,17 @@ Ported from the `/vacweb` prototype into the live cockpit, gz initial bundle hel
   - 235 total tests pass. `ToolActivityLane` lazy-split at 4.18 kB gzip. Capability guard: clean.
   - Observe-only boundary preserved. No X.5c.3.
 
+## Claude ACP adapter fixture + auth metadata surfacing — locked at `753301e`
+
+**ACP Claude Adapter Fixture + Auth Metadata Surfacing — PASS / LOCKED @ `753301eae273d1320f2bf7ab1cf51352eb2f8936`.** Two commits since previous baseline (`12ea41f`):
+
+- `1b36e19` — `fix(acp): use claude-agent-acp adapter fixture`. Canonical fixture `fixtures/agents.claude-agent-acp.toml` spawns `npx -y @agentclientprotocol/claude-agent-acp` (Zed-style adapter) instead of the global `claude --acp` CLI. Legacy `fixtures/agents.claude.toml` is now an alias pointing to `claude-acp`. Smoke harness (`apps/local-bridge/tests/acp_driver.rs`) is phase-aware: separate WS/session/prompt timeouts, fixture path resolved from cwd or repo root, and `claude_acp_smoke` fails fast with `Claude ACP smoke requires ANTHROPIC_API_KEY` when the env var is missing. Docs (`docs/acp-smoke.md`, `docs/agent-runtime.md`) updated to require `ANTHROPIC_API_KEY`; OAuth `claude` login is not used by the adapter.
+- `753301e` — `feat(acp): surface auth metadata for reauth flow`. Bridge stores `init.auth_methods` on `AcpRuntime` and publishes it on `session.ready` alongside `agent_id` / `agent_kind` (fallback `[]` for non-ACP). FE store `useSession` gains `agentId` / `agentKind` / `authMethods` (cleared on `clear()`); `domain/sessions/handlers.ts` reads them off `session.ready`; `domain/sessions/auth.ts` centralizes normalization (supports `agent` / `env_var` / `terminal`, `vars`, `description`, `link`). Cockpit shows ACP auth metadata in SessionPicker active banner, Topbar badge, and Rail Memory panel. Plan `docs/plans/stage-x5d-acp-reauth-flow.md` documents the bridge-owned reauth design; terminal auth and `fs/*` capabilities remain explicitly deferred.
+
+**Verification (slice gate):** `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo nextest run -p local-bridge` 196 passed / 2 skipped; `cargo nextest run -p red-team --features redteam` 20 passed; `cargo nextest run --workspace` 304 passed / 2 skipped; `cargo test -p local-bridge` and `cargo test -p red-team --features redteam` passed (doctests); `pnpm typecheck`; `pnpm test` 323 passed; `pnpm --filter @vac-web/web build`.
+
+**Boundary preserved:** No `fs/read_text_file`, `fs/write_text_file`, or `terminal/*` ACP capabilities enabled. No mid-session agent switch, no provisionable workflow, no Stage K reopen. Reauth action itself (the `session.authenticate` command and its UI affordance) is the next milestone — this lock covers metadata surfacing only.
+
 ## VIL-style workflow layer
 
 Introduced in `feat(bridge): introduce VIL-style workflow layer for cockpit orchestration`:
