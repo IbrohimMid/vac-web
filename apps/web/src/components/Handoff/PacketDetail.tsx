@@ -6,6 +6,8 @@ import { type Packet } from '../../stores/handoff';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
+const canonicalName = (value: string | undefined) => (value ?? '').trim().toLocaleLowerCase();
+
 interface Props {
   packet: Packet;
   transport: TransportHandle | null;
@@ -19,13 +21,21 @@ export function PacketDetail({ packet, transport }: Props) {
   const [dispatching, setDispatching] = useState(false);
 
   const author = packet.signers.find((s) => s.role === 'author');
-  const authorName = author?.name.trim();
+  const authorActorId = canonicalName(author?.name);
   const approverTrim = approverName.trim();
+  const approverActorId = canonicalName(approverName);
+  const signerActorIds = new Set(packet.signers.map((s) => canonicalName(s.name)));
   const canApprove =
     packet.status === 'pending_approval' &&
     approverTrim.length > 0 &&
-    approverTrim !== authorName &&
+    approverActorId !== authorActorId &&
+    !signerActorIds.has(approverActorId) &&
     packet.signers.length < packet.required_signers;
+  const canReject =
+    packet.status === 'pending_approval' &&
+    approverTrim.length > 0 &&
+    !!transport &&
+    !!sessionId;
   const pinReady =
     packet.pin.repo_ref.trim().length > 0 &&
     packet.pin.base_commit_sha.trim().length > 0 &&
@@ -38,16 +48,16 @@ export function PacketDetail({ packet, transport }: Props) {
   const approve = async () => {
     if (!transport || !sessionId) return;
     setErr(null);
-    // Client-side self-sign guard (bridge enforces too). Trim both sides so
-    // whitespace doesn't smuggle a duplicate signer past the check.
-    if (approverTrim === authorName) {
+    // Client-side self-sign guard mirrors the bridge. Canonicalize so
+    // whitespace and case variants cannot sneak through the local affordance.
+    if (approverActorId === authorActorId) {
       setErr('self-sign denied — approver must differ from author');
       return;
     }
     try {
       const ack = await transport.send(sessionId, 'handoff.approve', {
         packet_id: packet.id,
-        approver: approverName.trim(),
+        approver: approverTrim,
         reason: approverReason.trim() || 'approved',
       });
       if (!ack.ok) setErr(ack.error?.message ?? 'approve failed');
@@ -58,13 +68,16 @@ export function PacketDetail({ packet, transport }: Props) {
 
   const reject = async () => {
     if (!transport || !sessionId) return;
+    setErr(null);
     try {
-      await transport.send(sessionId, 'handoff.reject', {
+      const ack = await transport.send(sessionId, 'handoff.reject', {
         packet_id: packet.id,
+        rejector: approverTrim,
         reason: approverReason.trim() || 'rejected',
       });
-    } catch {
-      /* ignore */
+      if (!ack.ok) setErr(ack.error?.message ?? 'reject failed');
+    } catch (e) {
+      setErr(String(e));
     }
   };
 
@@ -266,7 +279,9 @@ export function PacketDetail({ packet, transport }: Props) {
             <button onClick={approve} disabled={!canApprove}>
               Approve
             </button>
-            <button onClick={reject}>Reject</button>
+            <button onClick={reject} disabled={!canReject}>
+              Reject
+            </button>
           </div>
           {err && <div style={{ color: 'var(--sev-error)', fontSize: 12, marginTop: 4 }}>{err}</div>}
         </section>
