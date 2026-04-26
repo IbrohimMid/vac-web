@@ -356,10 +356,200 @@ Updated after §12 research:
       → next: kill mid-prompt, malformed JSON, auth failure.
 - [x] §12.5 decision recorded.
 
-State: **5/6.** Authority granted to plan X.5a–X.5c (see
-[`./10-stage-x-agent-runtime.md`](./10-stage-x-agent-runtime.md)). Live
-permission capture under a logged-in `claude` is the gate before X.5b
-implementation begins.
+State: **6/6** as of the §13 capture pass. X.5b is shipped (`a893450`).
+X.5c implementation can begin on explicit go — design implications
+recorded in §13.6.
+
+## 13. X.5c capture pass — authenticated permission + tool flow (2026-04-26)
+
+Captured locally against `@agentclientprotocol/claude-agent-acp@0.31.0`
+with the host already authenticated via `claude /login`. Harness
+implemented Client side using `@agentclientprotocol/sdk@0.20.0` and
+logged every Client method call. Sandbox: `/tmp/acp-cap/sandbox`.
+
+### 13.1 Read tool — no client RPC fires
+
+Prompt: `"Please READ the file notes.txt and tell me what's in it."`
+
+Claude's Agent reads the file **itself** and surfaces the result
+through `session/update` notifications only. No `fs/read_text_file`
+request reached the harness. Sequence:
+
+1. `session/update :: tool_call` — `kind:"read"`, `content:[]`, `status:"pending"`, `title:"Read File"`, `_meta.claudeCode.toolName:"Read"`, fresh `toolCallId`.
+2. `session/update :: tool_call_update` — fills `locations:[{line:1, path:"…/notes.txt"}]` and `rawInput:{file_path:"…/notes.txt"}`; `title` becomes `"Read notes.txt"`.
+3. `session/update :: tool_call_update` — carries `_meta.claudeCode.toolResponse.file.{filePath, content, numLines, startLine, totalLines}`. The bridge gets the file content here, in the `_meta`.
+4. `session/update :: tool_call_update` — `status:"completed"`, `content:[{type:"content", content:{type:"text", text:"```\\n1\\thello world\\n…"}}]`, plus `rawOutput`.
+5. `session/update :: agent_message_chunk` × 3.
+6. `session/update :: usage_update` interleaved.
+
+**Bridge implication.** For agents that read locally (which is the
+default for Claude), `fs/read_text_file` is *not* the surface to
+gate. Read enforcement happens by inspecting `tool_call_update`
+content — `kind:"read"`, `locations[].path`, `_meta.claudeCode.toolResponse.file`.
+The bridge can surface this through `review.changeset_updated` (or a
+read-only equivalent) without ever serving an `fs/*` request.
+
+### 13.2 Write tool — `session/request_permission` confirmed
+
+Prompt: `"Create a new file at hello.md with the text 'hello from acp'."`
+
+Sequence:
+
+1. `session/update :: tool_call` — `kind:"edit"`, `content:[]`, `status:"pending"`, `title:"Write"`, `_meta.claudeCode.toolName:"Write"`, fresh `toolCallId`.
+2. `session/update :: tool_call_update` — populates `content:[{type:"diff", path, newText, oldText:null}]`, `locations:[{path}]`, `rawInput:{file_path, content}`, `title:"Write hello.md"`.
+3. **`session/request_permission` request** with the verbatim shape:
+
+```json
+{
+  "options": [
+    { "kind": "allow_always", "name": "Always Allow all Write", "optionId": "allow_always" },
+    { "kind": "allow_once",  "name": "Allow",                   "optionId": "allow" },
+    { "kind": "reject_once", "name": "Reject",                  "optionId": "reject" }
+  ],
+  "sessionId": "...",
+  "toolCall": {
+    "content": [ { "type":"diff", "path":"…/hello.md", "newText":"hello from acp\n", "oldText":null } ],
+    "kind": "edit",
+    "locations": [ { "path":"…/hello.md" } ],
+    "rawInput": { "file_path":"…/hello.md", "content":"hello from acp\n" },
+    "title": "Write hello.md",
+    "toolCallId": "toolu_01AA9tQceFCatd9Hhi87pwhs"
+  }
+}
+```
+
+4. Client response (allow): `{ "outcome": { "outcome": "selected", "optionId": "allow_always" } }`.
+5. `session/update :: tool_call_update` — `_meta.claudeCode.toolResponse:{type:"create", filePath, content, structuredPatch:[], originalFile:null, userModified:false}`.
+6. `session/update :: tool_call_update` — `status:"completed"`, `rawOutput:"File created successfully at: …"`.
+7. Verified on disk: `/tmp/acp-cap/sandbox/hello.md` contains `hello from acp`.
+
+### 13.3 Reject path
+
+Same prompt, client returns:
+
+```json
+{ "outcome": { "outcome": "selected", "optionId": "reject" } }
+```
+
+(Note the wire shape uses `"selected"` even for rejection; the
+*intent* is encoded by the chosen option's `kind:"reject_once"`.
+The other documented outcome is `{ "outcome": "cancelled" }` for
+abort/timeout.)
+
+Agent response:
+
+```json
+{
+  "sessionUpdate": "tool_call_update",
+  "_meta": { "claudeCode": { "toolName": "Write" } },
+  "content": [{ "type":"content", "content":{ "type":"text", "text":"```\nUser refused permission to run tool\n```" }}],
+  "rawOutput": "User refused permission to run tool",
+  "status": "failed",
+  "toolCallId": "..."
+}
+```
+
+Prompt completes normally with `stopReason: "end_turn"` — rejection
+is a per-tool failure, not a session-level error. No file written on
+disk (verified).
+
+### 13.4 Bash tool — handled locally even with `terminal: true`
+
+Prompt: `"Run the bash command 'echo hi from real bash'. Use the Bash tool."`
+
+With `clientCapabilities.terminal: true` advertised at `initialize`,
+the Agent **still** runs Bash internally. No `terminal/create`,
+`terminal/output`, `terminal/wait_for_exit`, or `terminal/kill`
+reached the harness. The flow looked identical to the Read flow:
+`tool_call` (pending) → `tool_call_update` (with rawInput) →
+`tool_call_update` (with rawOutput + status:"completed").
+
+**Bridge implication.** Terminal RPCs in `claude-agent-acp@0.31.0`
+are not part of the normal Bash path. They may surface for explicit
+interactive-terminal subcommands or other ACP agents — keep the
+client method handlers ready for X.5c, but **don't depend on them**
+for shell enforcement. Shell enforcement piggybacks on
+`tool_call_update` for `kind:"execute"` (or whatever `_meta.claudeCode.toolName`
+labels show up under), same shape as Read/Write.
+
+### 13.5 Session-level metadata captured at `session/new`
+
+Real `session/new` response carries (besides `sessionId`):
+
+- `models.availableModels[]` + `models.currentModelId` — list of model
+  ids (`default`, `sonnet`, `haiku`, `opus[1m]`) with descriptions.
+- `modes.availableModes[]` + `modes.currentModeId` — six modes:
+  `auto`, `default`, `acceptEdits`, `plan`, `dontAsk`,
+  `bypassPermissions`. Each carries a `name` + `description`.
+- `configOptions[]` — three options (`mode`, `model`, `effort`) each
+  with `currentValue` and `options[].value`. Drives a future settings
+  panel.
+
+The bridge keeps these as `Value` for X.5b (already wired) and the
+web surface can render them when X.5c lands the picker.
+
+### 13.6 X.5c design implications
+
+1. **Approval bridge target.** `session/request_permission` is the
+   X.5c hook. Translation:
+   - **Inbound** ACP request → bridge enqueues `approval.pending`
+     event with the `toolCall` payload and `options[]` translated to
+     bridge approval options (preserve `optionId` for round-trip
+     correctness).
+   - **Outbound** ACP response: `approval.approve` selects a
+     non-reject `optionId`; `approval.reject` selects the
+     `reject_once` (or `reject_always`) option; timeout selects
+     `cancelled`.
+2. **Preferred default option mapping.** Profile policy decides
+   which `kind` the bridge accepts. e.g. `executor.code` may auto-
+   approve `kind:"allow_once"` for paths inside `fs.scoped_paths`
+   and force user approval for `allow_always`.
+3. **Read tool surfacing.** Don't expect `fs/read_text_file` for
+   Claude — render `tool_call_update` with `kind:"read"` directly
+   into the Build "Read" lane and apply `profile_layer` deny-globs
+   against `locations[].path`.
+4. **Write tool surfacing.** `tool_call_update` with `kind:"edit"`
+   carries the diff in `content[]`. Map directly into
+   `review.changeset_updated` so the diff appears alongside the
+   approval prompt.
+5. **Bash surfacing.** Same shape as Read — render `tool_call_update`
+   into the Runtime lane. Apply `shell_allowlist` against the
+   command extracted from `rawInput`.
+6. **`fs/read_text_file` / `fs/write_text_file` / `terminal/*`
+   handlers stay in X.5c.** Even though Claude doesn't currently call
+   them, other ACP agents (and possibly future Claude versions for
+   IDE-mediated reads) will. The handlers should:
+   - Resolve path through `profile_layer::enforce_fs_read/write`
+     against the pinned project root.
+   - Surface every successful write through
+     `review.changeset_updated`.
+   - Reject denied paths with `RequestError(-32603, ...)`.
+
+### 13.7 Captures status
+
+```text
+[x] initialize round-trip
+[x] session/new full response
+[x] session/prompt happy path
+[x] session/update :: tool_call (pending)
+[x] session/update :: tool_call_update (with rawInput / rawOutput / status)
+[x] session/request_permission request shape
+[x] permission options taxonomy (allow_always / allow_once / reject_once)
+[x] permission outcome envelopes (selected / cancelled both observed)
+[x] reject path: tool_call_update.status="failed" + "User refused permission"
+[x] write tool persistence (verified on disk)
+[x] bash tool path (no terminal/* even with terminal:true)
+[ ] fs/read_text_file from agent — NOT OBSERVED with current Claude
+[ ] fs/write_text_file from agent — NOT OBSERVED with current Claude
+[ ] terminal/create from agent — NOT OBSERVED with current Claude
+[ ] reject_always option — not enumerated by Claude in observed runs;
+    treat as future variant.
+```
+
+§10 go/no-go checklist now reads **6/6 for X.5c**. X.5c
+implementation can begin on explicit go.
+
+---
 
 ## 11. ~~Fallback path — selected after §3/§4 captures~~ DEMOTED
 
