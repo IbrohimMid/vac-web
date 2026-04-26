@@ -1,5 +1,6 @@
 //! Command dispatch (WS client → session) + envelope translation.
 
+use crate::agent_runtime::acp::sha256_hex_canonical;
 use crate::audit::log_tool_event;
 use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
@@ -7,37 +8,7 @@ use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::AuditSeverity;
 use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use tracing::warn;
-
-/// Canonical-JSON sha256 hex digest used for audit `args_hash` fields.
-/// Sorts object keys via `serde_json` value→string roundtrip (sorted)
-/// so the same payload always hashes to the same digest regardless of
-/// field order.
-fn sha256_hex_canonical(value: &serde_json::Value) -> String {
-    // Build a sorted-key BTreeMap-backed canonical representation.
-    fn canon(v: &serde_json::Value) -> serde_json::Value {
-        match v {
-            serde_json::Value::Object(map) => {
-                let mut sorted: std::collections::BTreeMap<String, serde_json::Value> =
-                    Default::default();
-                for (k, val) in map {
-                    sorted.insert(k.clone(), canon(val));
-                }
-                serde_json::to_value(sorted).unwrap_or(serde_json::Value::Null)
-            }
-            serde_json::Value::Array(arr) => {
-                serde_json::Value::Array(arr.iter().map(canon).collect())
-            }
-            other => other.clone(),
-        }
-    }
-    let canonical = canon(value);
-    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    hex::encode(h.finalize())
-}
 
 pub async fn dispatch_command(
     cmd: ClientCommand,

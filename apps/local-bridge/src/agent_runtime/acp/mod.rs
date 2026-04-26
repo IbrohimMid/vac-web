@@ -6,9 +6,16 @@
 //! stream-json adapter demoted to fallback).
 
 pub mod client;
+pub mod hash;
+pub mod tool_activity;
 pub mod types;
 
 pub use client::{classify_jsonrpc_error, AcpClient, JsonRpcError, PermissionRequest};
+pub use hash::sha256_hex_canonical;
+pub use tool_activity::{
+    bound_raw_output, extract_observed_tool_activity, redact_raw_input, ObservedToolActivity,
+    ToolKind, ToolLocation, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES, TRUNCATION_MARKER,
+};
 pub use types::{
     CancelNotification, ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest,
     InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
