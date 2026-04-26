@@ -3,6 +3,7 @@
 use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
+use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::SessionRegistry;
 use local_bridge::tunnel::{run_tunnel_supervisor, TunnelConfig};
@@ -52,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| dirs_config_home().join("vac-web").join("audit"));
 
     let audit = Arc::new(AuditFacility::new(audit_dir));
+    let handoff = Arc::new(HandoffService::new());
     let sessions = SessionRegistry::with_runtime(agents);
     sessions.attach_audit(Arc::clone(&audit));
     let state = Arc::new(AppState {
@@ -61,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         audit,
         pairing: PairingStore::new(),
         profile_root,
+        handoff,
     });
 
     // Optional outbound-dial tunnel (Phase 7): opt-in via VAC_RELAY_URL. When

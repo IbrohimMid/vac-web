@@ -418,6 +418,204 @@ pub async fn dispatch_command(
                 events,
             )
         }
+        "handoff.create" => {
+            if state.sessions.get(&cmd.session_id).is_none() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            let project_root = state
+                .sessions
+                .project_root(&cmd.session_id)
+                .unwrap_or_else(|| std::path::PathBuf::from(""));
+
+            let author = cmd
+                .payload
+                .get("created_by")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let now = chrono::Utc::now();
+
+            let outcome = state
+                .handoff
+                .create_handoff(crate::handoff::HandoffCreateParams {
+                    payload: &cmd.payload,
+                    project_root: &project_root,
+                    session_id: &cmd.session_id,
+                    author: &author,
+                    now,
+                });
+
+            let (ack, extra_events) = match outcome {
+                crate::handoff::HandoffCreateOutcome::Ok {
+                    ref packet,
+                    ref upsert_event,
+                } => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Info,
+                        serde_json::json!({
+                            "event": "handoff.created",
+                            "packet_id": packet.id,
+                            "title": packet.title,
+                            "author": author,
+                            "repo_ref": packet.pin.repo_ref,
+                            "base_commit_sha": packet.pin.base_commit_sha.chars().take(12).collect::<String>(),
+                            "worktree_digest": packet.pin.worktree_digest.chars().take(12).collect::<String>(),
+                            "invalidation_policy": packet.pin.invalidation_policy.as_str(),
+                            "task_count": packet.tasks.len(),
+                            "finding_count": packet.accepted_finding_ids.len(),
+                        }),
+                    );
+                    let mut evts = vec![upsert_event.clone()];
+                    evts.push(ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "handoff.status".into(),
+                        payload: serde_json::json!({
+                            "packet_id": packet.id,
+                            "status": packet.status.as_str(),
+                        }),
+                        v: 1,
+                        ts: now.to_rfc3339(),
+                    });
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        evts,
+                    )
+                }
+                crate::handoff::HandoffCreateOutcome::Err {
+                    ref code,
+                    ref message,
+                } => (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: code.clone(),
+                            message: message.clone(),
+                        }),
+                    },
+                    vec![],
+                ),
+            };
+
+            events.extend(extra_events);
+            (ack, events)
+        }
+        "handoff.dispatch_local" => {
+            let Some(_handle) = state.sessions.get(&cmd.session_id) else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            };
+
+            let packet_id = cmd
+                .payload
+                .get("packet_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if packet_id.is_empty() {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "handoff.invalid_payload".into(),
+                            message: "packet_id is required".into(),
+                        }),
+                    },
+                    events,
+                );
+            }
+
+            match state.handoff.check_dispatch(&packet_id) {
+                Ok(packet) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Info,
+                        serde_json::json!({
+                            "event": "handoff.dispatch_allowed",
+                            "packet_id": packet_id,
+                            "repo_ref": packet.pin.repo_ref,
+                        }),
+                    );
+                    // Forward to runtime provider for actual execution.
+                    match _handle.send_client_command(&cmd).await {
+                        Ok(()) => (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: true,
+                                error: None,
+                            },
+                            events,
+                        ),
+                        Err(e) => (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "engine.unreachable".into(),
+                                    message: e.to_string(),
+                                }),
+                            },
+                            events,
+                        ),
+                    }
+                }
+                Err(dispatch_err) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "handoff",
+                        bridge_core::AuditSeverity::Warn,
+                        serde_json::json!({
+                            "event": "handoff.dispatch_rejected",
+                            "packet_id": packet_id,
+                            "code": dispatch_err.code(),
+                            "reason": dispatch_err.message(),
+                        }),
+                    );
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: dispatch_err.code().into(),
+                                message: dispatch_err.message(),
+                            }),
+                        },
+                        events,
+                    )
+                }
+            }
+        }
         _ => {
             // Forward to engine via session handle.
             let Some(handle) = state.sessions.get(&cmd.session_id) else {

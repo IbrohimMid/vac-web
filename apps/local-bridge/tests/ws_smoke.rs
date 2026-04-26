@@ -7,6 +7,7 @@
 use futures::{SinkExt, StreamExt};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
+use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::SessionRegistry;
 use serde_json::{json, Value};
@@ -45,6 +46,7 @@ async fn start_bridge() -> (String, Arc<AppState>) {
             env!("CARGO_MANIFEST_DIR"),
             "/../../packages/protocol/v1/profiles"
         )),
+        handoff: Arc::new(HandoffService::new()),
     });
     // Leak the tempdir so the audit dir survives the test run.
     std::mem::forget(tmp);

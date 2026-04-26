@@ -18,6 +18,7 @@ use local_bridge::agent_runtime::{
 };
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
+use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::SessionRegistry;
 use serde_json::{json, Value};
@@ -93,6 +94,7 @@ async fn start_bridge_with_audit_dir(
             env!("CARGO_MANIFEST_DIR"),
             "/../../packages/protocol/v1/profiles"
         )),
+        handoff: Arc::new(HandoffService::new()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));
@@ -119,6 +121,7 @@ async fn start_bridge_with(registry: AgentRuntimeRegistry) -> (String, Arc<AppSt
             env!("CARGO_MANIFEST_DIR"),
             "/../../packages/protocol/v1/profiles"
         )),
+        handoff: Arc::new(HandoffService::new()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));

@@ -123,6 +123,10 @@ impl SessionRegistry {
         self.inner.get(session_id).map(|r| Arc::clone(r.value()))
     }
 
+    pub fn project_root(&self, session_id: &str) -> Option<std::path::PathBuf> {
+        self.get(session_id).map(|h| h.project_root.clone())
+    }
+
     pub fn count(&self) -> usize {
         self.inner.len()
     }

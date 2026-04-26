@@ -2,6 +2,7 @@
 
 use crate::audit::AuditFacility;
 use crate::auth::{AuthState, PairingStore};
+use crate::handoff::HandoffService;
 use crate::session::SessionRegistry;
 use axum::{routing::get, routing::post, Json, Router};
 use serde_json::json;
@@ -17,6 +18,7 @@ pub struct AppState {
     pub audit: Arc<AuditFacility>,
     pub pairing: PairingStore,
     pub profile_root: std::path::PathBuf,
+    pub handoff: Arc<HandoffService>,
 }
 
 impl AppState {
