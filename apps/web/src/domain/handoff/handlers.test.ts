@@ -1,5 +1,6 @@
-// Merge semantics for handoff.upserted — a partial update (e.g. the `approve`
-// emission that carries only `{status, signers}`) must not wipe title/tasks/pin.
+// Merge semantics for handoff.upserted — a partial update (e.g. the approve
+// emission that carries only `{status, signers}`) must not wipe the packet
+// draft fields or the normalized pin/task model.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { registerHandoffHandlers } from './handlers';
@@ -49,39 +50,88 @@ describe('handoff.upserted merge', () => {
     emit('handoff.upserted', {
       packet_id: 'p1',
       title: 'Real title',
-      target_profile: 'executor.code@1.0.0',
+      summary: 'Real summary',
+      source_run_ids: ['run-1'],
+      accepted_finding_ids: ['f1'],
+      created_by: 'alice',
+      created_at: 't',
+      target: {
+        kind: 'dispatch_to_local_vac',
+        executor_profile_id: 'executor.code@1.0.0',
+        session_title: 'packet title',
+      },
       status: 'pending_approval',
       tasks: [
         {
-          id: 't1',
+          id: 'task_f1',
           title: 'Task 1',
-          finding_ids: ['f1'],
+          rationale: 'why',
+          source_finding_ids: ['f1'],
+          evidence_refs: [
+            {
+              id: 'ev1',
+              connector: 'github',
+              kind: 'file',
+              label: 'src/a.ts',
+              captured_at: 't',
+              ttl_seconds: 60,
+              uri: 'file:///workspace/src/a.ts',
+            },
+          ],
+          steps: ['step 1'],
+          constraints: ['scope'],
+          risk_notes: ['risk'],
+          est_effort: 'hours',
+          depends_on: [],
+          touches_paths: ['src/a.ts'],
           requires_approval_per_step: false,
-          constraint: '',
+          rollback_steps: ['revert'],
         },
       ],
       pin: {
+        repo_ref: 'branch:main',
+        base_commit_sha: 'deadbeef',
         worktree_digest: 'abc',
-        base_sha: 'deadbeef',
-        captured_at: 't',
-        policy: 'strict',
+        assessment_snapshot_at: 't',
+        expires_at: 't2',
+        invalidate_on_repo_change: true,
+        invalidation_policy: 'strict',
         connector_snapshots: [],
+      },
+      approval: {
+        required: true,
+        approvers: [],
+        two_party: false,
+        required_roles: [],
       },
       signers: [{ name: 'alice', role: 'author', signed_at: 't' }],
       required_signers: 2,
+      state_history: [{ state: 'draft', at: 't', by: 'alice' }],
     });
 
     // Now emit partial update like the mock-engine approve does.
     emit('handoff.upserted', {
       packet_id: 'p1',
       status: 'approved',
+      approval: {
+        required: true,
+        approvers: ['bob'],
+        approver_notes: 'ok',
+        approved_at: 't2',
+        two_party: false,
+        required_roles: [],
+      },
       signers: [{ name: 'bob', role: 'approver', signed_at: 't2', reason: 'ok' }],
     });
 
     const packet = useHandoff.getState().packets.get('p1');
     expect(packet?.title).toBe('Real title');
+    expect(packet?.summary).toBe('Real summary');
     expect(packet?.tasks).toHaveLength(1);
     expect(packet?.pin.worktree_digest).toBe('abc');
+    expect(packet?.pin.base_commit_sha).toBe('deadbeef');
+    expect(packet?.target.executor_profile_id).toBe('executor.code@1.0.0');
+    expect(packet?.approval.approvers).toEqual(['bob']);
     expect(packet?.required_signers).toBe(2);
     expect(packet?.status).toBe('approved');
     expect(packet?.signers.map((s) => s.name)).toEqual(['alice', 'bob']);

@@ -1,13 +1,15 @@
 // Handoff packet store. Spec: docs/handoff-contract.md.
 //
-// A packet bundles a set of findings → tasks pinned against a worktree digest
-// + base SHA + connector snapshots. Two-party approval: authoring ≠ approving.
-// Dispatch re-verifies the pin; drift → `handoff.invalidated`.
+// Packet shape is the contract packet model: source runs + accepted findings
+// + pin + structured tasks + target + approval state. The store keeps a few
+// legacy aliases around so older partial updates still merge cleanly during the
+// migration.
 //
 // Convergence guard: persistent+regressed counts tracked across handoff→reassess
 // cycles; 3 cycles without strictly-decreasing count fires a sticky banner.
 
 import { create } from 'zustand';
+import type { EvidenceRef as AssessmentEvidenceRef } from './assessment';
 
 export type PacketStatus =
   | 'draft'
@@ -23,20 +25,46 @@ export type PacketStatus =
 
 export type PinPolicy = 'strict' | 'lenient';
 
-export interface Pin {
-  worktree_digest: string;
-  base_sha: string;
+export interface HandoffConnectorSnapshot {
+  connector_id: string;
+  kind: string;
+  snapshot_id: string;
   captured_at: string;
-  policy: PinPolicy;
-  connector_snapshots: Array<{ connector: string; snapshot_id: string }>;
+  etag?: string;
+}
+
+export interface HandoffPin {
+  repo_ref: string;
+  base_commit_sha: string;
+  worktree_digest: string;
+  assessment_snapshot_at: string;
+  connector_snapshots: HandoffConnectorSnapshot[];
+  expires_at: string;
+  invalidate_on_repo_change: boolean;
+  invalidation_policy: PinPolicy;
+  // Legacy aliases during migration.
+  base_sha?: string;
+  captured_at?: string;
+  policy?: PinPolicy;
 }
 
 export interface PacketTask {
   id: string;
   title: string;
-  finding_ids: string[];
+  rationale: string;
+  source_finding_ids: string[];
+  evidence_refs: AssessmentEvidenceRef[];
+  steps: string[];
+  constraints: string[];
+  risk_notes: string[];
+  est_effort: 'hours' | 'days' | 'weeks';
+  depends_on: string[];
+  touches_paths: string[];
   requires_approval_per_step: boolean;
-  constraint: string;
+  rollback_steps: string[];
+  // Legacy aliases during migration.
+  finding_ids?: string[];
+  constraint?: string;
 }
 
 export interface Signer {
@@ -46,18 +74,54 @@ export interface Signer {
   reason?: string;
 }
 
+export interface HandoffApproval {
+  required: boolean;
+  approvers: string[];
+  approver_notes?: string;
+  approved_at?: string;
+  two_party: boolean;
+  required_roles: string[];
+}
+
+export interface HandoffTarget {
+  kind: 'dispatch_to_local_vac' | 'dispatch_to_vac_web_cli' | 'export_as_blueprint_only';
+  executor_profile_id: string;
+  session_title?: string;
+  // Legacy alias during migration.
+  profile_id?: string;
+}
+
+export interface PacketStateHistoryEntry {
+  state: PacketStatus | string;
+  at: string;
+  by?: string;
+  reason?: string;
+}
+
 export interface Packet {
   id: string;
   title: string;
-  target_profile: string;
-  status: PacketStatus;
+  summary?: string;
+  source_run_ids: string[];
+  accepted_finding_ids: string[];
+  created_by: string;
+  created_at: string;
+  pin: HandoffPin;
   tasks: PacketTask[];
-  pin: Pin;
+  order_hint?: string[];
+  target: HandoffTarget;
+  approval: HandoffApproval;
+  status: PacketStatus;
+  state?: PacketStatus;
+  state_history: PacketStateHistoryEntry[];
   signers: Signer[];
   required_signers: number;
+  execution_session_id?: string;
+  execution_outcome?: Record<string, unknown>;
+  // Legacy aliases during migration.
+  target_profile?: string;
   executor_session_id?: string;
   convergence_count: number;
-  created_at: string;
   updated_at: string;
 }
 
@@ -101,7 +165,16 @@ export const useHandoff = create<HandoffSlice>((set, get) => ({
       const cur = s.packets.get(id);
       if (!cur) return s;
       const packets = new Map(s.packets);
-      packets.set(id, { ...cur, status, updated_at: new Date().toISOString() });
+      packets.set(id, {
+        ...cur,
+        status,
+        state: status,
+        state_history: [
+          ...(cur.state_history ?? []),
+          { state: status, at: new Date().toISOString() },
+        ],
+        updated_at: new Date().toISOString(),
+      });
       return { packets };
     });
   },
@@ -129,7 +202,12 @@ export const useHandoff = create<HandoffSlice>((set, get) => ({
       const cur = s.packets.get(id);
       if (!cur) return s;
       const packets = new Map(s.packets);
-      packets.set(id, { ...cur, executor_session_id: sessionId });
+      packets.set(id, {
+        ...cur,
+        execution_session_id: sessionId,
+        executor_session_id: sessionId,
+        updated_at: new Date().toISOString(),
+      });
       return { packets };
     });
   },

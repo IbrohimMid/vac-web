@@ -40,6 +40,21 @@ interface StartedPayload {
   swarm: string;
   total_checks: number;
   started_at: string;
+  scope?: {
+    project_root: string;
+    repo_ref?: string;
+    base_commit_sha?: string;
+    diff_range?: string;
+    path_globs?: string[];
+    depth?: string;
+  };
+  connector_snapshots?: Array<{
+    connector_id: string;
+    kind: string;
+    snapshot_id: string;
+    captured_at: string;
+    etag?: string;
+  }>;
 }
 
 interface ProgressPayload {
@@ -88,6 +103,19 @@ interface EvidencePayload {
   label: string;
   captured_at: string;
   ttl_seconds: number;
+  uri?: string;
+  locator?: Record<string, unknown>;
+  connector_id?: string;
+  snapshot_id?: string;
+  digest?: string;
+  source_etag?: string;
+  observed_at?: string;
+  fresh_until?: string;
+  staleness_policy?: string;
+  captured_by?: string;
+  captured_snapshot_id?: string;
+  size?: number;
+  mime_type?: string;
 }
 
 interface EvidencePreviewPayload {
@@ -174,6 +202,19 @@ function readEvidencePayload(ev: unknown): EvidencePayload | null {
         : typeof raw.ttlSeconds === 'number'
           ? raw.ttlSeconds
           : 0,
+    ...(typeof raw.uri === 'string' ? { uri: raw.uri } : {}),
+    ...(raw.locator && typeof raw.locator === 'object' ? { locator: raw.locator as Record<string, unknown> } : {}),
+    ...(typeof raw.connector_id === 'string' ? { connector_id: raw.connector_id } : {}),
+    ...(typeof raw.snapshot_id === 'string' ? { snapshot_id: raw.snapshot_id } : {}),
+    ...(typeof raw.digest === 'string' ? { digest: raw.digest } : {}),
+    ...(typeof raw.source_etag === 'string' ? { source_etag: raw.source_etag } : {}),
+    ...(typeof raw.observed_at === 'string' ? { observed_at: raw.observed_at } : {}),
+    ...(typeof raw.fresh_until === 'string' ? { fresh_until: raw.fresh_until } : {}),
+    ...(typeof raw.staleness_policy === 'string' ? { staleness_policy: raw.staleness_policy } : {}),
+    ...(typeof raw.captured_by === 'string' ? { captured_by: raw.captured_by } : {}),
+    ...(typeof raw.captured_snapshot_id === 'string' ? { captured_snapshot_id: raw.captured_snapshot_id } : {}),
+    ...(typeof raw.size === 'number' ? { size: raw.size } : {}),
+    ...(typeof raw.mime_type === 'string' ? { mime_type: raw.mime_type } : {}),
   };
 }
 
@@ -220,6 +261,31 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
           rejected: 0,
           rejection_reasons: {},
         },
+        ...(p.scope
+          ? {
+              scope: {
+                project_root: p.scope.project_root,
+                ...(p.scope.repo_ref !== undefined ? { repo_ref: p.scope.repo_ref } : {}),
+                ...(p.scope.base_commit_sha !== undefined
+                  ? { base_commit_sha: p.scope.base_commit_sha }
+                  : {}),
+                ...(p.scope.diff_range !== undefined ? { diff_range: p.scope.diff_range } : {}),
+                ...(p.scope.path_globs !== undefined ? { path_globs: p.scope.path_globs } : {}),
+                ...(p.scope.depth !== undefined ? { depth: p.scope.depth } : {}),
+              },
+            }
+          : {}),
+        ...(p.connector_snapshots
+          ? {
+              connector_snapshots: p.connector_snapshots.map((snapshot) => ({
+                connector_id: snapshot.connector_id,
+                kind: snapshot.kind,
+                snapshot_id: snapshot.snapshot_id,
+                captured_at: snapshot.captured_at,
+                ...(snapshot.etag !== undefined ? { etag: snapshot.etag } : {}),
+              })),
+            }
+          : {}),
       };
       useAssessment.getState().upsertRun(run);
     }),
@@ -291,6 +357,21 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
       label: p.label,
       captured_at: p.captured_at,
       ttl_seconds: p.ttl_seconds,
+      ...(p.uri !== undefined ? { uri: p.uri } : {}),
+      ...(p.locator !== undefined ? { locator: p.locator } : {}),
+      ...(p.connector_id !== undefined ? { connector_id: p.connector_id } : {}),
+      ...(p.snapshot_id !== undefined ? { snapshot_id: p.snapshot_id } : {}),
+      ...(p.digest !== undefined ? { digest: p.digest } : {}),
+      ...(p.source_etag !== undefined ? { source_etag: p.source_etag } : {}),
+      ...(p.observed_at !== undefined ? { observed_at: p.observed_at } : {}),
+      ...(p.fresh_until !== undefined ? { fresh_until: p.fresh_until } : {}),
+      ...(p.staleness_policy !== undefined
+        ? { staleness_policy: p.staleness_policy as 'hard_expire' | 'warn_only' | 'immutable' }
+        : {}),
+      ...(p.captured_by !== undefined ? { captured_by: p.captured_by } : {}),
+      ...(p.captured_snapshot_id !== undefined ? { captured_snapshot_id: p.captured_snapshot_id } : {}),
+      ...(p.size !== undefined ? { size: p.size } : {}),
+      ...(p.mime_type !== undefined ? { mime_type: p.mime_type } : {}),
     });
   };
 

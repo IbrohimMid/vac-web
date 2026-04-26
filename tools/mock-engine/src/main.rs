@@ -57,7 +57,12 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| format!("sess_{:0>26}", "01J000000000000000000MOCK"));
 
-    let mut state = scenarios::State::new(args.seed, session_id.clone(), args.profile.clone());
+    let mut state = scenarios::State::new(
+        args.seed,
+        session_id.clone(),
+        args.profile.clone(),
+        args.project.clone(),
+    );
 
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();

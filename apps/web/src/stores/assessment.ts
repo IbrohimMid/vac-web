@@ -21,6 +21,36 @@ export interface EvidenceRef {
   captured_at: string;
   ttl_seconds: number;
   preview?: string;
+  uri?: string;
+  locator?: Record<string, unknown>;
+  connector_id?: string;
+  snapshot_id?: string;
+  digest?: string;
+  source_etag?: string;
+  observed_at?: string;
+  fresh_until?: string;
+  staleness_policy?: 'hard_expire' | 'warn_only' | 'immutable';
+  captured_by?: string;
+  captured_snapshot_id?: string;
+  size?: number;
+  mime_type?: string;
+}
+
+export interface RunScope {
+  project_root: string;
+  repo_ref?: string;
+  base_commit_sha?: string;
+  diff_range?: string;
+  path_globs?: string[];
+  depth?: string;
+}
+
+export interface ConnectorSnapshot {
+  connector_id: string;
+  kind: string;
+  snapshot_id: string;
+  captured_at: string;
+  etag?: string;
 }
 
 export interface Finding {
@@ -86,6 +116,8 @@ export interface Run {
   verdict?: Verdict;
   score?: Record<Category, number>;
   validation?: CandidateValidationStats;
+  scope?: RunScope;
+  connector_snapshots?: ConnectorSnapshot[];
 }
 
 interface AssessmentSlice {

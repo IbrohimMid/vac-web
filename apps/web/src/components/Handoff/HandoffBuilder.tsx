@@ -3,10 +3,11 @@
 // *different* signer via the PacketDetail view (two-party rule).
 
 import { useEffect, useMemo, useState } from 'react';
-import { useAssessment } from '../../stores/assessment';
+import { useAssessment, type Finding } from '../../stores/assessment';
 import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import { buildHandoffDraft } from './handoffDraft';
 import { isCarryover, visibleHandoffFindings } from './visibleFindings';
 
 interface Props {
@@ -15,8 +16,11 @@ interface Props {
 
 export function HandoffBuilder({ transport }: Props) {
   const findings = useAssessment((s) => s.findings);
+  const runs = useAssessment((s) => s.runs);
+  const evidence = useAssessment((s) => s.evidence);
   const activeRunId = useAssessment((s) => s.activeRunId);
   const sessionId = useSession((s) => s.sessionId);
+  const projectRoot = useSession((s) => s.projectRoot);
 
   // Pre-fill from the report-selection slice on mount; once consumed, the
   // slice is cleared so navigating back-and-forth doesn't keep re-applying
@@ -48,6 +52,29 @@ export function HandoffBuilder({ transport }: Props) {
     [findings, activeRunId, selected],
   );
 
+  const selectedFindings = useMemo(
+    () =>
+      Array.from(selected)
+        .map((id) => findings.get(id))
+        .filter((f): f is Finding => f !== undefined),
+    [findings, selected],
+  );
+
+  const draft = useMemo(
+    () =>
+      buildHandoffDraft({
+        findings: selectedFindings,
+        runs,
+        evidence,
+        title,
+        authorName,
+        targetProfile,
+        policy,
+        activeRunId,
+      }),
+    [activeRunId, authorName, evidence, findings, policy, runs, selectedFindings, targetProfile, title],
+  );
+
   const toggle = (id: string) => {
     setSelected((s) => {
       const next = new Set(s);
@@ -62,23 +89,7 @@ export function HandoffBuilder({ transport }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      const tasks = Array.from(selected).map((fid, i) => {
-        const f = findings.get(fid);
-        return {
-          id: `t${i + 1}`,
-          title: f?.title ?? 'Task',
-          finding_ids: [fid],
-          requires_approval_per_step: f?.severity === 'critical',
-          constraint: f?.summary ?? '',
-        };
-      });
-      const ack = await transport.send(sessionId, 'handoff.create', {
-        title: title.trim() || `Handoff ${new Date().toISOString()}`,
-        target_profile: targetProfile,
-        author: authorName.trim(),
-        policy,
-        tasks,
-      });
+      const ack = await transport.send(sessionId, 'handoff.create', draft);
       if (!ack.ok) {
         setError(ack.error?.message ?? 'create failed');
       } else {
@@ -99,6 +110,9 @@ export function HandoffBuilder({ transport }: Props) {
       </div>
     );
   }
+
+  const pinComputedByBridge = !draft.pin.worktree_digest.trim();
+  const sourceRunCount = draft.source_run_ids.length;
 
   return (
     <div style={{ padding: 8 }}>
@@ -121,6 +135,7 @@ export function HandoffBuilder({ transport }: Props) {
           Profile{' '}
           <select value={targetProfile} onChange={(e) => setTargetProfile(e.target.value)}>
             <option value="executor.code@1.0.0">executor.code@1.0.0</option>
+            <option value="executor.release@1.0.0">executor.release@1.0.0</option>
           </select>
         </label>
         <label>
@@ -131,10 +146,64 @@ export function HandoffBuilder({ transport }: Props) {
           </select>
         </label>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 6 }}>
+      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
+        <section style={{ border: '1px solid var(--border-1, #2a2a2a)', borderRadius: 6, padding: 10 }}>
+          <strong>Pin preview</strong>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
+            <div>
+              repo ref: <code>{draft.pin.repo_ref || '(bridge will derive from project root)'}</code>
+            </div>
+            <div>
+              base commit: <code>{draft.pin.base_commit_sha || '(bridge will derive from git)'}</code>
+            </div>
+            <div>
+              worktree digest: <code>{pinComputedByBridge ? 'computed on submit' : draft.pin.worktree_digest}</code>
+            </div>
+            <div>
+              assessment snapshot: <code>{draft.pin.assessment_snapshot_at}</code>
+            </div>
+            <div>
+              expires: <code>{draft.pin.expires_at}</code>
+            </div>
+            <div>
+              policy: <code>{draft.pin.invalidation_policy}</code>
+              {' · '}
+              repo drift: <code>{draft.pin.invalidate_on_repo_change ? 'on' : 'off'}</code>
+            </div>
+            <div>
+              connector snapshots: <code>{draft.pin.connector_snapshots.length}</code>
+            </div>
+            <div>
+              project root: <code>{projectRoot ?? '(unknown)'}</code>
+            </div>
+          </div>
+          {pinComputedByBridge && (
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-2)' }}>
+              Worktree digest is computed by the bridge when the draft is created.
+            </div>
+          )}
+          {sourceRunCount > 1 && (
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--sev-warn)' }}>
+              Selected findings span {sourceRunCount} runs; the draft pin uses the primary run metadata.
+            </div>
+          )}
+        </section>
+        <section style={{ border: '1px solid var(--border-1, #2a2a2a)', borderRadius: 6, padding: 10 }}>
+          <strong>Draft summary</strong>
+          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
+            <div>source runs: <code>{draft.source_run_ids.length}</code></div>
+            <div>accepted findings: <code>{draft.accepted_finding_ids.length}</code></div>
+            <div>approval: <code>{draft.approval.required ? 'required' : 'optional'}</code></div>
+            <div>two party: <code>{draft.approval.two_party ? 'yes' : 'no'}</code></div>
+            <div>target: <code>{draft.target.executor_profile_id}</code></div>
+            <div>created by: <code>{draft.created_by}</code></div>
+          </div>
+        </section>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-2)', margin: '10px 0 6px' }}>
         Select findings ({selected.size}):
       </div>
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 280, overflow: 'auto' }}>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 240, overflow: 'auto' }}>
         {runFindings.map((f) => {
           const carryover = isCarryover(f, activeRunId, selected);
           const fromOtherRun = activeRunId != null && f.run_id !== activeRunId;
@@ -174,6 +243,57 @@ export function HandoffBuilder({ transport }: Props) {
           );
         })}
       </ul>
+      {draft.tasks.length > 0 && (
+        <section style={{ marginTop: 10 }}>
+          <strong>Generated task plan</strong>
+          <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+            {draft.tasks.map((task) => (
+              <details
+                key={task.id}
+                open={draft.tasks.length === 1}
+                style={{
+                  border: '1px solid var(--border-1, #2a2a2a)',
+                  borderRadius: 6,
+                  padding: 8,
+                }}
+              >
+                <summary style={{ cursor: 'pointer' }}>
+                  <strong>{task.title}</strong>{' '}
+                  <span style={{ color: 'var(--text-2)', fontSize: 11 }}>
+                    · {task.est_effort} · {task.evidence_refs.length} evidence ref
+                    {task.evidence_refs.length === 1 ? '' : 's'}
+                  </span>
+                </summary>
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-2)' }}>
+                  <div>
+                    rationale: <span style={{ color: 'var(--text-1)' }}>{task.rationale}</span>
+                  </div>
+                  <div>
+                    evidence:{' '}
+                    <span style={{ color: 'var(--text-1)' }}>
+                      {task.evidence_refs.length > 0
+                        ? task.evidence_refs.map((ref) => ref.id).join(', ')
+                        : '(none)'}
+                    </span>
+                  </div>
+                  <div>
+                    touched paths:{' '}
+                    <span style={{ color: 'var(--text-1)' }}>
+                      {task.touches_paths.length > 0 ? task.touches_paths.join(', ') : '(bridge derived)'}
+                    </span>
+                  </div>
+                  <div>
+                    constraints:{' '}
+                    <span style={{ color: 'var(--text-1)' }}>
+                      {task.constraints.length > 0 ? task.constraints.join(' · ') : '(none)'}
+                    </span>
+                  </div>
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+      )}
       {error && <div style={{ color: 'var(--sev-error)', marginTop: 6 }}>{error}</div>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
         <button

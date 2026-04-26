@@ -1,6 +1,10 @@
 //! Scripted scenarios the mock-engine supports.
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 /// Per-session state. Seeded counters keep output deterministic.
 pub struct State {
@@ -9,15 +13,23 @@ pub struct State {
     pub session_id: String,
     #[allow(dead_code)]
     pub profile_id: Option<String>,
+    #[allow(dead_code)]
+    pub project: Option<String>,
     pub counter: u64,
 }
 
 impl State {
-    pub fn new(seed: u64, session_id: String, profile_id: Option<String>) -> Self {
+    pub fn new(
+        seed: u64,
+        session_id: String,
+        profile_id: Option<String>,
+        project: Option<String>,
+    ) -> Self {
         Self {
             seed,
             session_id,
             profile_id,
+            project,
             counter: 0,
         }
     }
@@ -61,6 +73,97 @@ pub fn emit_error(id: Option<Value>, code: i32, message: &str) -> String {
         "error": { "code": code, "message": message }
     });
     serde_json::to_string(&v).unwrap()
+}
+
+#[derive(Debug, Clone)]
+struct RepoContext {
+    repo_ref: String,
+    base_commit_sha: String,
+    worktree_digest: String,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn deterministic_hex(seed: u64) -> String {
+    format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        seed,
+        seed ^ 0xaaaa,
+        seed ^ 0x5555,
+        seed ^ 0xffff
+    )
+}
+
+fn git_output(project: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .current_dir(project)
+        .args(args)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(out.stdout).ok()?;
+    let trimmed = stdout.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn compute_worktree_digest(project: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .current_dir(project)
+        .args(["ls-files", "-z"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for entry in out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let rel = String::from_utf8_lossy(entry).to_string();
+        let file = project.join(&rel);
+        let bytes = fs::read(&file).unwrap_or_default();
+        parts.push(format!("{rel}:{}", sha256_hex(&bytes)));
+    }
+    parts.sort();
+    Some(sha256_hex(parts.join("\n").as_bytes()))
+}
+
+fn repo_context(project: Option<&str>, seed: u64) -> RepoContext {
+    let project_path = project.map(Path::new);
+    let base_commit_sha = project_path
+        .and_then(|path| git_output(path, &["rev-parse", "HEAD"]))
+        .unwrap_or_else(|| deterministic_hex(seed).chars().take(40).collect());
+    let repo_ref = project_path
+        .and_then(|path| git_output(path, &["branch", "--show-current"]))
+        .filter(|branch| !branch.is_empty())
+        .map(|branch| format!("branch:{branch}"))
+        .or_else(|| {
+            project_path
+                .and_then(|path| git_output(path, &["describe", "--tags", "--exact-match"]))
+                .filter(|tag| !tag.is_empty())
+                .map(|tag| format!("tag:{tag}"))
+        })
+        .unwrap_or_else(|| format!("sha:{base_commit_sha}"));
+    let worktree_digest = project_path
+        .and_then(compute_worktree_digest)
+        .unwrap_or_else(|| deterministic_hex(seed ^ 0xDEADBEEF));
+    RepoContext {
+        repo_ref,
+        base_commit_sha,
+        worktree_digest,
+    }
 }
 
 pub fn handle(line: &str, state: &mut State) -> Vec<String> {
@@ -626,35 +729,122 @@ fn handle_handoff_create(id: Option<Value>, params: Value, state: &mut State) ->
         .unwrap_or("Handoff")
         .to_string();
     let author = params
-        .get("author")
+        .get("created_by")
+        .or_else(|| params.get("author"))
         .and_then(|v| v.as_str())
         .unwrap_or("author")
         .to_string();
-    let target_profile = params
-        .get("target_profile")
+    let source_run_ids = params
+        .get("source_run_ids")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    let accepted_finding_ids = params
+        .get("accepted_finding_ids")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    let summary = params
+        .get("summary")
         .and_then(|v| v.as_str())
-        .unwrap_or("executor.code@1.0.0")
+        .unwrap_or(&title)
         .to_string();
-    let policy = params
-        .get("policy")
-        .and_then(|v| v.as_str())
-        .unwrap_or("strict")
-        .to_string();
+    let target_session_title = title.clone();
+    let target = params.get("target").cloned().unwrap_or_else(|| {
+        json!({
+            "kind": "dispatch_to_local_vac",
+            "executor_profile_id": params
+                .get("target_profile")
+                .and_then(|v| v.as_str())
+                .unwrap_or("executor.code@1.0.0"),
+            "session_title": target_session_title,
+        })
+    });
+    let approval = params.get("approval").cloned().unwrap_or_else(|| {
+        json!({
+            "required": true,
+            "approvers": [],
+            "two_party": false,
+            "required_roles": []
+        })
+    });
     let tasks = params
         .get("tasks")
         .cloned()
         .unwrap_or_else(|| Value::Array(vec![]));
-
-    // Deterministic 64-hex pin; real worktree_digest lands with upstream PR #8.
-    let seed = state.counter.wrapping_mul(0x9E37_79B9);
-    let digest = format!(
-        "{:016x}{:016x}{:016x}{:016x}",
-        seed,
-        seed ^ 0xaaaa,
-        seed ^ 0x5555,
-        seed ^ 0xffff
-    );
-    let base_sha = format!("{:040x}", seed);
+    let order_hint = params
+        .get("order_hint")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    let created_at = params
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("2026-04-24T10:00:00Z")
+        .to_string();
+    let repo = repo_context(state.project.as_deref(), state.seed);
+    let pin = params.get("pin").cloned().unwrap_or_else(|| json!({}));
+    let pin_repo_ref = pin
+        .get("repo_ref")
+        .or_else(|| pin.get("repoRef"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&repo.repo_ref)
+        .to_string();
+    let pin_base_commit_sha = pin
+        .get("base_commit_sha")
+        .or_else(|| pin.get("baseCommitSha"))
+        .or_else(|| pin.get("base_sha"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&repo.base_commit_sha)
+        .to_string();
+    let pin_worktree_digest = pin
+        .get("worktree_digest")
+        .or_else(|| pin.get("worktreeDigest"))
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&repo.worktree_digest)
+        .to_string();
+    let pin_assessment_snapshot_at = pin
+        .get("assessment_snapshot_at")
+        .or_else(|| pin.get("assessmentSnapshotAt"))
+        .or_else(|| pin.get("captured_at"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&created_at)
+        .to_string();
+    let connector_snapshots = pin
+        .get("connector_snapshots")
+        .or_else(|| pin.get("connectorSnapshots"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    let pin_expires_at = pin
+        .get("expires_at")
+        .or_else(|| pin.get("expiresAt"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("2026-05-01T10:30:00Z")
+        .to_string();
+    let pin_invalidation_policy = pin
+        .get("invalidation_policy")
+        .or_else(|| pin.get("invalidationPolicy"))
+        .or_else(|| pin.get("policy"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("strict")
+        .to_string();
+    let pin_invalidate_on_repo_change = pin
+        .get("invalidate_on_repo_change")
+        .or_else(|| pin.get("invalidateOnRepoChange"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(pin_invalidation_policy == "strict");
+    let execution_session_id = params
+        .get("execution_session_id")
+        .or_else(|| params.get("executor_session_id"))
+        .cloned();
+    let state_history = params
+        .get("state_history")
+        .or_else(|| params.get("stateHistory"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!([
+                { "state": "draft", "at": created_at.clone(), "by": author.clone() },
+                { "state": "pending_approval", "at": created_at.clone() }
+            ])
+        });
 
     vec![
         emit_notification(
@@ -662,23 +852,37 @@ fn handle_handoff_create(id: Option<Value>, params: Value, state: &mut State) ->
             json!({
                 "packet_id": pid,
                 "title": title,
-                "target_profile": target_profile,
+                "summary": summary,
+                "source_run_ids": source_run_ids,
+                "accepted_finding_ids": accepted_finding_ids,
+                "created_by": author.clone(),
+                "created_at": created_at.clone(),
+                "target": target,
                 "status": "pending_approval",
                 "tasks": tasks,
+                "order_hint": order_hint,
                 "pin": {
-                    "worktree_digest": digest,
-                    "base_sha": base_sha,
-                    "captured_at": "2026-04-24T10:00:00Z",
-                    "policy": policy,
-                    "connector_snapshots": [{ "connector": "github", "snapshot_id": "snap_1" }]
+                    "repo_ref": pin_repo_ref,
+                    "base_commit_sha": pin_base_commit_sha.clone(),
+                    "worktree_digest": pin_worktree_digest,
+                    "assessment_snapshot_at": pin_assessment_snapshot_at.clone(),
+                    "connector_snapshots": connector_snapshots,
+                    "expires_at": pin_expires_at,
+                    "invalidate_on_repo_change": pin_invalidate_on_repo_change,
+                    "invalidation_policy": pin_invalidation_policy.clone(),
+                    "base_sha": pin_base_commit_sha,
+                    "captured_at": pin_assessment_snapshot_at,
+                    "policy": pin_invalidation_policy.clone()
                 },
+                "approval": approval,
                 "signers": [
-                    { "role": "author", "name": author, "signed_at": "2026-04-24T10:00:00Z" }
+                    { "role": "author", "name": author.clone(), "signed_at": "2026-04-24T10:00:00Z" }
                 ],
                 "required_signers": 2,
+                "state_history": state_history,
+                "execution_session_id": execution_session_id,
                 "convergence_count": 0,
-                "created_at": "2026-04-24T10:00:00Z",
-                "updated_at": "2026-04-24T10:00:00Z"
+                "updated_at": created_at.clone()
             }),
         ),
         emit_response(
@@ -704,16 +908,29 @@ fn handle_handoff_approve(id: Option<Value>, params: Value) -> Vec<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("approved")
         .to_string();
+    let approved_at = "2026-04-24T10:05:00Z";
     // Bridge-side self-sign check already runs; here we echo the signer event
     // plus a status → approved transition assuming threshold met.
     vec![
+        emit_notification(
+            "handoff.status",
+            json!({ "packet_id": pid, "status": "approved" }),
+        ),
         emit_notification(
             "handoff.upserted",
             json!({
                 "packet_id": pid,
                 "status": "approved",
+                "approval": {
+                    "required": true,
+                    "approvers": [approver.clone()],
+                    "approver_notes": reason.clone(),
+                    "approved_at": approved_at,
+                    "two_party": false,
+                    "required_roles": []
+                },
                 "signers": [
-                    { "role": "approver", "name": approver, "signed_at": "2026-04-24T10:05:00Z", "reason": reason }
+                    { "role": "approver", "name": approver, "signed_at": approved_at, "reason": reason }
                 ]
             }),
         ),
@@ -758,6 +975,20 @@ fn handle_handoff_dispatch(id: Option<Value>, params: Value, state: &mut State) 
             "handoff.status",
             json!({ "packet_id": pid, "status": "completed" }),
         ),
+        emit_notification(
+            "handoff.upserted",
+            json!({
+                "packet_id": pid,
+                "status": "completed",
+                "execution_session_id": exec_sid,
+                "execution_outcome": {
+                    "status": "success",
+                    "tasks_completed": [],
+                    "tasks_failed": [],
+                    "changeset_summary": "mock execution complete"
+                }
+            }),
+        ),
         emit_response(
             id.unwrap_or(Value::Null),
             json!({ "ok": true, "executor_session_id": exec_sid }),
@@ -774,6 +1005,14 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
     state.counter += 1;
     let run_id = format!("run_01J{:0>20}{:0>3}", state.seed % 10000, state.counter);
     let agents: Vec<(&str, &str, &str)> = family_catalog(&swarm);
+    let repo = repo_context(state.project.as_deref(), state.seed);
+    let project_root = state.project.clone().unwrap_or_default();
+    let connector_snapshots = vec![json!({
+        "connector_id": "github_default",
+        "kind": "github",
+        "snapshot_id": format!("01J{:0>23}", state.counter),
+        "captured_at": "2026-04-24T10:00:00Z"
+    })];
 
     let mut out: Vec<String> = Vec::with_capacity(agents.len() * 3 + 4);
     out.push(emit_notification(
@@ -782,7 +1021,16 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
             "run_id": run_id,
             "swarm": swarm,
             "total_checks": agents.len(),
-            "started_at": "2026-04-24T10:00:00Z"
+            "started_at": "2026-04-24T10:00:00Z",
+            "scope": {
+                "project_root": project_root,
+                "repo_ref": repo.repo_ref,
+                "base_commit_sha": repo.base_commit_sha,
+                "diff_range": "HEAD~1..HEAD",
+                "path_globs": ["apps/web/src/**"],
+                "depth": "standard"
+            },
+            "connector_snapshots": connector_snapshots
         }),
     ));
 

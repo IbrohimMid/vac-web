@@ -48,6 +48,22 @@ describe('assessment handlers', () => {
       swarm: 'rtd',
       total_checks: 2,
       started_at: '2026-01-01T00:00:00Z',
+      scope: {
+        project_root: '/workspace/project',
+        repo_ref: 'branch:main',
+        base_commit_sha: 'abc123def456',
+        diff_range: 'HEAD~1..HEAD',
+        path_globs: ['apps/web/src/**'],
+        depth: 'standard',
+      },
+      connector_snapshots: [
+        {
+          connector_id: 'github_default',
+          kind: 'github',
+          snapshot_id: '01J0000000000000000000SN01',
+          captured_at: '2026-01-01T00:00:00Z',
+        },
+      ],
     });
 
     emit('assessment.candidate_received', {
@@ -74,6 +90,7 @@ describe('assessment handlers', () => {
       label: 'apps/web/src/stores/assessment.ts:1',
       captured_at: '2026-01-01T00:00:00Z',
       ttl_seconds: 3600,
+      uri: 'file:///workspace/apps/web/src/stores/assessment.ts',
     });
 
     emit('assessment.finding_added', {
@@ -97,9 +114,14 @@ describe('assessment handlers', () => {
     expect(run?.validation?.received).toBe(2);
     expect(run?.validation?.rejected).toBe(1);
     expect(run?.validation?.rejection_reasons.missing_evidence).toBe(1);
+    expect(run?.scope?.repo_ref).toBe('branch:main');
+    expect(run?.connector_snapshots?.[0]?.connector_id).toBe('github_default');
     expect(useAssessment.getState().findings.get('fnd_01')?.title).toBe('Validated finding');
     expect(useAssessment.getState().evidence.get('ev_01')?.label).toBe(
       'apps/web/src/stores/assessment.ts:1',
+    );
+    expect(useAssessment.getState().evidence.get('ev_01')?.uri).toBe(
+      'file:///workspace/apps/web/src/stores/assessment.ts',
     );
 
     off();
