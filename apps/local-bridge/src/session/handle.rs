@@ -1,8 +1,10 @@
 //! Per-session state + child process handle.
 
 use crate::agent_runtime::acp::{
-    classify_jsonrpc_error, AcpClient, ClientCapabilities, ContentBlock, FsClientCapabilities,
-    InitializeRequest, NewSessionRequest, PermissionRequest, PromptRequest, SessionNotification,
+    classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical, AcpClient,
+    ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest, NewSessionRequest,
+    PermissionRequest, PromptRequest, SessionNotification, ToolKind, ToolStatus,
+    DEFAULT_RAW_OUTPUT_CAP_BYTES,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::ws::envelope::{ClientCommand, ServerEvent};
@@ -36,6 +38,17 @@ pub struct PendingApproval {
     pub timeout_handle: Arc<tokio::task::AbortHandle>,
 }
 
+/// X.5c.2 — recently-resolved approval kept around so subsequent
+/// `tool_call` / `tool_call_update` notifications can attach
+/// `approved_by_approval_id`. Two lookup keys per entry:
+/// primary `(session_id, toolCallId)`, fallback
+/// `(session_id, approval_tool_call_hash)`. TTL: 60s after resolve.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedApprovalCacheEntry {
+    pub(crate) approval_id: String,
+    pub(crate) expires_at: tokio::time::Instant,
+}
+
 /// ACP-specific runtime state. Present iff `agent_kind = Acp`.
 pub struct AcpRuntime {
     pub client: AcpClient,
@@ -48,6 +61,60 @@ pub struct AcpRuntime {
     pub pending_approvals: dashmap::DashMap<String, PendingApproval>,
     /// Default permission timeout for this agent (from agents.toml).
     pub permission_timeout_ms: u64,
+    /// X.5c.2 correlation: toolCallId → resolved approval (primary).
+    pub(crate) approval_by_tool_call_id: dashmap::DashMap<String, ResolvedApprovalCacheEntry>,
+    /// X.5c.2 correlation: approval_tool_call_hash → resolved approval
+    /// (fallback for when the agent rotates / omits toolCallId).
+    pub(crate) approval_by_full_hash: dashmap::DashMap<String, ResolvedApprovalCacheEntry>,
+}
+
+const APPROVAL_CORRELATION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl AcpRuntime {
+    /// Insert a freshly-resolved approval into both correlation maps.
+    /// Called from `SessionHandle::resolve_approval` on success.
+    /// Stale entries are swept on the next lookup.
+    fn record_resolved_approval(&self, approval_id: &str, tool_call: &serde_json::Value) {
+        let expires_at = tokio::time::Instant::now() + APPROVAL_CORRELATION_TTL;
+        let entry = ResolvedApprovalCacheEntry {
+            approval_id: approval_id.to_string(),
+            expires_at,
+        };
+        if let Some(tcid) = tool_call.get("toolCallId").and_then(|v| v.as_str()) {
+            self.approval_by_tool_call_id
+                .insert(tcid.to_string(), entry.clone());
+        }
+        let hash = sha256_hex_canonical(tool_call);
+        self.approval_by_full_hash.insert(hash, entry);
+    }
+
+    /// Lookup correlation by primary key, then fallback. Returns the
+    /// approval_id if a non-expired entry matches. Sweeps any expired
+    /// entries it touches.
+    fn correlate_approval(
+        &self,
+        tool_call_id: &str,
+        approval_tool_call_hash: Option<&str>,
+    ) -> Option<String> {
+        let now = tokio::time::Instant::now();
+        if let Some(e) = self.approval_by_tool_call_id.get(tool_call_id) {
+            if e.expires_at > now {
+                return Some(e.approval_id.clone());
+            }
+            drop(e);
+            self.approval_by_tool_call_id.remove(tool_call_id);
+        }
+        if let Some(h) = approval_tool_call_hash {
+            if let Some(e) = self.approval_by_full_hash.get(h) {
+                if e.expires_at > now {
+                    return Some(e.approval_id.clone());
+                }
+                drop(e);
+                self.approval_by_full_hash.remove(h);
+            }
+        }
+        None
+    }
 }
 
 pub struct SessionHandle {
@@ -440,6 +507,8 @@ impl SessionHandle {
             acp_session_id: acp_session_id.clone(),
             pending_approvals: dashmap::DashMap::new(),
             permission_timeout_ms: opts.agent.permission_timeout_ms,
+            approval_by_tool_call_id: dashmap::DashMap::new(),
+            approval_by_full_hash: dashmap::DashMap::new(),
         });
 
         let handle = Arc::new(Self {
@@ -576,13 +645,119 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
             };
             emit_event(handle, event).await;
         }
+        "tool_call" | "tool_call_update" => {
+            map_tool_activity(handle, &notif).await;
+        }
         other => {
             tracing::debug!(
                 session = %handle.id,
                 variant = %other,
-                "ACP session/update variant ignored at X.5b scope"
+                "ACP session/update variant ignored at X.5c.2 scope"
             );
         }
+    }
+}
+
+/// X.5c.2 — normalize a `tool_call` / `tool_call_update`
+/// notification into an `ObservedToolActivity` and emit the
+/// per-kind VAC events.
+///
+/// Observe-only: this function never blocks the agent, never
+/// mutates the wire, and never enables fs/terminal capabilities.
+/// It surfaces what the agent already did.
+async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotification) {
+    let raw_params = serde_json::json!({
+        "sessionId": notif.session_id,
+        "update": notif.update,
+    });
+    let Some(mut activity) = extract_observed_tool_activity(
+        &handle.id,
+        &handle.agent_id,
+        handle.agent_kind,
+        &raw_params,
+        DEFAULT_RAW_OUTPUT_CAP_BYTES,
+    ) else {
+        return;
+    };
+
+    // Attach approved_by_approval_id when correlation hits.
+    if let Some(acp) = handle.acp.as_ref() {
+        if let Some(approval_id) = acp.correlate_approval(
+            &activity.tool_call_id,
+            activity.approval_tool_call_hash.as_deref(),
+        ) {
+            activity.approved_by_approval_id = Some(approval_id);
+        }
+    }
+
+    let event_type = match activity.status {
+        ToolStatus::Failed => "tool.failed",
+        ToolStatus::Pending => "tool.observed",
+        _ => "tool.updated",
+    };
+    let payload = serde_json::to_value(&activity).unwrap_or(serde_json::Value::Null);
+    let ts = chrono::Utc::now().to_rfc3339();
+    let event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: event_type.into(),
+        payload: payload.clone(),
+        v: 1,
+        ts: ts.clone(),
+    };
+    emit_event(handle, event).await;
+
+    // Edit-kind activity also drives Review.
+    if matches!(activity.kind, ToolKind::Edit) && !activity.locations.is_empty() {
+        let review_payload = serde_json::json!({
+            "tool_call_id": activity.tool_call_id,
+            "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+            "locations": activity.locations,
+            "raw_input_redacted": activity.raw_input_redacted,
+            "approved_by_approval_id": activity.approved_by_approval_id,
+            "agent_id": activity.agent_id,
+            "agent_kind": activity.agent_kind.as_str(),
+        });
+        let review_event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "review.changeset_updated".into(),
+            payload: review_payload,
+            v: 1,
+            ts: ts.clone(),
+        };
+        emit_event(handle, review_event).await;
+    }
+
+    // Execute-kind activity drives Runtime as a job log line.
+    // Skip the initial pending tool_call (no rawInput / rawOutput
+    // yet) so the runtime stream only carries useful payloads.
+    if matches!(activity.kind, ToolKind::Execute) && !matches!(activity.status, ToolStatus::Pending)
+    {
+        let cmd = activity
+            .raw_input_redacted
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let runtime_payload = serde_json::json!({
+            "tool_call_id": activity.tool_call_id,
+            "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+            "command": cmd,
+            "output": activity.raw_output_redacted,
+            "approved_by_approval_id": activity.approved_by_approval_id,
+            "agent_id": activity.agent_id,
+            "agent_kind": activity.agent_kind.as_str(),
+        });
+        let runtime_event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "runtime.job_log".into(),
+            payload: runtime_payload,
+            v: 1,
+            ts,
+        };
+        emit_event(handle, runtime_event).await;
     }
 }
 
@@ -806,6 +981,12 @@ impl SessionHandle {
             ApprovalIntent::Approve => "approved",
             ApprovalIntent::Reject => "rejected",
         };
+        // X.5c.2 — only populate the correlation cache for approvals
+        // that actually let the tool run. Rejected resolutions don't
+        // get a "approved by you" badge on subsequent activity.
+        if matches!(intent, ApprovalIntent::Approve) {
+            acp.record_resolved_approval(approval_id, &pending.tool_call);
+        }
         let resolution = ApprovalResolution {
             option_id: chosen.option_id.clone(),
             option: chosen.option,
