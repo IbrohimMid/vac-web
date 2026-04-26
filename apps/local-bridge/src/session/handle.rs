@@ -773,14 +773,15 @@ impl SessionHandle {
         // not strip timeout protection from a still-held permission
         // request — otherwise an invalid attempt followed by user
         // silence leaves the agent waiting forever.
-        let (options_snapshot, _peek_keep_pending) = {
+        // Clone only what `resolve_option` needs; the DashMap read
+        // guard is released at the end of this scope, well before any
+        // await.
+        let options_snapshot = {
             let entry = acp
                 .pending_approvals
                 .get(approval_id)
                 .ok_or_else(|| ApprovalResolveError::NotFound(approval_id.to_string()))?;
-            // Clone only what `resolve_option` needs; release the
-            // DashMap read guard before any await.
-            (entry.options.clone(), ())
+            entry.options.clone()
         };
         let chosen = resolve_option(&options_snapshot, explicit_option_id, intent)?;
 

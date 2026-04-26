@@ -625,6 +625,80 @@ the sandbox spike.
 
 ---
 
+## 14. X.5c.1 approval bridge — LOCKED at `2987fa2`
+
+Stage X.5c.1 ships the official ACP approval bridge for
+`session/request_permission`. Locked invariants:
+
+1. **Inbound `session/request_permission` MUST enter the bridge's
+   approval queue.** Never auto-replies on the wire; never bypasses
+   policy. (Receiver-dropped is the only exception, and it
+   auto-cancels the request — the agent never hangs.)
+2. **Browser-side `approval.approve` / `approval.reject` MUST NOT
+   be forwarded to the agent's stdin.** They resolve the held
+   request_permission directly via `AcpClient::respond_permission`.
+   The agent only ever sees the JSON-RPC response.
+3. **Bad option override MUST NOT remove the pending approval.**
+   Validation runs first; only on success does the bridge
+   `remove(...)` + `timeout_handle.abort()`.
+4. **Bad option override MUST NOT abort the auto-cancel timer.**
+   Timer survives invalid attempts so user silence after a typo
+   still terminates the held request via timeout.
+5. **`allow_always` is forbidden by default.** `PERSISTENT_PERMISSION_ALLOWED
+   = false` until a per-profile persistent-permission policy plane
+   exists. Even an explicit override returns
+   `approval.option_forbidden`.
+6. **`optionId` MUST round-trip preserved.** Reject and approve
+   both use ACP wire `outcome:"selected"`; intent is encoded in
+   the chosen option's `kind`.
+
+### 14.1 Locked regression list
+
+| Case | Test |
+| --- | --- |
+| explicit approve with `kind:"reject*"` → `approval.option_kind_mismatch` | `x5c1_explicit_reject_option_on_approve_is_kind_mismatch` |
+| explicit reject with `kind:"allow*"` → `approval.option_kind_mismatch` | `x5c1_explicit_allow_option_on_reject_is_kind_mismatch` |
+| unknown `optionId` → `approval.option_not_found` | `x5c1_unknown_option_id_returns_option_not_found` |
+| `optionId="allow_always"` override → `approval.option_forbidden` | `x5c1_allow_always_is_forbidden_by_policy` |
+| retry with valid choice after invalid override resolves cleanly | `x5c1_explicit_allow_option_on_reject_is_kind_mismatch` (second half) |
+| auto-cancel timer survives invalid override → `approval.resolved {outcome:"timeout"}` arrives | `x5c1_invalid_override_does_not_disarm_timeout` |
+| approve happy path → `selected/allow` → transcript completes | `x5c1_approval_pending_emitted_then_approve_resolves_prompt` |
+| reject happy path → `selected/reject` → task-failed update + `end_turn` | `x5c1_reject_sends_reject_option_and_completes_prompt` |
+
+### 14.2 Audit row contract (success)
+
+```json
+{
+  "event": "resolved",
+  "approval_id": "appr_<ULID>",
+  "option_id": "allow",
+  "outcome": "approved",
+  "agent_id": "<from agents.toml>",
+  "agent_kind": "acp",
+  "toolCallId": "<agent's toolCallId>",
+  "kind": "edit",
+  "locations": [...],
+  "args_hash": "<sha256 of canonical(toolCall)>"
+}
+```
+
+### 14.3 Failure ack codes
+
+```text
+approval.not_acp                  — command sent to a non-ACP session
+approval.not_found                — approval_id unknown or already resolved
+approval.option_not_found         — explicit/auto optionId not present in pending.options
+approval.option_kind_mismatch     — explicit optionId's kind doesn't match approve/reject intent
+approval.option_forbidden         — kind blocked by policy (today: allow_always)
+engine.unreachable                — ACP transport failed mid-resolve
+```
+
+X.5c.1 is **closed**. X.5c.2 (observe-only tool activity mapping) is
+the next implementation gate; X.5c.3 (preventive read/shell control
+plane) remains HOLD.
+
+---
+
 ## 11. ~~Fallback path — selected after §3/§4 captures~~ DEMOTED
 
 The earlier recommendation (`claude --print --output-format stream-json`)
