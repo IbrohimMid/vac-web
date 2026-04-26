@@ -113,7 +113,14 @@ impl AcpClient {
         spawn_writer(stdin, stdin_rx);
 
         // Reader task — owns stdout, dispatches responses/notifications.
-        spawn_reader(stdout, Arc::clone(&pending), updates_tx.clone());
+        // Hand the reader a clone of the writer channel so it can answer
+        // inbound JSON-RPC requests without going through AcpClient.
+        spawn_reader(
+            stdout,
+            Arc::clone(&pending),
+            updates_tx.clone(),
+            stdin_tx.clone(),
+        );
 
         // Stderr pump — bridge debug logs only.
         tokio::spawn(async move {
@@ -245,13 +252,14 @@ fn spawn_reader(
     stdout: tokio::process::ChildStdout,
     pending: Pending,
     updates: broadcast::Sender<SessionNotification>,
+    writer_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
 ) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    if let Err(e) = dispatch_line(&line, &pending, &updates).await {
+                    if let Err(e) = dispatch_line(&line, &pending, &updates, &writer_tx).await {
                         warn!(error=%e, line=%line, "acp reader: dispatch failed");
                     }
                 }
@@ -281,6 +289,7 @@ async fn dispatch_line(
     line: &str,
     pending: &Pending,
     updates: &broadcast::Sender<SessionNotification>,
+    writer_tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
 ) -> Result<()> {
     let v: Value = serde_json::from_str(line).context("non-JSON line on ACP stdout")?;
 
@@ -302,9 +311,11 @@ async fn dispatch_line(
         return Ok(());
     }
 
-    // Inbound request from the agent? Stage X.5b answers a typed
-    // method-not-supported error so the agent doesn't hang waiting for
-    // a response. X.5c will replace this with real handlers.
+    // Inbound request from the agent — Stage X.5b answers with a typed
+    // -32601 "method not handled" so the agent doesn't hang waiting on
+    // X.5c (permission / fs / terminal). The reader holds a clone of
+    // the writer channel so it can respond without bouncing through
+    // AcpClient.
     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
         let id = v.get("id").cloned().unwrap_or(Value::Null);
         let resp = json!({
@@ -316,14 +327,16 @@ async fn dispatch_line(
                 "data": { "method": method }
             }
         });
-        // We don't have direct access to stdin_tx from here; the request
-        // arm is rare in X.5b prompt-only flows. Log and drop. Once X.5c
-        // wires fs/terminal/permission handlers, this branch will route
-        // through a per-method handler and emit a real response.
-        warn!(
-            method,
-            "ACP inbound request ignored at X.5b (would respond: {resp})"
-        );
+        let mut bytes = serde_json::to_vec(&resp)?;
+        bytes.push(b'\n');
+        if writer_tx.send(bytes).is_err() {
+            warn!(
+                method,
+                "ACP inbound request: writer channel closed; cannot respond"
+            );
+        } else {
+            debug!(target: "acp", method, "ACP inbound request answered with -32601");
+        }
         return Ok(());
     }
 
@@ -413,6 +426,57 @@ mod tests {
             data: Value::Null,
         };
         assert_eq!(classify_jsonrpc_error(&e), "agent.internal");
+    }
+
+    #[tokio::test]
+    async fn inbound_request_receives_method_not_handled_response() {
+        // dispatch_line's inbound-request branch must answer with a
+        // JSON-RPC -32601 envelope so the agent doesn't hang waiting
+        // for X.5c handlers (fs / terminal / permission).
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 17,
+            "method": "fs/read_text_file",
+            "params": { "sessionId": "sid", "path": "/tmp/x" }
+        });
+        super::dispatch_line(&inbound.to_string(), &pending, &updates_tx, &writer_tx)
+            .await
+            .expect("dispatch ok");
+
+        let bytes = writer_rx.try_recv().expect("expected response on writer");
+        let resp: Value = serde_json::from_slice(bytes.trim_ascii_end()).unwrap();
+        assert_eq!(resp["jsonrpc"], json!("2.0"));
+        assert_eq!(resp["id"], json!(17));
+        assert_eq!(resp["error"]["code"], json!(-32601));
+        assert_eq!(resp["error"]["data"]["method"], json!("fs/read_text_file"));
+    }
+
+    #[tokio::test]
+    async fn inbound_request_session_request_permission_also_answered() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "session/request_permission",
+            "params": { "sessionId": "sid", "toolCall": {}, "options": [] }
+        });
+        super::dispatch_line(&inbound.to_string(), &pending, &updates_tx, &writer_tx)
+            .await
+            .expect("dispatch ok");
+        let bytes = writer_rx.try_recv().expect("expected response on writer");
+        let resp: Value = serde_json::from_slice(bytes.trim_ascii_end()).unwrap();
+        assert_eq!(resp["error"]["code"], json!(-32601));
+        assert_eq!(
+            resp["error"]["data"]["method"],
+            json!("session/request_permission")
+        );
     }
 
     #[test]

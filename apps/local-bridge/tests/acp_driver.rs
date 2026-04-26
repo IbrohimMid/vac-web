@@ -253,6 +253,37 @@ async fn x5b_acp_child_crash_emits_transcript_error() {
 }
 
 #[tokio::test]
+async fn x5b_prompt_jsonrpc_error_classified_as_bridge_code() {
+    // mock-acp --bad-session-prompt makes session/prompt always
+    // return -32603 data.details="Session not found". The bridge
+    // must surface that as transcript.error{code:"session.not_found"}
+    // — not just a free-form `error` string.
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--bad-session-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1,
+        "id": "cmd_msg",
+        "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "anything" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let err = next_event_of_type(&mut ws, "transcript.error").await;
+    assert_eq!(err["payload"]["reason"], json!("prompt_failed"));
+    assert_eq!(
+        err["payload"]["code"],
+        json!("session.not_found"),
+        "expected classified bridge code, got: {err}"
+    );
+}
+
+#[tokio::test]
 async fn x3_acp_assessor_profile_denied() {
     // executor.code is the only profile cleared for acp; assessor.rtd
     // must be rejected at session.create per Stage X.2 enforcement.

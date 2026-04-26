@@ -273,12 +273,24 @@ impl SessionHandle {
                         }
                         Err(e) => {
                             warn!(error=%e, "ACP session/prompt failed");
+                            // If the underlying error is a JsonRpcError
+                            // from the agent, classify it into a stable
+                            // bridge code so web clients can react
+                            // (session.not_found, agent.protocol_invalid_params,
+                            // agent.protocol_unsupported, agent.internal,
+                            // agent.protocol_error) instead of just a
+                            // free-form string.
+                            let code = e
+                                .downcast_ref::<crate::agent_runtime::acp::JsonRpcError>()
+                                .map(classify_jsonrpc_error)
+                                .unwrap_or("agent.protocol_error");
                             let event = ServerEvent {
                                 seq: 0,
                                 session_id: handle_id.clone(),
                                 event_type: "transcript.error".into(),
                                 payload: serde_json::json!({
                                     "reason": "prompt_failed",
+                                    "code": code,
                                     "error": e.to_string(),
                                 }),
                                 v: 1,

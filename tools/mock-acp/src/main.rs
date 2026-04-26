@@ -37,6 +37,10 @@ use tracing::{debug, info, warn};
 struct Args {
     crash_after: Option<u32>,
     cli_passthrough: bool,
+    /// When set, every `session/prompt` returns a JSON-RPC -32603
+    /// "Session not found" error, so tests can exercise the bridge's
+    /// JsonRpcError → bridge-code classifier path.
+    bad_session_prompt: bool,
 }
 
 fn parse_args() -> Args {
@@ -46,6 +50,7 @@ fn parse_args() -> Args {
         match tok.as_str() {
             "--acp" | "--stdio" => {}
             "--crash-after" => a.crash_after = argv.next().and_then(|v| v.parse().ok()),
+            "--bad-session-prompt" => a.bad_session_prompt = true,
             // Tolerate the legacy CLI-arg shape so old code paths can
             // still exec the binary without choking.
             "--profile" | "--session-id" | "--project" => {
@@ -151,6 +156,19 @@ async fn main() -> Result<()> {
                 writeln_json(&stdout, &resp).await?;
             }
             "session/prompt" => {
+                if args.bad_session_prompt {
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32603,
+                            "message": "Internal error",
+                            "data": { "details": "Session not found" }
+                        }
+                    });
+                    writeln_json(&stdout, &resp).await?;
+                    continue;
+                }
                 let session_id = params
                     .get("sessionId")
                     .and_then(|v| v.as_str())
