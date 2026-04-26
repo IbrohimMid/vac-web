@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 /// is suffixed with the marker below.
 pub const DEFAULT_RAW_OUTPUT_CAP_BYTES: usize = 64 * 1024;
 pub const TRUNCATION_MARKER: &str = "\n…[truncated by VAC bridge]";
+pub const SECRET_REDACTION: &str = "<REDACTED-SECRET>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -192,7 +193,13 @@ pub fn extract_observed_tool_activity(
         .map(|tc| sha256_hex_canonical_excluding(tc, TOOL_CALL_HASH_DROP_FIELDS));
 
     let raw_output_redacted = update.get("rawOutput").cloned().map(|v| match v {
-        Value::String(s) => Value::String(bound_raw_output(&s, raw_output_cap_bytes)),
+        Value::String(s) => {
+            // Redact-then-bound: secret patterns get masked first so a
+            // long secret near the cap doesn't end up half-masked /
+            // half-leaked at the truncation boundary.
+            let scrubbed = redact_raw_output(&s);
+            Value::String(bound_raw_output(&scrubbed, raw_output_cap_bytes))
+        }
         other => other,
     });
 
@@ -285,6 +292,51 @@ fn synthesize_tool_call(tool_call_id: &str, update: &Value) -> Option<Value> {
     } else {
         None
     }
+}
+
+/// Mask known secret-shaped substrings in `rawOutput`. Anchored
+/// patterns:
+///
+/// - Anthropic / OpenAI-style API keys: `sk-…` followed by 16+ tokens
+///   chars (hex / dash / underscore).
+/// - GitHub tokens: `ghp_…` / `gho_…` / `ghu_…` / `ghs_…` / `ghr_…`
+///   followed by 30+ chars.
+/// - Slack bot tokens: `xoxb-…`, `xoxp-…`, `xoxa-…`, `xoxr-…` followed
+///   by structured `-`-separated chunks.
+/// - HTTP `Authorization: Bearer <opaque>` headers.
+/// - AWS access keys: `AKIA[A-Z0-9]{16}`.
+///
+/// This is best-effort — it can't catch arbitrary secrets, only the
+/// well-known shapes most likely to leak through Bash output. Apply
+/// before [`bound_raw_output`] so a half-truncated secret never ends
+/// up unmasked.
+pub fn redact_raw_output(s: &str) -> String {
+    use std::sync::OnceLock;
+    static PATTERNS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    let regexes = PATTERNS.get_or_init(|| {
+        [
+            // sk-... (Anthropic/OpenAI-style). 16+ chars after sk-
+            // (anchor on word boundary so middle-of-word "sk-" doesn't
+            // false-positive).
+            r"\bsk-[A-Za-z0-9_-]{16,}",
+            // GitHub token prefixes.
+            r"\bgh[opusr]_[A-Za-z0-9]{30,}",
+            // Slack tokens.
+            r"\bxox[baprs]-[A-Za-z0-9-]{10,}",
+            // AWS access key id.
+            r"\bAKIA[A-Z0-9]{16}\b",
+            // Authorization: Bearer <token>
+            r"(?i)\bAuthorization:\s*Bearer\s+\S+",
+        ]
+        .iter()
+        .filter_map(|p| regex::Regex::new(p).ok())
+        .collect()
+    });
+    let mut out = s.to_string();
+    for re in regexes {
+        out = re.replace_all(&out, SECRET_REDACTION).into_owned();
+    }
+    out
 }
 
 /// Truncate `s` to `cap_bytes` (rounded up to the next char boundary)
@@ -599,6 +651,58 @@ mod tests {
         assert!(dto.diffs[0].old_text.is_none());
         assert_eq!(dto.diffs[1].path, "/repo/b.txt");
         assert_eq!(dto.diffs[1].old_text.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn redact_raw_output_masks_known_secret_shapes() {
+        let s = "leaked sk-ant-1234567890abcdef and ghp_aabbccddeeff112233445566778899AABB \
+                 plus AKIAABCDEFGHIJKLMNOP and Authorization: Bearer eyJhbGciOiJI \
+                 plus xoxb-12345-67890-abcdefghij";
+        let red = redact_raw_output(s);
+        assert!(!red.contains("sk-ant-1234"));
+        assert!(!red.contains("ghp_aabbcc"));
+        assert!(!red.contains("AKIAABCDEFGHIJKLMNOP"));
+        assert!(!red.contains("eyJhbGciOiJI"));
+        assert!(!red.contains("xoxb-12345-67890"));
+        assert!(red.contains(SECRET_REDACTION));
+        // Surrounding "leaked" / "and" stay so log context is preserved.
+        assert!(red.contains("leaked"));
+        assert!(red.contains("and"));
+    }
+
+    #[test]
+    fn redact_then_bound_in_dto() {
+        // 70 KB of `x` followed by an API key — bound the input so
+        // truncation never strips the masked secret.
+        let mut s = "x".repeat(70 * 1024);
+        s.push_str(" sk-ant-1234567890abcdef0000");
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tc-1",
+                "kind": "execute",
+                "status": "completed",
+                "rawInput": { "command": "echo …" },
+                "rawOutput": s
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "claude",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .unwrap();
+        let out = dto
+            .raw_output_redacted
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .unwrap();
+        // Truncation kicks in on the (now-redacted) string.
+        assert!(out.ends_with(TRUNCATION_MARKER) || out.len() <= DEFAULT_RAW_OUTPUT_CAP_BYTES);
+        assert!(!out.contains("sk-ant-1234567890"));
     }
 
     #[test]

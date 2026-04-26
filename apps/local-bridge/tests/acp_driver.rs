@@ -1369,3 +1369,48 @@ async fn x5c2_tool_failed_audit_row_is_warn_not_error() {
         );
     }
 }
+
+#[tokio::test]
+async fn x5c2_raw_output_secret_patterns_are_redacted() {
+    // Bash command output containing an Anthropic-style API key MUST
+    // be masked before reaching the runtime.job_log payload AND the
+    // base tool.* event. mock-acp injects "sk-ant-…" via
+    // emit_execute_sequence; the bridge runs redact_raw_output
+    // before bound_raw_output so the secret never lands on the wire.
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--emit-execute-tool".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "leaky bash" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let _observed = next_event_of_type(&mut ws, "tool.observed").await;
+    // map_tool_activity emits tool.updated BEFORE runtime.job_log
+    // for execute kind, so consume in that order.
+    let updated = next_event_of_type(&mut ws, "tool.updated").await;
+    let updated_str = updated.to_string();
+    assert!(
+        !updated_str.contains("sk-ant-1234567890abcdef"),
+        "secret leaked into tool.updated payload: {updated_str}"
+    );
+    assert!(
+        updated_str.contains("REDACTED-SECRET"),
+        "expected secret-redaction marker on tool.updated, got: {updated_str}"
+    );
+    let runtime = next_event_of_type(&mut ws, "runtime.job_log").await;
+    let runtime_str = runtime.to_string();
+    assert!(
+        !runtime_str.contains("sk-ant-1234567890abcdef"),
+        "secret leaked into runtime payload: {runtime_str}"
+    );
+    assert!(
+        runtime_str.contains("REDACTED-SECRET"),
+        "expected secret-redaction marker on runtime, got: {runtime_str}"
+    );
+}

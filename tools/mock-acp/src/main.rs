@@ -640,6 +640,10 @@ async fn emit_execute_sequence(
     tool_call_id: &str,
     oversized: bool,
 ) {
+    // Inject an Anthropic-style key into the rawOutput so X.5c.2's
+    // redact_raw_output is exercised end-to-end. Even when oversized
+    // is false the key is present at the end.
+    let secret_marker = "sk-ant-1234567890abcdef0000abcdef";
     let pending = json!({
         "jsonrpc": "2.0",
         "method": "session/update",
@@ -658,9 +662,12 @@ async fn emit_execute_sequence(
     });
     let _ = writeln_json(stdout, &pending).await;
     let raw_output = if oversized {
-        Value::String("z".repeat(200_000))
+        let mut s = "z".repeat(200_000);
+        s.push(' ');
+        s.push_str(secret_marker);
+        Value::String(s)
     } else {
-        Value::String("hello from real bash\n".into())
+        Value::String(format!("hello from real bash\n{secret_marker}\n"))
     };
     let completed = json!({
         "jsonrpc": "2.0",

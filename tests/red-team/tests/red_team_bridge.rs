@@ -39,7 +39,7 @@ async fn start_bridge() -> String {
         started_at: Instant::now(),
         sessions: SessionRegistry::new(mock_engine_bin()),
         auth: AuthState::new_dev(),
-        audit: AuditFacility::new(tmp.path().to_path_buf()),
+        audit: Arc::new(AuditFacility::new(tmp.path().to_path_buf())),
         pairing: PairingStore::new(),
         profile_root: PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
