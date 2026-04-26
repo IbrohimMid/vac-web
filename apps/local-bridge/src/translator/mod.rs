@@ -95,6 +95,13 @@ pub async fn dispatch_command(
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
 
+            // Workflow selection: optional `workflow_id` from client.
+            let requested_workflow_id = cmd
+                .payload
+                .get("workflow_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
             // Validate profile exists before spawn — avoids ack-ok-then-crash.
             let profile_path = state.profile_root.join(format!("{profile_id}.yaml"));
             if !profile_path.exists() {
@@ -222,12 +229,34 @@ pub async fn dispatch_command(
                 }
             }
 
+            // Validate workflow_id. Unknown id → ack false immediately; no
+            // session is created. Arbitrary paths/URLs are rejected by the
+            // allowlist (registry only contains bundled compile-time specs).
+            if let Some(wid) = requested_workflow_id.as_deref() {
+                use crate::workflows::WorkflowRegistry;
+                if WorkflowRegistry::global().get(wid).is_none() {
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "workflow.not_found".into(),
+                                message: format!("workflow '{wid}' is not a bundled workflow"),
+                            }),
+                        },
+                        events,
+                    );
+                }
+            }
+            let effective_workflow_id = requested_workflow_id;
+
             match state
                 .sessions
-                .create_with_agent(
+                .create_with_agent_and_workflow(
                     profile_id.clone(),
                     project_root.clone(),
                     requested_agent_id.as_deref(),
+                    effective_workflow_id,
                 )
                 .await
             {
@@ -242,66 +271,73 @@ pub async fn dispatch_command(
                             "project_root": project_root,
                             "agent_id": handle.agent_id,
                             "agent_kind": handle.agent_kind.as_str(),
+                            "workflow_id": handle.workflow_spec_id,
                         }),
                     );
                     let now = chrono::Utc::now().to_rfc3339();
                     use crate::notify::{
                         activity_event, notify_event, system_pulse_event, Lane, Severity,
                     };
+                    let session_events = vec![ServerEvent {
+                        seq: 0,
+                        session_id: handle.id.clone(),
+                        event_type: "session.ready".into(),
+                        // Stage X.4 — emit agent_id + agent_kind so
+                        // web clients can render which runtime is
+                        // backing the session and lock UI affordances
+                        // accordingly. Pre-X.4 fields preserved.
+                        payload: json!({
+                            "session_id": handle.id,
+                            "profile_id": handle.profile_id,
+                            "agent_id": handle.agent_id,
+                            "agent_kind": handle.agent_kind.as_str(),
+                            "workflow_id": handle.workflow_spec_id,
+                            "workflow_name": handle.workflow_spec_name,
+                        }),
+                        v: 1,
+                        ts: now.clone(),
+                    }];
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
                             ok: true,
                             error: None,
                         },
-                        vec![
-                            ServerEvent {
-                                seq: 0,
-                                session_id: handle.id.clone(),
-                                event_type: "session.ready".into(),
-                                // Stage X.4 — emit agent_id + agent_kind so
-                                // web clients can render which runtime is
-                                // backing the session and lock UI affordances
-                                // accordingly. Pre-X.4 fields preserved.
-                                payload: json!({
-                                    "session_id": handle.id,
-                                    "profile_id": handle.profile_id,
-                                    "agent_id": handle.agent_id,
-                                    "agent_kind": handle.agent_kind.as_str(),
-                                }),
-                                v: 1,
-                                ts: now.clone(),
-                            },
-                            ServerEvent {
-                                seq: 0,
-                                session_id: handle.id.clone(),
-                                event_type: "system.capabilities".into(),
-                                payload: crate::capabilities::capabilities_payload(),
-                                v: 1,
-                                ts: now.clone(),
-                            },
-                            notify_event(
-                                handle.id.clone(),
-                                Lane::Transient,
-                                Severity::Ok,
-                                "session",
-                                "Session ready",
-                                &format!("Profile: {}", handle.profile_id),
-                            ),
-                            system_pulse_event(
-                                handle.id.clone(),
-                                vec![
-                                    ("profile", handle.profile_id.as_str(), "ok"),
-                                    ("session_count", "1 active", "ok"),
-                                ],
-                            ),
-                            activity_event(
-                                handle.id.clone(),
-                                "session",
-                                Severity::Info,
-                                &format!("Session created with {}", handle.profile_id),
-                            ),
-                        ],
+                        {
+                            let mut out = session_events;
+                            out.extend(vec![
+                                ServerEvent {
+                                    seq: 0,
+                                    session_id: handle.id.clone(),
+                                    event_type: "system.capabilities".into(),
+                                    payload: crate::capabilities::capabilities_payload(),
+                                    v: 1,
+                                    ts: now.clone(),
+                                },
+                                notify_event(
+                                    handle.id.clone(),
+                                    Lane::Transient,
+                                    Severity::Ok,
+                                    "session",
+                                    "Session ready",
+                                    &format!("Profile: {}", handle.profile_id),
+                                ),
+                                system_pulse_event(
+                                    handle.id.clone(),
+                                    vec![
+                                        ("profile", handle.profile_id.as_str(), "ok"),
+                                        ("session_count", "1 active", "ok"),
+                                    ],
+                                ),
+                                activity_event(
+                                    handle.id.clone(),
+                                    "session",
+                                    Severity::Info,
+                                    &format!("Session created with {}", handle.profile_id),
+                                ),
+                            ]);
+                            out
+                        },
                     )
                 }
                 Err(e) => {

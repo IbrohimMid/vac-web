@@ -43,11 +43,19 @@ Each session spawns a `WorkflowProcess` (VIL ServiceProcess equivalent):
 YAML-defined, bundled at compile time via `include_str!`. No runtime file I/O.
 No `vil_vwfd` dependency yet — adapter pattern first, real dependency when stable.
 
+Workflow selection is **allowlisted + bundled-only**: clients may request any
+workflow id via `session.create { workflow_id: "..." }`, but only the 6 specs
+compiled into the binary at build time are valid. An unknown id is rejected at
+`session.create` with `ack ok=false` and `error.code="workflow.not_found"`; no
+session is created. There
+is no runtime upload endpoint and no arbitrary path / URL / raw-YAML acceptance.
+
 ```text
 workflows/
-  build.basic.yaml              — default: prompt → observe → done
+  build.basic.yaml              — minimal: prompt → observe → done
+  build.observe-tools.yaml      — default: prompt, tool observation, runtime log
   build.approval-gated-edit.yaml — approval gate before tool observation
-  build.observe-tools.yaml      — with runtime log collection
+  build.full-cockpit.yaml       — full: prompt, observe, review, runtime, gate, end
   assess.report.yaml            — assessment workflow
   handoff.package.yaml          — handoff artifact collection
 ```

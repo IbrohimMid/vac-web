@@ -83,6 +83,10 @@ export function registerWorkflowHandlers(transport: TransportHandle): () => void
         step_id: typeof p['step_id'] === 'string' ? p['step_id'] : '',
         tool_call_id: typeof p['tool_call_id'] === 'string' ? p['tool_call_id'] : '',
         ts: typeof p['ts'] === 'string' ? p['ts'] : ev.ts,
+        ...(typeof p['source_event_type'] === 'string' && { source_event_type: p['source_event_type'] }),
+        ...(typeof p['review_diff_count'] === 'number' && { review_diff_count: p['review_diff_count'] }),
+        ...(typeof p['runtime_command_preview'] === 'string' && { runtime_command_preview: p['runtime_command_preview'] }),
+        ...(typeof p['approval_id'] === 'string' && { approval_id: p['approval_id'] }),
       });
     }),
   );

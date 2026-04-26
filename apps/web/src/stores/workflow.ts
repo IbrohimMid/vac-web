@@ -19,6 +19,10 @@ export interface WorkflowArtifact {
   step_id: string;
   tool_call_id: string;
   ts: string;
+  source_event_type?: string;
+  review_diff_count?: number;
+  runtime_command_preview?: string;
+  approval_id?: string;
 }
 
 export interface WorkflowRun {
@@ -76,6 +80,10 @@ interface WorkflowSlice {
     step_id: string;
     tool_call_id: string;
     ts: string;
+    source_event_type?: string;
+    review_diff_count?: number;
+    runtime_command_preview?: string;
+    approval_id?: string;
   }): void;
 
   applyWorkflowCompleted(p: { session_id: string; run_id: string }): void;
@@ -185,6 +193,10 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
             step_id: p.step_id,
             tool_call_id: p.tool_call_id,
             ts: p.ts,
+            ...(p.source_event_type !== undefined && { source_event_type: p.source_event_type }),
+            ...(p.review_diff_count !== undefined && { review_diff_count: p.review_diff_count }),
+            ...(p.runtime_command_preview !== undefined && { runtime_command_preview: p.runtime_command_preview }),
+            ...(p.approval_id !== undefined && { approval_id: p.approval_id }),
           },
         ],
       });

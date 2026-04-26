@@ -82,6 +82,19 @@ describe('workflow store', () => {
     expect(run.artifacts[0]?.kind).toBe('review_diff');
   });
 
+  it('applyWorkflowArtifactCreated preserves source_event_type', () => {
+    useWorkflow.getState().applyWorkflowStarted(BASE);
+    useWorkflow.getState().applyWorkflowArtifactCreated({
+      session_id: 'sess1', run_id: 'run_01',
+      artifact_id: 'art_02', kind: 'review_diff',
+      step_id: 'step_2', tool_call_id: 'tc2',
+      ts: '2026-01-01T00:00:00Z',
+      source_event_type: 'review.changeset_updated',
+    });
+    const run = selectSessionWorkflowRun('sess1')!;
+    expect(run.artifacts[0]?.source_event_type).toBe('review.changeset_updated');
+  });
+
   it('applyWorkflowCompleted sets status completed', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
     useWorkflow.getState().applyWorkflowCompleted({ session_id: 'sess1', run_id: 'run_01' });

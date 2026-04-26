@@ -22,6 +22,31 @@ const STATUS_COLOR: Record<string, string> = {
   failed: 'var(--warn)',
 };
 
+const ARTIFACT_KIND_CHIPS: Record<string, string> = {
+  review_diff: 'review diff',
+  runtime_log: 'runtime log',
+  approval: 'approval',
+  tool_activity: 'tool activity',
+};
+
+function ArtifactKindChip({ kind }: { kind: string }) {
+  return (
+    <span
+      className={`workflow-artifact-chip workflow-artifact-chip--${kind}`}
+      style={{
+        fontSize: 10,
+        padding: '1px 5px',
+        borderRadius: 3,
+        background: 'var(--surface-2)',
+        color: 'var(--text-2)',
+        marginRight: 4,
+      }}
+    >
+      {ARTIFACT_KIND_CHIPS[kind] ?? kind}
+    </span>
+  );
+}
+
 function StepRow({ step }: { step: WorkflowStep }) {
   return (
     <div
@@ -55,10 +80,10 @@ function ArtifactRow({ artifact }: { artifact: WorkflowArtifact }) {
   return (
     <div
       className="workflow-artifact-row"
-      style={{ display: 'flex', gap: 6, padding: '2px 0 2px 16px', fontSize: 12, color: 'var(--text-2)' }}
+      style={{ display: 'flex', gap: 6, padding: '2px 0 2px 16px', fontSize: 12, color: 'var(--text-2)', alignItems: 'center' }}
     >
       <span>↳</span>
-      <span>{artifact.kind === 'review_diff' ? 'Review diff' : 'Runtime log'}</span>
+      <ArtifactKindChip kind={artifact.kind} />
       <code style={{ fontSize: 11, opacity: 0.7 }}>{artifact.tool_call_id.slice(0, 8)}…</code>
     </div>
   );
@@ -71,11 +96,17 @@ interface Props {
 export function WorkflowRail({ sessionId: propSessionId }: Props) {
   const sessionId = useSession((s) => propSessionId ?? s.sessionId);
   const run = useWorkflow((s) => (sessionId ? s.runs.get(sessionId) : undefined));
+  const workflowId = useSession((s) => s.workflowId);
+  const workflowName = useSession((s) => s.workflowName);
 
   if (!run) {
     return (
       <section aria-label="Workflow run" style={{ padding: 16, color: 'var(--text-3)', fontSize: 13 }}>
-        No workflow run yet.
+        {workflowName
+          ? `Workflow: ${workflowName} — waiting for prompt`
+          : workflowId
+            ? `Workflow: ${workflowId} — waiting for prompt`
+            : 'Waiting for prompt to start workflow'}
       </section>
     );
   }
@@ -86,6 +117,9 @@ export function WorkflowRail({ sessionId: propSessionId }: Props) {
       : run.status === 'failed'
         ? 'var(--warn)'
         : 'var(--accent)';
+
+  const runIdShort = run.run_id.slice(-6);
+  const specName = run.spec_name || workflowName || workflowId || run.spec_id;
 
   return (
     <section aria-label="Workflow run" style={{ padding: '12px 16px' }}>
@@ -100,7 +134,10 @@ export function WorkflowRail({ sessionId: propSessionId }: Props) {
           fontWeight: 600,
         }}
       >
-        <span>{run.spec_name}</span>
+        <span className="workflow-spec-name">{specName}</span>
+        <code style={{ fontSize: 10, fontWeight: 400, color: 'var(--text-3)', marginLeft: 4 }}>
+          #{runIdShort}
+        </code>
         <span style={{ fontSize: 11, color: statusColor, marginLeft: 'auto' }}>
           {run.status}
         </span>

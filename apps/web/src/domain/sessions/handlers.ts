@@ -1,6 +1,7 @@
 // Wire session lifecycle events → sessions-list store.
 
 import { useSessions, type SessionRow, type SessionStatus } from '../../stores/sessions';
+import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
 function asStatus(raw: string | undefined): SessionStatus {
@@ -64,8 +65,12 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
 
   offs.push(
     transport.on('session.ready', (ev) => {
-      const row = coerceRow(ev.payload as SessionChangedPayload);
+      const p = ev.payload as (SessionChangedPayload & { workflow_id?: string; workflow_name?: string }) | null;
+      const row = coerceRow(p as SessionChangedPayload);
       if (row) useSessions.getState().upsert(row);
+      if (p?.workflow_id) {
+        useSession.getState().setWorkflowMeta(p.workflow_id, p.workflow_name ?? null);
+      }
     }),
   );
 

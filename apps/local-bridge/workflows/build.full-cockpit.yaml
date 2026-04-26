@@ -1,0 +1,45 @@
+version: 1
+metadata:
+  id: build.full-cockpit
+  name: Full Cockpit Build
+  description: Full workflow with prompt, tool observation, approval, review, runtime, and gate decision.
+activities:
+  - id: trigger
+    kind: trigger
+    label: Trigger
+  - id: prompt_agent
+    kind: prompt_agent
+    label: Prompt Agent
+  - id: observe_tools
+    kind: observe_tool_activity
+    label: Observe Tools
+  - id: collect_review
+    kind: collect_review_diff
+    label: Collect Review
+  - id: collect_runtime
+    kind: collect_runtime_log
+    label: Collect Runtime
+  - id: gate
+    kind: gate_decision
+    label: Gate Decision
+  - id: end
+    kind: end
+    label: End
+flows:
+  - from: trigger
+    to: prompt_agent
+  - from: prompt_agent
+    on: message.submit
+    to: observe_tools
+  - from: observe_tools
+    on: tool.observed
+    to: collect_review
+  - from: collect_review
+    on: review.changeset_updated
+    to: collect_runtime
+  - from: collect_runtime
+    on: runtime.job_log
+    to: gate
+  - from: gate
+    on: transcript.completed
+    to: end

@@ -29,6 +29,10 @@ static BUNDLED: &[(&str, &str)] = &[
         "handoff.package",
         include_str!("../../workflows/handoff.package.yaml"),
     ),
+    (
+        "build.full-cockpit",
+        include_str!("../../workflows/build.full-cockpit.yaml"),
+    ),
 ];
 
 pub struct WorkflowRegistry {
@@ -61,7 +65,7 @@ impl WorkflowRegistry {
     }
 
     pub fn default_build_spec_id() -> &'static str {
-        "build.basic"
+        "build.observe-tools"
     }
 }
 

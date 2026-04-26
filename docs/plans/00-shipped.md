@@ -89,6 +89,17 @@ Introduced in `feat(bridge): introduce VIL-style workflow layer for cockpit orch
 - **Tests**: backend spec parser tests, adapter tests, executor advance tests, FE store tests, FE WorkflowRail DOM render tests.
 - **Guard**: no `vil_vwfd` dependency, no workflow provisioning, no X.5c.3, no Stage K.
 
+## Workflow selection + rich artifacts
+
+- **Default workflow** changed from `build.basic` to `build.observe-tools`.
+- **New bundled spec** `build.full-cockpit`: prompt → observe tools → collect review → collect runtime → gate decision → end.
+- **Session create workflow selection**: `session.create` accepts optional `workflow_id`. If found in the bundled registry, that spec is used for the session's WorkflowProcess; if not found, `session.create` acks `ok=false` with `error.code="workflow.not_found"` and no session is created. `session.ready` includes `workflow_id` and `workflow_name`.
+- **`SessionHandle.workflow_spec_id`**: handle tracks the active spec id; included in `session.ready` payload.
+- **Richer artifact payloads**: `workflow.artifact.created` now includes `source_event_type` and `ts` in addition to existing fields.
+- **FE**: `useSession` store gains `workflowId`; populated from `session.ready`.
+- **FE WorkflowRail**: shows spec name, compact run_id (last 6 chars), artifact kind chips (review_diff, runtime_log, approval, tool_activity), updated empty state "Waiting for prompt to start workflow".
+- **Guard**: allowlisted + bundled-only. No upload endpoint, no file path/URL/raw YAML from client.
+
 ## Held / not started
 
 - **Stage K (VIL / VWFD live integration)** — placeholder UI only; held pending upstream `vil-expr` event names + schemas. See [`30-stage-k-vil-vwfd.md`](./30-stage-k-vil-vwfd.md).

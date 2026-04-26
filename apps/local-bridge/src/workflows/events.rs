@@ -102,6 +102,8 @@ pub fn workflow_artifact_created(
     kind: &str,
     step_id: &str,
     tool_call_id: &str,
+    source_event_type: &str,
+    ts: &str,
 ) -> ServerEvent {
     make_event(
         session_id,
@@ -112,6 +114,8 @@ pub fn workflow_artifact_created(
             "kind": kind,
             "step_id": step_id,
             "tool_call_id": tool_call_id,
+            "source_event_type": source_event_type,
+            "ts": ts,
         }),
     )
 }

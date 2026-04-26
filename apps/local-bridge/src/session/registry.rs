@@ -74,6 +74,22 @@ impl SessionRegistry {
         project_root: PathBuf,
         agent_id: Option<&str>,
     ) -> anyhow::Result<SessionHandleRef> {
+        self.create_with_agent_and_workflow(profile_id, project_root, agent_id, None)
+            .await
+    }
+
+    /// Workflow-selection entry point: optional `workflow_id` picks the
+    /// spec for the session's WorkflowProcess. `None` uses the registry
+    /// default. An unknown `workflow_id` is handled by the caller (who
+    /// should emit `workflow.not_found`) and `None` is passed here to
+    /// use the default.
+    pub async fn create_with_agent_and_workflow(
+        &self,
+        profile_id: String,
+        project_root: PathBuf,
+        agent_id: Option<&str>,
+        workflow_id: Option<String>,
+    ) -> anyhow::Result<SessionHandleRef> {
         let session_id = format!("sess_{}", ulid::Ulid::new());
         let agent = match agent_id {
             Some(id) => self
@@ -95,6 +111,7 @@ impl SessionRegistry {
             project_root,
             agent,
             audit: self.audit.get().cloned(),
+            workflow_id,
         };
         let handle = SessionHandle::spawn(opts).await?;
         self.inner.insert(session_id.clone(), Arc::clone(&handle));

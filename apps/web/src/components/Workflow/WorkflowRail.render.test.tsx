@@ -10,7 +10,7 @@ import { WorkflowRail } from './WorkflowRail';
 
 function resetStores() {
   useWorkflow.setState({ runs: new Map() });
-  useSession.setState({ sessionId: 'sess1' });
+  useSession.setState({ sessionId: 'sess1', workflowId: null, workflowName: null });
 }
 
 function seedRun() {
@@ -28,7 +28,7 @@ describe('WorkflowRail DOM rendering', () => {
 
   it('renders empty state when no run exists', () => {
     render(<WorkflowRail sessionId="sess1" />);
-    expect(screen.getByText('No workflow run yet.')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for prompt to start workflow')).toBeInTheDocument();
   });
 
   it('renders workflow name when run exists', () => {
@@ -117,7 +117,7 @@ describe('WorkflowRail DOM rendering', () => {
       session_id: 'other', run_id: 'run_X', spec_id: 'build.basic', spec_name: 'Other Workflow',
     });
     render(<WorkflowRail sessionId="sess1" />);
-    expect(screen.getByText('No workflow run yet.')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for prompt to start workflow')).toBeInTheDocument();
     expect(screen.queryByText('Other Workflow')).not.toBeInTheDocument();
   });
 
@@ -153,5 +153,76 @@ describe('WorkflowRail DOM rendering', () => {
     render(<WorkflowRail sessionId="sess1" />);
     expect(screen.getByText('Second Run')).toBeInTheDocument();
     expect(screen.queryByText('First Run')).not.toBeInTheDocument();
+  });
+
+  it('shows spec_name in rail header', () => {
+    useWorkflow.getState().applyWorkflowStarted({
+      session_id: 'sess1',
+      run_id: 'run_01',
+      spec_id: 'build.observe-tools',
+      spec_name: 'Observe Tools Build',
+    });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('Observe Tools Build')).toBeInTheDocument();
+  });
+
+  it('renders artifact kind chip for review_diff', () => {
+    seedRun();
+    useWorkflow.getState().applyWorkflowStepStarted({
+      session_id: 'sess1', run_id: 'run_01', step_id: 'step_2',
+      activity_kind: 'collect_review_diff', label: 'Collect diff',
+    });
+    useWorkflow.getState().applyWorkflowArtifactCreated({
+      session_id: 'sess1', run_id: 'run_01',
+      artifact_id: 'art_01', kind: 'review_diff',
+      step_id: 'step_2', tool_call_id: 'tc_review_001',
+      ts: '2026-01-01T00:00:00Z',
+    });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('review diff')).toBeInTheDocument();
+  });
+
+  it('renders artifact kind chip for runtime_log', () => {
+    seedRun();
+    useWorkflow.getState().applyWorkflowStepStarted({
+      session_id: 'sess1', run_id: 'run_01', step_id: 'step_3',
+      activity_kind: 'collect_runtime_log', label: 'Collect runtime',
+    });
+    useWorkflow.getState().applyWorkflowArtifactCreated({
+      session_id: 'sess1', run_id: 'run_01',
+      artifact_id: 'art_02', kind: 'runtime_log',
+      step_id: 'step_3', tool_call_id: 'tc_runtime_001',
+      ts: '2026-01-01T00:00:00Z',
+    });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('runtime log')).toBeInTheDocument();
+  });
+
+  it('shows run_id last 6 chars compactly', () => {
+    useWorkflow.getState().applyWorkflowStarted({
+      session_id: 'sess1',
+      run_id: 'run_ABCDEF123456',
+      spec_id: 'build.basic',
+      spec_name: 'Basic Build Workflow',
+    });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('#123456')).toBeInTheDocument();
+  });
+
+  it('empty state text is "Waiting for prompt to start workflow"', () => {
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('Waiting for prompt to start workflow')).toBeInTheDocument();
+  });
+
+  it('empty state shows workflow name before run starts', () => {
+    useSession.setState({ workflowId: 'build.observe-tools', workflowName: 'Observe Tools Build' });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('Workflow: Observe Tools Build — waiting for prompt')).toBeInTheDocument();
+  });
+
+  it('empty state shows workflow id when name absent', () => {
+    useSession.setState({ workflowId: 'build.basic', workflowName: null });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(screen.getByText('Workflow: build.basic — waiting for prompt')).toBeInTheDocument();
   });
 });

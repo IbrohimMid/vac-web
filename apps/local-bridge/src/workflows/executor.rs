@@ -331,16 +331,18 @@ impl WorkflowExecutor {
     }
 
     fn maybe_create_artifact(&mut self, signal: &WorkflowAdvance) -> Vec<ServerEvent> {
-        let (artifact_kind, tool_call_id, step_kind) = match signal {
+        let (artifact_kind, tool_call_id, step_kind, source_event_type) = match signal {
             WorkflowAdvance::ReviewDiff { tool_call_id } => (
                 "review_diff",
                 tool_call_id.clone(),
                 ActivityKind::CollectReviewDiff,
+                "review.changeset_updated",
             ),
             WorkflowAdvance::RuntimeLog { tool_call_id } => (
                 "runtime_log",
                 tool_call_id.clone(),
                 ActivityKind::CollectRuntimeLog,
+                "runtime.job_log",
             ),
             _ => return vec![],
         };
@@ -361,6 +363,8 @@ impl WorkflowExecutor {
             artifact_kind,
             &step_id,
             &tool_call_id,
+            source_event_type,
+            &ts,
         );
         self.artifacts.push(WorkflowArtifact {
             artifact_id,

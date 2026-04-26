@@ -108,6 +108,33 @@ async fn create_session(ws: &mut Ws, profile: &str) -> String {
     panic!("never saw session.ready");
 }
 
+/// Create a session with an explicit workflow_id and return (session_id, session.ready payload).
+async fn create_session_with_workflow(
+    ws: &mut Ws,
+    profile: &str,
+    workflow_id: &str,
+) -> (String, serde_json::Value) {
+    send(
+        ws,
+        json!({
+            "id": "cmd_create_wf",
+            "session_id": "sess_pre",
+            "type": "session.create",
+            "payload": { "profile_id": profile, "project_root": "/tmp/p", "workflow_id": workflow_id },
+            "v": 1
+        }),
+    )
+    .await;
+    for _ in 0..10 {
+        let v = recv(ws).await;
+        if v["type"] == "session.ready" {
+            let sid = v["session_id"].as_str().unwrap().to_string();
+            return (sid, v);
+        }
+    }
+    panic!("never saw session.ready");
+}
+
 #[tokio::test]
 async fn explicit_session_close_removes_from_registry() {
     let (url, state) = start_bridge().await;
@@ -195,6 +222,143 @@ async fn session_create_with_missing_profile_rejected() {
         }
     }
     panic!("no ack");
+}
+
+#[tokio::test]
+async fn default_workflow_is_observe_tools() {
+    // Verify that a session created without workflow_id uses build.observe-tools.
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_hello(&url).await;
+    send(
+        &mut ws,
+        json!({
+            "id": "cmd_create_def",
+            "session_id": "sess_pre",
+            "type": "session.create",
+            "payload": { "profile_id": "assessor.rtd@1.0.0", "project_root": "/tmp/p" },
+            "v": 1
+        }),
+    )
+    .await;
+    for _ in 0..10 {
+        let v = recv(&mut ws).await;
+        if v["type"] == "session.ready" {
+            assert_eq!(
+                v["payload"]["workflow_id"], "build.observe-tools",
+                "default workflow must be build.observe-tools"
+            );
+            return;
+        }
+    }
+    panic!("never saw session.ready");
+}
+
+#[tokio::test]
+async fn session_create_with_valid_workflow_id_in_session_ready() {
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_hello(&url).await;
+    let (_sid, ready_payload) =
+        create_session_with_workflow(&mut ws, "assessor.rtd@1.0.0", "build.basic").await;
+    assert_eq!(
+        ready_payload["payload"]["workflow_id"], "build.basic",
+        "session.ready must echo the requested workflow_id"
+    );
+    assert_eq!(
+        ready_payload["payload"]["workflow_name"], "Basic Build Workflow",
+        "session.ready must include the workflow display name"
+    );
+}
+
+#[tokio::test]
+async fn path_like_workflow_id_rejected() {
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_hello(&url).await;
+    for wid in [
+        "../../x.yaml",
+        "/tmp/x.yaml",
+        "file:///etc/passwd",
+        "http://example.com/evil.yaml",
+    ] {
+        send(
+            &mut ws,
+            json!({
+                "id": format!("cmd_{}", wid.len()),
+                "session_id": "sess_pre",
+                "type": "session.create",
+                "payload": {
+                    "profile_id": "assessor.rtd@1.0.0",
+                    "project_root": "/tmp/p",
+                    "workflow_id": wid
+                },
+                "v": 1
+            }),
+        )
+        .await;
+        let mut saw_ack_false = false;
+        for _ in 0..10 {
+            let v = recv(&mut ws).await;
+            if v.get("ackOf") == Some(&json!(format!("cmd_{}", wid.len()))) {
+                assert_eq!(
+                    v["ok"], false,
+                    "path-like workflow_id '{wid}' must be rejected"
+                );
+                assert_eq!(v["error"]["code"], "workflow.not_found");
+                saw_ack_false = true;
+                break;
+            }
+        }
+        assert!(saw_ack_false, "never saw ack false for '{wid}'");
+    }
+}
+
+#[tokio::test]
+async fn session_create_with_invalid_workflow_id_acks_false() {
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_hello(&url).await;
+    send(
+        &mut ws,
+        json!({
+            "id": "cmd_create_bad_wf",
+            "session_id": "sess_pre",
+            "type": "session.create",
+            "payload": {
+                "profile_id": "assessor.rtd@1.0.0",
+                "project_root": "/tmp/p",
+                "workflow_id": "nonexistent.workflow.xyz"
+            },
+            "v": 1
+        }),
+    )
+    .await;
+    // Expect ack with ok: false and code workflow.not_found.
+    // No session.ready should appear.
+    let mut saw_ack_false = false;
+    let mut saw_session_ready = false;
+    for _ in 0..15 {
+        let v = recv(&mut ws).await;
+        if v.get("ackOf") == Some(&json!("cmd_create_bad_wf")) {
+            assert_eq!(v["ok"], false, "ack must be false for unknown workflow_id");
+            assert_eq!(
+                v["error"]["code"], "workflow.not_found",
+                "error code must be workflow.not_found"
+            );
+            saw_ack_false = true;
+        }
+        if v["type"] == "session.ready" {
+            saw_session_ready = true;
+        }
+        if saw_ack_false {
+            break;
+        }
+    }
+    assert!(
+        saw_ack_false,
+        "must receive ack false for unknown workflow_id"
+    );
+    assert!(
+        !saw_session_ready,
+        "session must NOT be created for unknown workflow_id"
+    );
 }
 
 #[tokio::test]

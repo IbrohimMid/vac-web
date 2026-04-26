@@ -125,6 +125,9 @@ pub struct SessionHandle {
     pub project_root: PathBuf,
     pub agent_id: String,
     pub agent_kind: AgentKind,
+    /// Workflow spec id and display name for the session's WorkflowProcess.
+    pub workflow_spec_id: String,
+    pub workflow_spec_name: String,
     pub state: Arc<StateHolder>,
     pub ring: Arc<RwLock<EventRing<ServerEvent>>>,
     /// Stdin for Mock / VacNative engines (legacy JSON-RPC notification
@@ -145,6 +148,9 @@ pub struct SpawnOptions {
     /// rows. None on legacy back-compat shims and on JSON-RPC
     /// engines that don't emit ACP tool activity yet.
     pub audit: Option<Arc<crate::audit::AuditFacility>>,
+    /// Workflow spec id to use for this session's WorkflowProcess.
+    /// When `None`, the registry default is used.
+    pub workflow_id: Option<String>,
 }
 
 impl SessionHandle {
@@ -201,12 +207,39 @@ impl SessionHandle {
         let ring = Arc::new(RwLock::new(EventRing::<ServerEvent>::new(5000)));
         let (bcast_tx, _) = broadcast::channel::<ServerEvent>(512);
 
+        // Resolve workflow spec. Unknown ids are rejected upstream at the
+        // translator layer; this branch hard-errors to guard internal callers.
+        let (workflow_spec, workflow_spec_id, workflow_spec_name) = {
+            use crate::workflows::WorkflowRegistry;
+            let reg = WorkflowRegistry::global();
+            let default_id = WorkflowRegistry::default_build_spec_id();
+            match opts.workflow_id.as_deref() {
+                Some(wid) => {
+                    let spec = reg.get(wid).cloned().ok_or_else(|| {
+                        anyhow::anyhow!("workflow.not_found: '{wid}' is not a bundled workflow")
+                    })?;
+                    let name = spec.metadata.name.clone();
+                    (Some(spec), wid.to_string(), name)
+                }
+                None => {
+                    let spec = reg.get(default_id).cloned();
+                    let name = spec
+                        .as_ref()
+                        .map(|s| s.metadata.name.clone())
+                        .unwrap_or_default();
+                    (spec, default_id.to_string(), name)
+                }
+            }
+        };
+
         let handle = Arc::new(Self {
             id: opts.session_id.clone(),
             profile_id: opts.profile_id.clone(),
             project_root: opts.project_root.clone(),
             agent_id: opts.agent.id.clone(),
             agent_kind: opts.agent.kind,
+            workflow_spec_id,
+            workflow_spec_name,
             state: Arc::clone(&state),
             ring: Arc::clone(&ring),
             stdin: Arc::new(Mutex::new(Some(stdin))),
@@ -286,20 +319,15 @@ impl SessionHandle {
         });
 
         // Spawn VIL-style workflow process for this session.
-        {
-            use crate::workflows::{process::start_workflow_process, WorkflowRegistry};
-            if let Some(spec) = WorkflowRegistry::global()
-                .get(WorkflowRegistry::default_build_spec_id())
-                .cloned()
-            {
-                start_workflow_process(
-                    handle.id.clone(),
-                    Arc::clone(&ring),
-                    bcast_tx.clone(),
-                    bcast_tx.subscribe(),
-                    spec,
-                );
-            }
+        if let Some(spec) = workflow_spec {
+            use crate::workflows::process::start_workflow_process;
+            start_workflow_process(
+                handle.id.clone(),
+                Arc::clone(&ring),
+                bcast_tx.clone(),
+                bcast_tx.subscribe(),
+                spec,
+            );
         }
 
         Ok(handle)
@@ -554,12 +582,39 @@ impl SessionHandle {
             audit: opts.audit.clone(),
         });
 
+        // Resolve workflow spec. Unknown ids are rejected upstream at the
+        // translator layer; this branch hard-errors to guard internal callers.
+        let (workflow_spec_acp, workflow_spec_id_acp, workflow_spec_name_acp) = {
+            use crate::workflows::WorkflowRegistry;
+            let reg = WorkflowRegistry::global();
+            let default_id = WorkflowRegistry::default_build_spec_id();
+            match opts.workflow_id.as_deref() {
+                Some(wid) => {
+                    let spec = reg.get(wid).cloned().ok_or_else(|| {
+                        anyhow::anyhow!("workflow.not_found: '{wid}' is not a bundled workflow")
+                    })?;
+                    let name = spec.metadata.name.clone();
+                    (Some(spec), wid.to_string(), name)
+                }
+                None => {
+                    let spec = reg.get(default_id).cloned();
+                    let name = spec
+                        .as_ref()
+                        .map(|s| s.metadata.name.clone())
+                        .unwrap_or_default();
+                    (spec, default_id.to_string(), name)
+                }
+            }
+        };
+
         let handle = Arc::new(Self {
             id: opts.session_id.clone(),
             profile_id: opts.profile_id.clone(),
             project_root: opts.project_root.clone(),
             agent_id: opts.agent.id.clone(),
             agent_kind: opts.agent.kind,
+            workflow_spec_id: workflow_spec_id_acp,
+            workflow_spec_name: workflow_spec_name_acp,
             state: Arc::clone(&state),
             ring: Arc::clone(&ring),
             stdin: Arc::new(Mutex::new(None)),
@@ -647,20 +702,15 @@ impl SessionHandle {
         });
 
         // Spawn VIL-style workflow process for this session.
-        {
-            use crate::workflows::{process::start_workflow_process, WorkflowRegistry};
-            if let Some(spec) = WorkflowRegistry::global()
-                .get(WorkflowRegistry::default_build_spec_id())
-                .cloned()
-            {
-                start_workflow_process(
-                    handle.id.clone(),
-                    Arc::clone(&ring),
-                    bcast_tx.clone(),
-                    bcast_tx.subscribe(),
-                    spec,
-                );
-            }
+        if let Some(spec) = workflow_spec_acp {
+            use crate::workflows::process::start_workflow_process;
+            start_workflow_process(
+                handle.id.clone(),
+                Arc::clone(&ring),
+                bcast_tx.clone(),
+                bcast_tx.subscribe(),
+                spec,
+            );
         }
 
         Ok(handle)
