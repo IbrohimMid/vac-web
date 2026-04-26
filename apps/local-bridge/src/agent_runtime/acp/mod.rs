@@ -14,7 +14,7 @@ pub use client::{classify_jsonrpc_error, AcpClient, JsonRpcError, PermissionRequ
 pub use hash::sha256_hex_canonical;
 pub use tool_activity::{
     bound_raw_output, extract_observed_tool_activity, redact_raw_input, ObservedToolActivity,
-    ToolKind, ToolLocation, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES, TRUNCATION_MARKER,
+    ToolDiff, ToolKind, ToolLocation, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES, TRUNCATION_MARKER,
 };
 pub use types::{
     CancelNotification, ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest,

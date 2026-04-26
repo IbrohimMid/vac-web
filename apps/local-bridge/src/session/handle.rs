@@ -708,11 +708,17 @@ async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotificatio
     emit_event(handle, event).await;
 
     // Edit-kind activity also drives Review.
-    if matches!(activity.kind, ToolKind::Edit) && !activity.locations.is_empty() {
+    // Render only when we have either real locations or actual diff
+    // entries — pure-pending tool_call (no content yet) carries
+    // neither and shouldn't pollute the Review surface.
+    if matches!(activity.kind, ToolKind::Edit)
+        && (!activity.locations.is_empty() || !activity.diffs.is_empty())
+    {
         let review_payload = serde_json::json!({
             "tool_call_id": activity.tool_call_id,
             "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
             "locations": activity.locations,
+            "diffs": activity.diffs,
             "raw_input_redacted": activity.raw_input_redacted,
             "approved_by_approval_id": activity.approved_by_approval_id,
             "agent_id": activity.agent_id,

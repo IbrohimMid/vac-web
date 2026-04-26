@@ -841,6 +841,13 @@ async fn x5c2_edit_tool_update_emits_review_candidate() {
         review["payload"]["raw_input_redacted"]["file_path"],
         json!("/repo/hello.md")
     );
+    // BLOCKER-1 fix: review payload must carry the actual diff so
+    // the Review lane can render the change.
+    let diffs = review["payload"]["diffs"].as_array().unwrap();
+    assert!(!diffs.is_empty(), "review must carry at least one diff");
+    assert_eq!(diffs[0]["path"], json!("/repo/hello.md"));
+    assert_eq!(diffs[0]["new_text"], json!("hi from script"));
+    assert!(diffs[0].get("old_text").is_none() || diffs[0]["old_text"].is_null());
     let _completed = next_event_of_type(&mut ws, "tool.updated").await;
 }
 

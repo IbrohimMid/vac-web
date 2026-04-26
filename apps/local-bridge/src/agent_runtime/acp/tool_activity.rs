@@ -74,6 +74,18 @@ pub struct ToolLocation {
     pub line: Option<u64>,
 }
 
+/// One file-edit diff carried by a `tool_call_update`'s `content[]`
+/// when the entry has `type:"diff"`. Fields mirror the agent payload
+/// so the Review lane can render the change directly.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolDiff {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_text: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ObservedToolActivity {
     pub session_id: String,
@@ -86,6 +98,9 @@ pub struct ObservedToolActivity {
     pub title: Option<String>,
     pub status: ToolStatus,
     pub locations: Vec<ToolLocation>,
+    /// File-edit diffs extracted from `update.content[]` entries
+    /// whose `type` is `"diff"`. Empty unless `kind:"edit"`.
+    pub diffs: Vec<ToolDiff>,
     /// `sha256(canonical(full toolCall))` — same input the X.5c.1
     /// `sha256_hex_canonical(&resolution.tool_call)` audit line
     /// records as `args_hash`. Joinable byte-for-byte.
@@ -145,6 +160,7 @@ pub fn extract_observed_tool_activity(
         .map(String::from);
     let status = ToolStatus::from_acp(update.get("status").and_then(|v| v.as_str()));
     let locations = extract_locations(update);
+    let diffs = extract_diffs(update);
 
     // `tool_call` (pending shape) typically carries an empty
     // rawInput; later `tool_call_update`s fill it. Hashes are present
@@ -184,6 +200,7 @@ pub fn extract_observed_tool_activity(
         title,
         status,
         locations,
+        diffs,
         approval_tool_call_hash,
         raw_input_hash,
         raw_input_redacted,
@@ -191,6 +208,31 @@ pub fn extract_observed_tool_activity(
         approved_by_approval_id: None,
         ts: chrono::Utc::now(),
     })
+}
+
+fn extract_diffs(update: &Value) -> Vec<ToolDiff> {
+    update
+        .get("content")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| {
+                    let ty = c.get("type").and_then(|v| v.as_str())?;
+                    if ty != "diff" {
+                        return None;
+                    }
+                    let path = c.get("path").and_then(|v| v.as_str())?.to_string();
+                    let new_text = c.get("newText").and_then(|v| v.as_str()).map(String::from);
+                    let old_text = c.get("oldText").and_then(|v| v.as_str()).map(String::from);
+                    Some(ToolDiff {
+                        path,
+                        new_text,
+                        old_text,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn extract_locations(update: &Value) -> Vec<ToolLocation> {
@@ -474,6 +516,38 @@ mod tests {
             dto.raw_input_hash.as_deref(),
             Some(unredacted_hash.as_str())
         );
+    }
+
+    #[test]
+    fn diffs_extracted_from_edit_content() {
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tc-1",
+                "kind": "edit",
+                "locations": [{ "path": "/repo/a.txt" }, { "path": "/repo/b.txt" }],
+                "content": [
+                    { "type": "diff", "path": "/repo/a.txt", "newText": "A", "oldText": null },
+                    { "type": "diff", "path": "/repo/b.txt", "newText": "B", "oldText": "old" },
+                    { "type": "content", "content": { "type":"text", "text": "noise" } }
+                ]
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "claude",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .unwrap();
+        assert_eq!(dto.diffs.len(), 2, "non-diff entries must be filtered out");
+        assert_eq!(dto.diffs[0].path, "/repo/a.txt");
+        assert_eq!(dto.diffs[0].new_text.as_deref(), Some("A"));
+        assert!(dto.diffs[0].old_text.is_none());
+        assert_eq!(dto.diffs[1].path, "/repo/b.txt");
+        assert_eq!(dto.diffs[1].old_text.as_deref(), Some("old"));
     }
 
     #[test]
