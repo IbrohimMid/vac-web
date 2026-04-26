@@ -1,0 +1,27 @@
+version: 1
+metadata:
+  id: assess.report
+  name: Assessment Report Workflow
+activities:
+  - id: trigger
+    kind: trigger
+    label: "Assessment started"
+  - id: prompt_agent
+    kind: prompt_agent
+    label: "Run assessment agent"
+  - id: gate_decision
+    kind: gate_decision
+    label: "Gate decision"
+  - id: end
+    kind: end
+    label: "Assessment complete"
+flows:
+  - from: trigger
+    to: prompt_agent
+    on: message.submit
+  - from: prompt_agent
+    to: gate_decision
+    on: transcript.completed
+  - from: gate_decision
+    to: end
+    on: transcript.completed

@@ -1,0 +1,33 @@
+version: 1
+metadata:
+  id: build.observe-tools
+  name: Build with Tool Observation
+activities:
+  - id: trigger
+    kind: trigger
+    label: "Workflow started"
+  - id: prompt_agent
+    kind: prompt_agent
+    label: "Prompt agent"
+  - id: observe_tools
+    kind: observe_tool_activity
+    label: "Observe tool activity"
+  - id: collect_runtime
+    kind: collect_runtime_log
+    label: "Collect runtime log"
+  - id: end
+    kind: end
+    label: "Workflow complete"
+flows:
+  - from: trigger
+    to: prompt_agent
+    on: message.submit
+  - from: prompt_agent
+    to: observe_tools
+    on: tool.observed
+  - from: observe_tools
+    to: collect_runtime
+    on: runtime.job_log
+  - from: collect_runtime
+    to: end
+    on: transcript.completed

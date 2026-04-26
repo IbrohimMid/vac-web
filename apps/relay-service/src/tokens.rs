@@ -5,7 +5,10 @@
 //! nonce-rejection semantics are what the bridge- and web-side consumers wire
 //! against, so the swap is transparent when the upstream API lands.
 
-use axum::{extract::{Query, State}, response::Json};
+use axum::{
+    extract::{Query, State},
+    response::Json,
+};
 use chrono::Utc;
 use dashmap::{DashMap, DashSet};
 use serde::{Deserialize, Serialize};

@@ -130,7 +130,10 @@ mod tests {
             relay_url: "ws://localhost:4343".into(),
             device_id: "devX".into(),
         };
-        assert_eq!(c.dial_url(), "ws://localhost:4343/bridge/dial?device_id=devX");
+        assert_eq!(
+            c.dial_url(),
+            "ws://localhost:4343/bridge/dial?device_id=devX"
+        );
     }
 
     #[test]
@@ -139,10 +142,7 @@ mod tests {
             relay_url: "ws://host/path?v=1".into(),
             device_id: "d".into(),
         };
-        assert_eq!(
-            c.dial_url(),
-            "ws://host/path/bridge/dial?v=1&device_id=d"
-        );
+        assert_eq!(c.dial_url(), "ws://host/path/bridge/dial?v=1&device_id=d");
     }
 
     #[test]

@@ -150,7 +150,9 @@ async fn client_attach_loop(socket: WebSocket, state: AppState, q: ClientAttachP
             if dev != q.device_id || sess != q.session_id {
                 tracing::warn!(token_device = %dev, query_device = %q.device_id, "token/query binding mismatch");
                 let _ = ws_tx
-                    .send(Message::Text(r#"{"error":"token_binding_mismatch"}"#.into()))
+                    .send(Message::Text(
+                        r#"{"error":"token_binding_mismatch"}"#.into(),
+                    ))
                     .await;
                 return;
             }
@@ -164,16 +166,12 @@ async fn client_attach_loop(socket: WebSocket, state: AppState, q: ClientAttachP
         }
     }
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Frame>();
-    let attached = state.registry.attach_client(
-        &q.device_id,
-        q.session_id.clone(),
-        out_tx.clone(),
-    );
+    let attached = state
+        .registry
+        .attach_client(&q.device_id, q.session_id.clone(), out_tx.clone());
     if !attached {
         let _ = ws_tx
-            .send(Message::Text(
-                r#"{"error":"device_not_registered"}"#.into(),
-            ))
+            .send(Message::Text(r#"{"error":"device_not_registered"}"#.into()))
             .await;
         return;
     }
@@ -232,9 +230,7 @@ async fn client_attach_loop(socket: WebSocket, state: AppState, q: ClientAttachP
             _ => {}
         }
     }
-    state
-        .registry
-        .detach_clients_for(&device_id, &session_id);
+    state.registry.detach_clients_for(&device_id, &session_id);
     writer.abort();
 }
 

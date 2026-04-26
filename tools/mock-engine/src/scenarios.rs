@@ -145,18 +145,21 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
                 .to_string();
             vec![
                 // Echo input back so mock terminal shows typing.
-                emit_notification(
-                    "shell.output",
-                    json!({ "shell_id": sh, "data": data }),
-                ),
+                emit_notification("shell.output", json!({ "shell_id": sh, "data": data })),
                 emit_response(id.unwrap_or(Value::Null), json!({ "ok": true })),
             ]
         }
         "shell.resize" | "shell.kill" => {
-            vec![emit_response(id.unwrap_or(Value::Null), json!({ "ok": true }))]
+            vec![emit_response(
+                id.unwrap_or(Value::Null),
+                json!({ "ok": true }),
+            )]
         }
         "connector.list" => vec![
-            emit_notification("connector.list", json!({ "connectors": connector_catalog() })),
+            emit_notification(
+                "connector.list",
+                json!({ "connectors": connector_catalog() }),
+            ),
             emit_response(id.unwrap_or(Value::Null), json!({ "ok": true })),
         ],
         "connector.connect" => {
@@ -224,7 +227,10 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
             ]
         }
         "gate.signoff" | "gate.override" => {
-            vec![emit_response(id.unwrap_or(Value::Null), json!({ "ok": true }))]
+            vec![emit_response(
+                id.unwrap_or(Value::Null),
+                json!({ "ok": true }),
+            )]
         }
         "handoff.create" => handle_handoff_create(id, params, state),
         "handoff.approve" => handle_handoff_approve(id, params),
@@ -370,9 +376,8 @@ fn handle_review_open(id: Option<Value>, params: Value) -> Vec<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let unified = format!(
-        "--- a/{path}\n+++ b/{path}\n@@ -1,3 +1,3 @@\n-old line\n+new line\n unchanged\n"
-    );
+    let unified =
+        format!("--- a/{path}\n+++ b/{path}\n@@ -1,3 +1,3 @@\n-old line\n+new line\n unchanged\n");
     vec![
         emit_notification(
             "changeset.file.diff_chunk",
@@ -385,15 +390,15 @@ fn handle_review_open(id: Option<Value>, params: Value) -> Vec<String> {
 fn handle_shell_start(id: Option<Value>, _params: Value, state: &mut State) -> Vec<String> {
     let shell_id = state.next_shell_id();
     vec![
-        emit_notification(
-            "shell.started",
-            json!({ "shell_id": shell_id }),
-        ),
+        emit_notification("shell.started", json!({ "shell_id": shell_id })),
         emit_notification(
             "shell.output",
             json!({ "shell_id": shell_id, "data": "mock-shell $ " }),
         ),
-        emit_response(id.unwrap_or(Value::Null), json!({ "ok": true, "shell_id": shell_id })),
+        emit_response(
+            id.unwrap_or(Value::Null),
+            json!({ "ok": true, "shell_id": shell_id }),
+        ),
     ]
 }
 
@@ -528,86 +533,86 @@ commit range: abc1234..def5678
 fn family_catalog(family: &str) -> Vec<(&'static str, &'static str, &'static str)> {
     match family {
         "pm" => vec![
-            ("discovery",    "product", "user_interviews"),
-            ("pricing",      "product", "pricing_alignment"),
-            ("positioning",  "product", "market_fit"),
-            ("competition",  "product", "landscape_scan"),
-            ("metrics",      "product", "north_star"),
+            ("discovery", "product", "user_interviews"),
+            ("pricing", "product", "pricing_alignment"),
+            ("positioning", "product", "market_fit"),
+            ("competition", "product", "landscape_scan"),
+            ("metrics", "product", "north_star"),
             ("go_to_market", "release", "launch_plan"),
-            ("synthesizer",  "product", "verdict"),
+            ("synthesizer", "product", "verdict"),
         ],
         "ux" => vec![
-            ("flows",        "ux", "task_completion"),
-            ("a11y",         "ux", "wcag_aa"),
-            ("copy",         "ux", "voice_tone"),
-            ("visual",       "ux", "contrast"),
-            ("synthesizer",  "ux", "verdict"),
+            ("flows", "ux", "task_completion"),
+            ("a11y", "ux", "wcag_aa"),
+            ("copy", "ux", "voice_tone"),
+            ("visual", "ux", "contrast"),
+            ("synthesizer", "ux", "verdict"),
         ],
         "frontend" => vec![
-            ("bundle_size",  "technical", "budget"),
-            ("a11y_axe",     "ux",        "axe_violations"),
-            ("perf_lh",      "technical", "lighthouse_score"),
-            ("hydration",    "technical", "island_cost"),
-            ("synthesizer",  "technical", "verdict"),
+            ("bundle_size", "technical", "budget"),
+            ("a11y_axe", "ux", "axe_violations"),
+            ("perf_lh", "technical", "lighthouse_score"),
+            ("hydration", "technical", "island_cost"),
+            ("synthesizer", "technical", "verdict"),
         ],
         "security" => vec![
-            ("deps",         "technical", "vuln_scan"),
-            ("secrets",      "technical", "leaked_secrets"),
-            ("authz",        "technical", "authorization_matrix"),
-            ("sbom",         "ops",       "supply_chain"),
-            ("synthesizer",  "technical", "verdict"),
+            ("deps", "technical", "vuln_scan"),
+            ("secrets", "technical", "leaked_secrets"),
+            ("authz", "technical", "authorization_matrix"),
+            ("sbom", "ops", "supply_chain"),
+            ("synthesizer", "technical", "verdict"),
         ],
         "reliability" => vec![
-            ("slo",          "ops", "slo_burn"),
-            ("chaos",        "ops", "fault_injection"),
-            ("backup",       "ops", "backup_restore"),
-            ("runbooks",     "ops", "coverage"),
-            ("synthesizer",  "ops", "verdict"),
+            ("slo", "ops", "slo_burn"),
+            ("chaos", "ops", "fault_injection"),
+            ("backup", "ops", "backup_restore"),
+            ("runbooks", "ops", "coverage"),
+            ("synthesizer", "ops", "verdict"),
         ],
         "performance" => vec![
-            ("bench_api",    "technical", "p95_latency"),
+            ("bench_api", "technical", "p95_latency"),
             ("bench_render", "technical", "tti"),
-            ("memory",       "technical", "growth"),
-            ("synthesizer",  "technical", "verdict"),
+            ("memory", "technical", "growth"),
+            ("synthesizer", "technical", "verdict"),
         ],
         "qa" => vec![
-            ("unit",         "technical", "coverage"),
-            ("integration",  "technical", "smoke"),
-            ("e2e",          "technical", "critical_paths"),
-            ("regression",   "technical", "baseline_diff"),
-            ("synthesizer",  "technical", "verdict"),
+            ("unit", "technical", "coverage"),
+            ("integration", "technical", "smoke"),
+            ("e2e", "technical", "critical_paths"),
+            ("regression", "technical", "baseline_diff"),
+            ("synthesizer", "technical", "verdict"),
         ],
         "docs" => vec![
-            ("readme",       "release", "freshness"),
-            ("api_docs",     "release", "coverage"),
-            ("changelog",    "release", "up_to_date"),
-            ("synthesizer",  "release", "verdict"),
+            ("readme", "release", "freshness"),
+            ("api_docs", "release", "coverage"),
+            ("changelog", "release", "up_to_date"),
+            ("synthesizer", "release", "verdict"),
         ],
         "launch" => vec![
-            ("announce",     "release", "copy_ready"),
-            ("rollout",      "release", "stage_plan"),
-            ("support",      "ops",     "handover"),
-            ("synthesizer",  "release", "verdict"),
+            ("announce", "release", "copy_ready"),
+            ("rollout", "release", "stage_plan"),
+            ("support", "ops", "handover"),
+            ("synthesizer", "release", "verdict"),
         ],
         "release" => vec![
-            ("gate_check",   "release", "gate_matrix"),
-            ("rollback",     "release", "plan_exists"),
-            ("compliance",   "release", "legal_ok"),
-            ("synthesizer",  "release", "verdict"),
+            ("gate_check", "release", "gate_matrix"),
+            ("rollback", "release", "plan_exists"),
+            ("compliance", "release", "legal_ok"),
+            ("synthesizer", "release", "verdict"),
         ],
         "growth" => vec![
-            ("funnel",       "product", "activation"),
-            ("retention",    "product", "d7_d30"),
-            ("virality",     "product", "k_factor"),
-            ("synthesizer",  "product", "verdict"),
+            ("funnel", "product", "activation"),
+            ("retention", "product", "d7_d30"),
+            ("virality", "product", "k_factor"),
+            ("synthesizer", "product", "verdict"),
         ],
         // Default RTD.
         _ => vec![
-            ("code_health",   "technical", "coverage_drift"),
+            ("code_health", "technical", "coverage_drift"),
             ("test_coverage", "technical", "branch_coverage"),
-            ("security",      "technical", "dep_audit"),
-            ("observability", "ops",       "trace_hygiene"),
-            ("release_gate",  "release",   "verdict"),
+            ("security", "technical", "dep_audit"),
+            ("observability", "ops", "trace_hygiene"),
+            ("release_gate", "release", "verdict"),
         ],
     }
 }
@@ -642,7 +647,13 @@ fn handle_handoff_create(id: Option<Value>, params: Value, state: &mut State) ->
 
     // Deterministic 64-hex pin; real worktree_digest lands with upstream PR #8.
     let seed = state.counter.wrapping_mul(0x9E37_79B9);
-    let digest = format!("{:016x}{:016x}{:016x}{:016x}", seed, seed ^ 0xaaaa, seed ^ 0x5555, seed ^ 0xffff);
+    let digest = format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        seed,
+        seed ^ 0xaaaa,
+        seed ^ 0x5555,
+        seed ^ 0xffff
+    );
     let base_sha = format!("{:040x}", seed);
 
     vec![
@@ -670,7 +681,10 @@ fn handle_handoff_create(id: Option<Value>, params: Value, state: &mut State) ->
                 "updated_at": "2026-04-24T10:00:00Z"
             }),
         ),
-        emit_response(id.unwrap_or(Value::Null), json!({ "ok": true, "packet_id": pid })),
+        emit_response(
+            id.unwrap_or(Value::Null),
+            json!({ "ok": true, "packet_id": pid }),
+        ),
     ]
 }
 
@@ -744,7 +758,10 @@ fn handle_handoff_dispatch(id: Option<Value>, params: Value, state: &mut State) 
             "handoff.status",
             json!({ "packet_id": pid, "status": "completed" }),
         ),
-        emit_response(id.unwrap_or(Value::Null), json!({ "ok": true, "executor_session_id": exec_sid })),
+        emit_response(
+            id.unwrap_or(Value::Null),
+            json!({ "ok": true, "executor_session_id": exec_sid }),
+        ),
     ]
 }
 
@@ -793,7 +810,13 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
         let seed = format!("{}|{}|{}", category, agent, check)
             .bytes()
             .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
-        let identity = format!("{:016x}{:016x}{:016x}{:016x}", seed, seed ^ 0xa5, seed ^ 0x5a, seed ^ 0xff);
+        let identity = format!(
+            "{:016x}{:016x}{:016x}{:016x}",
+            seed,
+            seed ^ 0xa5,
+            seed ^ 0x5a,
+            seed ^ 0xff
+        );
         // Evidence first so the finding's evidence_ids resolve.
         out.push(emit_notification(
             "assessment.evidence",
@@ -895,7 +918,12 @@ fn handle_mention_search(id: Option<Value>, params: Value) -> Vec<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let samples = ["src/foo.ts", "src/main.tsx", "docs/README.md", "package.json"];
+    let samples = [
+        "src/foo.ts",
+        "src/main.tsx",
+        "docs/README.md",
+        "package.json",
+    ];
     let results: Vec<Value> = samples
         .iter()
         .filter(|p| query.is_empty() || p.to_lowercase().contains(&query.to_lowercase()))

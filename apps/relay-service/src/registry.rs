@@ -63,11 +63,7 @@ impl DeviceRegistry {
     pub fn attach_client(&self, device_id: &str, session_id: String, tx: FrameTx) -> bool {
         match self.devices.get(device_id) {
             Some(entry) => {
-                entry
-                    .clients
-                    .entry(session_id)
-                    .or_default()
-                    .push(tx);
+                entry.clients.entry(session_id).or_default().push(tx);
                 true
             }
             None => false,

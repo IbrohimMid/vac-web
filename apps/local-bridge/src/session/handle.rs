@@ -285,6 +285,23 @@ impl SessionHandle {
                 .transition(bridge_core::SessionState::Closed);
         });
 
+        // Spawn VIL-style workflow process for this session.
+        {
+            use crate::workflows::{process::start_workflow_process, WorkflowRegistry};
+            if let Some(spec) = WorkflowRegistry::global()
+                .get(WorkflowRegistry::default_build_spec_id())
+                .cloned()
+            {
+                start_workflow_process(
+                    handle.id.clone(),
+                    Arc::clone(&ring),
+                    bcast_tx.clone(),
+                    bcast_tx.subscribe(),
+                    spec,
+                );
+            }
+        }
+
         Ok(handle)
     }
 
@@ -313,6 +330,24 @@ impl SessionHandle {
     ///     - everything else → `agent.protocol_unsupported` (X.5c
     ///       widens this).
     pub async fn send_client_command(&self, cmd: &ClientCommand) -> anyhow::Result<()> {
+        // Emit internal workflow signal so WorkflowProcess can react to prompt input.
+        // ClientCommand is not broadcast to the session ring, so we emit a namespaced
+        // internal event here. WorkflowProcess ignores workflow.* self-events.
+        if cmd.cmd_type == "message.submit" {
+            emit_to(
+                &self.ring,
+                &self.broadcast,
+                ServerEvent {
+                    seq: 0,
+                    session_id: self.id.clone(),
+                    event_type: "workflow.input.message_submit".into(),
+                    payload: serde_json::json!({ "cmd_type": "message.submit" }),
+                    v: 1,
+                    ts: chrono::Utc::now().to_rfc3339(),
+                },
+            )
+            .await;
+        }
         match self.agent_kind {
             AgentKind::Mock | AgentKind::VacNative => {
                 let rpc = serde_json::json!({
@@ -610,6 +645,23 @@ impl SessionHandle {
                 .state
                 .transition(bridge_core::SessionState::Closed);
         });
+
+        // Spawn VIL-style workflow process for this session.
+        {
+            use crate::workflows::{process::start_workflow_process, WorkflowRegistry};
+            if let Some(spec) = WorkflowRegistry::global()
+                .get(WorkflowRegistry::default_build_spec_id())
+                .cloned()
+            {
+                start_workflow_process(
+                    handle.id.clone(),
+                    Arc::clone(&ring),
+                    bcast_tx.clone(),
+                    bcast_tx.subscribe(),
+                    spec,
+                );
+            }
+        }
 
         Ok(handle)
     }

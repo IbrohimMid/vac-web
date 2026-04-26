@@ -21,6 +21,7 @@ import { useHandoff } from '../../stores/handoff';
 import { useGates } from '../../stores/gates';
 import { useTranscript } from '../../stores/transcript';
 import { useSession } from '../../stores/session';
+import { useWorkflow } from '../../stores/workflow';
 import type { TransportHandle } from '../../transport';
 import { Icon } from './primitives';
 
@@ -39,8 +40,11 @@ const RuntimeTab = lazy(() =>
 const HandoffTab = lazy(() =>
   import('../Handoff/HandoffTab').then((m) => ({ default: m.HandoffTab })),
 );
+const WorkflowRail = lazy(() =>
+  import('../Workflow/WorkflowRail').then((m) => ({ default: m.WorkflowRail })),
+);
 
-type WBTabId = 'approvals' | 'review' | 'activity' | 'agents' | 'runtime' | 'plan' | 'vil' | 'vwfd' | 'memory';
+type WBTabId = 'approvals' | 'review' | 'activity' | 'agents' | 'runtime' | 'plan' | 'workflow' | 'vil' | 'vwfd' | 'memory';
 
 interface WBTab {
   id: WBTabId;
@@ -54,6 +58,7 @@ const WB_TABS: WBTab[] = [
   { id: 'agents', label: 'Agents' },
   { id: 'runtime', label: 'Runtime' },
   { id: 'plan', label: 'Plan' },
+  { id: 'workflow', label: 'Workflow' },
   { id: 'vil', label: 'VIL' },
   { id: 'vwfd', label: 'VWFD' },
   { id: 'memory', label: 'Memory' },
@@ -136,6 +141,12 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
   });
   const packets = useHandoff((s) => s.order.length);
   const toolActivityCount = useToolActivity((s) => s.activityOrder.length);
+  const sessionId = useSession((s) => s.sessionId);
+  const workflowRunning = useWorkflow((s) => {
+    if (!sessionId) return 0;
+    const run = s.runs.get(sessionId);
+    return run && run.status === 'running' ? 1 : 0;
+  });
 
   const countFor = (id: WBTabId): number | null => {
     if (id === 'approvals') return pendingApprovals || null;
@@ -143,6 +154,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
     if (id === 'runtime') return runningJobs || null;
     if (id === 'plan') return packets || null;
     if (id === 'activity') return toolActivityCount || null;
+    if (id === 'workflow') return workflowRunning || null;
     return null;
   };
 
@@ -182,6 +194,11 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
           {tab === 'agents' && <AgentsView />}
           {tab === 'runtime' && <RuntimeTab transport={transport} />}
           {tab === 'plan' && <PlanView transport={transport} />}
+          {tab === 'workflow' && (
+            <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
+              <WorkflowRail />
+            </Suspense>
+          )}
           {tab === 'vil' && <VilView />}
           {tab === 'vwfd' && <VwfdView />}
           {tab === 'memory' && <MemoryView />}

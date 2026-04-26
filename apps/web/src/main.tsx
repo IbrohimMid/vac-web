@@ -42,6 +42,7 @@ const ArchiveTab = lazy(() =>
 
 import { registerApprovalHandlers } from './domain/approvals/handlers';
 import { registerToolActivityHandlers } from './domain/toolActivity/handlers';
+import { registerWorkflowHandlers } from './domain/workflow/handlers';
 import { registerAssessmentHandlers } from './domain/assessment/handlers';
 import { registerCapabilitiesHandlers } from './domain/capabilities/handlers';
 import { registerConnectorHandlers } from './domain/connectors/handlers';
@@ -133,6 +134,7 @@ function App() {
         offs.push(registerReleaseHandlers(t));
         offs.push(registerRegressionHandlers(t));
         offs.push(registerToolActivityHandlers(t));
+        offs.push(registerWorkflowHandlers(t));
         setTransport(t);
       } catch (e) {
         setError(String(e));

@@ -1,0 +1,39 @@
+version: 1
+metadata:
+  id: build.approval-gated-edit
+  name: Build with Approval-Gated Edit
+activities:
+  - id: trigger
+    kind: trigger
+    label: "Workflow started"
+  - id: prompt_agent
+    kind: prompt_agent
+    label: "Prompt agent"
+  - id: await_approval
+    kind: await_approval
+    label: "Await approval"
+  - id: observe_tools
+    kind: observe_tool_activity
+    label: "Observe tool activity"
+  - id: collect_diff
+    kind: collect_review_diff
+    label: "Collect review diff"
+  - id: end
+    kind: end
+    label: "Workflow complete"
+flows:
+  - from: trigger
+    to: prompt_agent
+    on: message.submit
+  - from: prompt_agent
+    to: await_approval
+    on: approval.pending
+  - from: await_approval
+    to: observe_tools
+    on: approval.resolved
+  - from: observe_tools
+    to: collect_diff
+    on: review.changeset_updated
+  - from: collect_diff
+    to: end
+    on: transcript.completed

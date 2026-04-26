@@ -76,6 +76,19 @@ Ported from the `/vacweb` prototype into the live cockpit, gz initial bundle hel
   - 235 total tests pass. `ToolActivityLane` lazy-split at 4.18 kB gzip. Capability guard: clean.
   - Observe-only boundary preserved. No X.5c.3.
 
+## VIL-style workflow layer
+
+Introduced in `feat(bridge): introduce VIL-style workflow layer for cockpit orchestration`:
+
+- **Architecture decision**: Axum is transport substrate only. All product orchestration is VIL-style process/workflow, not raw route handlers. See `docs/architecture/local-bridge-vil-style.md`.
+- **`apps/local-bridge/src/workflows/`** — workflow module: spec parser, registry, executor, event builders, adapter, VIL-style process task.
+- **5 bundled YAML workflow specs** in `apps/local-bridge/workflows/`: `build.basic`, `build.approval-gated-edit`, `build.observe-tools`, `assess.report`, `handoff.package`.
+- **Per-session WorkflowProcess** (VIL ServiceProcess equivalent): subscribes to broadcast, advances executor, emits `workflow.*` events replayably.
+- **7 workflow event types**: `workflow.started`, `workflow.step.started`, `workflow.step.updated`, `workflow.step.completed`, `workflow.step.failed`, `workflow.artifact.created`, `workflow.completed`, `workflow.failed`.
+- **FE**: `workflow` Zustand store, `WorkflowRail` component (lazy-split), `domain/workflow/handlers.ts`, `'workflow'` tab in BuildSurface.
+- **Tests**: backend spec parser tests, adapter tests, executor advance tests, FE store tests, FE WorkflowRail DOM render tests.
+- **Guard**: no `vil_vwfd` dependency, no workflow provisioning, no X.5c.3, no Stage K.
+
 ## Held / not started
 
 - **Stage K (VIL / VWFD live integration)** — placeholder UI only; held pending upstream `vil-expr` event names + schemas. See [`30-stage-k-vil-vwfd.md`](./30-stage-k-vil-vwfd.md).

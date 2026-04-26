@@ -216,7 +216,7 @@ async fn broadcast_delivers_engine_events_to_client() {
 
     let mut saw_delta = false;
     let mut saw_completed = false;
-    for _ in 0..15 {
+    for _ in 0..30 {
         let v = recv(&mut ws).await;
         match v["type"].as_str() {
             Some("transcript.delta") => saw_delta = true,

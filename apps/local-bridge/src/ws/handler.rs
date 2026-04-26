@@ -92,8 +92,7 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
     );
 
     // 3. Send welcome.
-    let welcome =
-        serde_json::to_string(&WelcomeFrame::new()).expect("serialize WelcomeFrame");
+    let welcome = serde_json::to_string(&WelcomeFrame::new()).expect("serialize WelcomeFrame");
     if tx.send(Message::Text(welcome.into())).await.is_err() {
         return;
     }
@@ -117,8 +116,7 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
             tokio::time::sleep(Duration::from_secs(20)).await;
             let _ = ping_sender
                 .send(
-                    serde_json::to_string(&json!({"type": "ping"}))
-                        .expect("serialize ping frame"),
+                    serde_json::to_string(&json!({"type": "ping"})).expect("serialize ping frame"),
                 )
                 .await;
         }

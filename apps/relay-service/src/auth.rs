@@ -1,7 +1,10 @@
 //! Auth helpers. Revocation admin endpoint is intentionally tiny + CLI-facing;
 //! there is no relay admin UI in v1 per `docs/plans/phase-7/README.md §OUT`.
 
-use axum::{extract::{Query, State}, response::Json};
+use axum::{
+    extract::{Query, State},
+    response::Json,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;

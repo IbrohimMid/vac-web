@@ -1,0 +1,27 @@
+version: 1
+metadata:
+  id: handoff.package
+  name: Handoff Package Workflow
+activities:
+  - id: trigger
+    kind: trigger
+    label: "Handoff started"
+  - id: prompt_agent
+    kind: prompt_agent
+    label: "Generate handoff package"
+  - id: collect_diff
+    kind: collect_review_diff
+    label: "Collect handoff artifacts"
+  - id: end
+    kind: end
+    label: "Handoff packaged"
+flows:
+  - from: trigger
+    to: prompt_agent
+    on: message.submit
+  - from: prompt_agent
+    to: collect_diff
+    on: review.changeset_updated
+  - from: collect_diff
+    to: end
+    on: transcript.completed

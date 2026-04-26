@@ -13,6 +13,7 @@ pub mod server;
 pub mod session;
 pub mod translator;
 pub mod tunnel;
+pub mod workflows;
 pub mod ws;
 
 pub use server::{build_app, AppState, AppStateHandle};
