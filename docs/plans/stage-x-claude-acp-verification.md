@@ -678,9 +678,18 @@ Stage X.5c.1 ships the official ACP approval bridge for
   "toolCallId": "<agent's toolCallId>",
   "kind": "edit",
   "locations": [...],
-  "args_hash": "<sha256 of canonical(toolCall)>"
+  "args_hash": "<sha256 of canonical(toolCall) excluding top-level toolCallId/status/rawOutput>"
 }
 ```
+
+> **Hash semantics refined by X.5c.2 (field name unchanged).** The
+> X.5c.1 lock at `2987fa2` keeps the field name `args_hash`. X.5c.2
+> tightened the *input* to exclude the three top-level runtime
+> fields (`toolCallId`, `status`, `rawOutput`) so X.5c.1
+> approval-side and X.5c.2 activity-side hashes agree byte-for-byte
+> and remain joinable when the agent rotates `toolCallId` between
+> permission and the subsequent `tool_call_update`. See
+> [`stage-x5c2-tool-activity-observation.md` §3.1](./stage-x5c2-tool-activity-observation.md#31-hash-contract-binding).
 
 ### 14.3 Failure ack codes
 

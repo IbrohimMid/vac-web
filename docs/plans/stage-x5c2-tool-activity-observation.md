@@ -1,7 +1,23 @@
 # Stage X.5c.2 — Tool Activity Observation Mapping
 
-**Status.** Design doc. **No implementation in this commit.** Awaits
-re-audit before code lands.
+**Status.** **IMPLEMENTED** on branch
+`unit/x5c2-tool-activity-observation`. Lock candidate: `681340b`,
+pending final audit.
+
+Commits (7):
+
+```text
+375d585  feat(bridge): add X.5c.2 observed tool activity DTO + redaction
+d41bc5b  feat(mock-acp): add deterministic X.5c.2 tool update emitters
+6a3acd8  feat(bridge): map ACP tool activity updates into VAC events
+4c89869  fix(bridge): X.5c.2 — ToolDiff in DTO + Review event carries diff payload
+a936ab8  fix(bridge): X.5c.2 — positive fallback hash correlation works under id rotation
+2b73357  feat(bridge): X.5c.2 — emit tool.{observed,updated,failed} audit rows
+681340b  feat(bridge): X.5c.2 redaction hardening — sk-/ghp_/xoxb-/AKIA/Bearer in rawOutput
+```
+
+Future work for this stage and successors lands directly on `main` —
+no further feature branches.
 
 **Goal.** Map the agent-emitted ACP `session/update` notifications
 (`tool_call`, `tool_call_update`, `plan`, `usage_update`,
@@ -73,11 +89,12 @@ pub struct ObservedToolActivity {
     pub title: Option<String>,
     pub status: ToolStatus,        // Pending | InProgress | Completed | Failed
     pub locations: Vec<ToolLocation>, // [{ path, line? }]
-    /// sha256 over canonical(full toolCall). MUST match the
-    /// `args_hash` field that X.5c.1 already records on
+    pub diffs: Vec<ToolDiff>,      // edit-kind only; carried into review.changeset_updated
+    /// sha256 over canonical(toolCall) with the top-level fields
+    /// `toolCallId`, `status`, and `rawOutput` excluded. MUST match
+    /// the `args_hash` field that X.5c.1 records on
     /// `approval.resolved` audit rows so the two streams are
-    /// joinable when toolCallId is missing or has been rotated.
-    /// See §3.1 for the hash contract.
+    /// joinable when toolCallId is rotated. See §3.1.
     pub approval_tool_call_hash: Option<String>,
     /// sha256 over canonical(toolCall.rawInput). Used only for
     /// activity-level dedupe / display correlation; **never** as the
@@ -93,7 +110,18 @@ pub enum ToolKind { Read, Edit, Execute, Other(String) }
 pub enum ToolStatus { Pending, InProgress, Completed, Failed }
 
 pub struct ToolLocation { pub path: String, pub line: Option<u64> }
+
+pub struct ToolDiff {
+    pub path: String,
+    pub new_text: Option<String>,
+    pub old_text: Option<String>,
+}
 ```
+
+`raw_output_redacted` is **scrub-then-bound**: secret-pattern
+redaction runs first, then the bounded-size cap is applied. Order
+matters — bounding first risks half-leaked secrets at the truncation
+boundary.
 
 Web events carry the DTO serialized; web stores never see the
 agent's raw `_meta` payload.
@@ -104,17 +132,36 @@ Two distinct hashes, each with one job:
 
 | Name | Input | Used for |
 | --- | --- | --- |
-| `approval_tool_call_hash` | `sha256(canonical(full toolCall))` — same input X.5c.1 already feeds `sha256_hex_canonical` in `apps/local-bridge/src/translator/mod.rs` | Approval ↔ activity correlation. Joinable with the `args_hash` field on existing `approval.resolved` audit rows. |
+| `approval_tool_call_hash` | `sha256(canonical(toolCall excluding top-level ["toolCallId", "status", "rawOutput"]))` via `sha256_hex_canonical_excluding(value, TOOL_CALL_HASH_DROP_FIELDS)` in `apps/local-bridge/src/agent_runtime/acp/hash.rs` | Approval ↔ activity correlation. Joinable with the `args_hash` field on `approval.resolved` audit rows (X.5c.1 emits the same excluding hash). |
 | `raw_input_hash` | `sha256(canonical(toolCall.rawInput))` | Activity-level dedupe / display only. Never the approval-correlation key. |
 
 Both hashes use the same canonical-JSON form (sorted object keys,
-whitespace-free) the existing `sha256_hex_canonical` helper produces,
-so a single helper can emit both by changing the input.
+whitespace-free).
 
-> **Don't rename `args_hash` on the X.5c.1 audit row.** The X.5c.1
-> contract is locked at `2987fa2`. X.5c.2's
-> `approval_tool_call_hash` is the same value computed the same way
-> — only the field name on the new DTO is more specific.
+**Why these top-level fields are excluded.**
+
+- `toolCallId` — the agent may rotate it between
+  `session/request_permission` and the subsequent
+  `tool_call_update`. Including it in the hash would make the
+  fallback correlation key collapse to the primary key and never
+  fire when rotation happens.
+- `status` — runtime state (`pending` → `in_progress` → `completed`
+  / `failed`). The same logical tool call carries different status
+  values across its lifecycle; hashing it would defeat correlation.
+- `rawOutput` — produced after execution; not present at permission
+  time, so excluding it lets the same hash compute identically on
+  both sides.
+
+Nested fields (`locations[]`, `rawInput`, `content[]`, `kind`,
+`title`) are preserved in the hash input — that's where the
+identity of the tool call actually lives.
+
+> **`args_hash` field name on the X.5c.1 audit row is unchanged.**
+> The X.5c.1 contract is locked at `2987fa2`. X.5c.2 refined the
+> *computation* (top-level exclusion) so X.5c.1 and X.5c.2 hash
+> byte-for-byte identical inputs and the join works under id
+> rotation. The audit field name stays `args_hash`; only the
+> semantics tightened.
 
 ## 4. Redaction rules
 
@@ -175,6 +222,16 @@ Both maps are populated atomically from the same
 `approved_by_approval_id = None` (the activity still surfaces — it
 just doesn't carry the provenance badge).
 
+**Known limitation.** The fallback `(session_id,
+approval_tool_call_hash)` key collides if two semantically distinct
+tool calls share an identical canonical-JSON form (excluding the
+three runtime fields) within the 60-second TTL window. In practice
+this is rare — `locations[]` and `rawInput` are almost always
+distinct — but the primary `toolCallId` key is preferred whenever
+the agent preserves it, which is the default on
+`@agentclientprotocol/claude-agent-acp@0.31.0`. Cache populates
+only on Approve outcomes, never on Reject.
+
 ## 6. Audit events
 
 ```text
@@ -190,8 +247,10 @@ toolCallId
 kind
 status
 locations
-approval_tool_call_hash   (when toolCall is present — same value as the
-                           X.5c.1 audit-row args_hash)
+approval_tool_call_hash   (when toolCall is present — sha256 over
+                           canonical(toolCall) excluding top-level
+                           toolCallId/status/rawOutput; identical to
+                           the X.5c.1 audit-row args_hash)
 raw_input_hash            (when toolCall.rawInput is present)
 approved_by_approval_id   (when correlated; see §5)
 agent_id
