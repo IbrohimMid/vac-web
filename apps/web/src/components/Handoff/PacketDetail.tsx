@@ -7,6 +7,10 @@ import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
 const canonicalName = (value: string | undefined) => (value ?? '').trim().toLocaleLowerCase();
+const stringValue = (value: unknown, fallback = ''): string =>
+  typeof value === 'string' ? value : fallback;
+const stringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
 interface Props {
   packet: Packet;
@@ -43,6 +47,18 @@ export function PacketDetail({ packet, transport }: Props) {
     packet.pin.assessment_snapshot_at.trim().length > 0 &&
     packet.pin.expires_at.trim().length > 0;
   const executionSessionId = packet.execution_session_id ?? packet.executor_session_id;
+  const executionProgressEntries = Object.values(packet.execution_progress ?? {});
+  const executionOutcome =
+    packet.execution_outcome &&
+    typeof packet.execution_outcome === 'object' &&
+    !Array.isArray(packet.execution_outcome)
+      ? (packet.execution_outcome as Record<string, unknown>)
+      : undefined;
+  const executionOutcomeStatus = stringValue(executionOutcome?.status, packet.status);
+  const executionOutcomeCompleted = stringArray(executionOutcome?.tasks_completed);
+  const executionOutcomeFailed = stringArray(executionOutcome?.tasks_failed);
+  const executionOutcomeSummary = stringValue(executionOutcome?.changeset_summary);
+  const executionOutcomeReassessment = stringValue(executionOutcome?.reassessment_run_id);
   const canDispatch = packet.status === 'approved' && pinReady;
 
   const approve = async () => {
@@ -298,16 +314,82 @@ export function PacketDetail({ packet, transport }: Props) {
           )}
         </div>
       )}
-      {packet.status === 'executing' && executionSessionId && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
-          Executor session: <code>{executionSessionId}</code>
+      <div style={{ marginTop: 10 }}>
+        <strong>Execution</strong>
+        <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4 }}>
+          status: <code>{packet.status}</code>
+          {executionSessionId && (
+            <>
+              {' '}
+              · executor session: <code>{executionSessionId}</code>
+            </>
+          )}
         </div>
-      )}
-      {packet.execution_outcome && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
-          Execution outcome: <code>{JSON.stringify(packet.execution_outcome)}</code>
-        </div>
-      )}
+        {packet.status === 'dispatched' && (
+          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-2)' }}>
+            Executor session is being prepared...
+          </div>
+        )}
+        {packet.status === 'executing' && (
+          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-2)' }}>
+            Executor is running the packet tasks.
+          </div>
+        )}
+        {executionProgressEntries.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <strong style={{ fontSize: 12 }}>Task progress</strong>
+            <ul style={{ listStyle: 'none', padding: 0, margin: '4px 0' }}>
+              {executionProgressEntries.map((progress) => (
+                <li key={progress.task_id} style={{ fontSize: 12, marginBottom: 4 }}>
+                  <code>{progress.task_id}</code> · {progress.status} · {progress.completed}/{progress.total}
+                  {progress.message && (
+                    <span style={{ color: 'var(--text-2)' }}> — {progress.message}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {(packet.status === 'completed' || packet.status === 'failed' || executionOutcome) && (
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-2)' }}>
+            outcome: <code>{executionOutcomeStatus}</code>
+            {executionOutcomeCompleted.length > 0 && (
+              <>
+                {' '}
+                · completed: {executionOutcomeCompleted.join(', ')}
+              </>
+            )}
+            {executionOutcomeFailed.length > 0 && (
+              <>
+                {' '}
+                · failed: {executionOutcomeFailed.join(', ')}
+              </>
+            )}
+            {executionOutcomeSummary && (
+              <>
+                {' '}
+                · summary: {executionOutcomeSummary}
+              </>
+            )}
+            {executionOutcomeReassessment && (
+              <>
+                {' '}
+                · reassessment: <code>{executionOutcomeReassessment}</code>
+              </>
+            )}
+          </div>
+        )}
+        {packet.status === 'completed' && (
+          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--sev-ok)' }}>
+            Execution completed. Reassessment can run next.
+          </div>
+        )}
+        {packet.status === 'failed' && (
+          <div style={{ marginTop: 4, fontSize: 12, color: 'var(--sev-error)' }}>
+            Execution failed. Review the failed tasks and rollback notes.
+          </div>
+        )}
+      </div>
       {packet.status === 'invalidated' && (
         <div style={{ marginTop: 8, color: 'var(--sev-error)', fontSize: 12 }}>
           Invalidated — pin drift detected. Create a replacement packet from the fresh worktree.

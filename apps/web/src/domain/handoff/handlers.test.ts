@@ -154,3 +154,131 @@ describe('handoff.upserted merge', () => {
     off();
   });
 });
+
+describe('handoff execution lifecycle handlers', () => {
+  beforeEach(() => useHandoff.getState().clear());
+
+  it('handoff.execution_progress updates per-task progress and executor session', () => {
+    const { t, emit } = mockTransport();
+    const off = registerHandoffHandlers(t);
+
+    emit('handoff.upserted', {
+      packet_id: 'p1',
+      status: 'executing',
+      execution_session_id: 'sess_exec',
+      tasks: [
+        {
+          id: 'task_1',
+          title: 'Task 1',
+          rationale: 'why',
+          source_finding_ids: [],
+          evidence_refs: [],
+          steps: [],
+          constraints: [],
+          risk_notes: [],
+          est_effort: 'hours',
+          depends_on: [],
+          touches_paths: [],
+          requires_approval_per_step: false,
+          rollback_steps: [],
+        },
+      ],
+      pin: {
+        repo_ref: 'branch:main',
+        base_commit_sha: 'deadbeef',
+        worktree_digest: 'abc',
+        assessment_snapshot_at: 't',
+        expires_at: 't2',
+        invalidate_on_repo_change: true,
+        invalidation_policy: 'strict',
+        connector_snapshots: [],
+      },
+      target: {
+        kind: 'dispatch_to_local_vac',
+        executor_profile_id: 'executor.code@1.0.0',
+      },
+      approval: {
+        required: true,
+        approvers: [],
+        two_party: false,
+        required_roles: [],
+      },
+      signers: [],
+      required_signers: 1,
+    });
+
+    emit('handoff.execution_progress', {
+      packet_id: 'p1',
+      executor_session_id: 'sess_exec',
+      task_id: 'task_1',
+      status: 'started',
+      completed: 0,
+      total: 1,
+      message: 'bootstrapping',
+    });
+
+    const packet = useHandoff.getState().packets.get('p1');
+    expect(packet).toBeDefined();
+    const progress = packet!.execution_progress!.task_1!;
+    expect(packet?.execution_session_id).toBe('sess_exec');
+    expect(progress.status).toBe('started');
+    expect(progress.completed).toBe(0);
+    expect(progress.total).toBe(1);
+    off();
+  });
+
+  it('handoff.completed stores outcome and completed status', () => {
+    const { t, emit } = mockTransport();
+    const off = registerHandoffHandlers(t);
+    emit('handoff.upserted', {
+      packet_id: 'p1',
+      status: 'executing',
+      execution_session_id: 'sess_exec',
+    });
+    emit('handoff.completed', {
+      packet_id: 'p1',
+      executor_session_id: 'sess_exec',
+      status: 'completed',
+      outcome: {
+        status: 'success',
+        tasks_completed: ['task_1'],
+        tasks_failed: [],
+        changeset_summary: 'done',
+        reassessment_run_id: 'run_1',
+      },
+    });
+
+    const packet = useHandoff.getState().packets.get('p1');
+    expect(packet?.status).toBe('completed');
+    expect(packet?.execution_outcome?.status).toBe('success');
+    expect(packet?.execution_outcome?.changeset_summary).toBe('done');
+    off();
+  });
+
+  it('handoff.failed stores outcome and failed status', () => {
+    const { t, emit } = mockTransport();
+    const off = registerHandoffHandlers(t);
+    emit('handoff.upserted', {
+      packet_id: 'p1',
+      status: 'executing',
+      execution_session_id: 'sess_exec',
+    });
+    emit('handoff.failed', {
+      packet_id: 'p1',
+      executor_session_id: 'sess_exec',
+      status: 'failed',
+      outcome: {
+        status: 'failed',
+        tasks_completed: [],
+        tasks_failed: ['task_1'],
+        changeset_summary: 'boom',
+      },
+    });
+
+    const packet = useHandoff.getState().packets.get('p1');
+    expect(packet?.status).toBe('failed');
+    expect(packet?.execution_outcome?.status).toBe('failed');
+    expect(packet?.execution_outcome?.changeset_summary).toBe('boom');
+    off();
+  });
+});

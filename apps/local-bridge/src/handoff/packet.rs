@@ -4,6 +4,7 @@
 //! The bridge owns authoritative field names and enum variants.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Canonical signer identity for dedup + author self-sign deny.
 ///
@@ -156,6 +157,34 @@ pub struct Signer {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskExecutionProgress {
+    pub task_id: String,
+    pub status: String,
+    pub updated_at: String,
+    pub completed: u32,
+    pub total: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ExecutionOutcome {
+    pub status: String,
+    pub tasks_completed: Vec<String>,
+    pub tasks_failed: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changeset_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reassessment_run_id: Option<String>,
+}
+
+pub fn execution_outcome_payload(outcome: &ExecutionOutcome) -> serde_json::Value {
+    serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PacketStatus {
@@ -222,6 +251,8 @@ pub struct Packet {
     pub required_signers: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_progress: Option<BTreeMap<String, TaskExecutionProgress>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_outcome: Option<serde_json::Value>,
     #[serde(default)]

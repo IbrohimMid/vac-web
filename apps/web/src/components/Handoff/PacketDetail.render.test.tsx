@@ -156,4 +156,103 @@ describe('PacketDetail render', () => {
 
     expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
   });
+
+  it('shows executing packet progress and executor session id', () => {
+    const { transport } = mockTransport();
+
+    render(
+      <PacketDetail
+        packet={mkPacket({
+          status: 'executing',
+          state: 'executing',
+          execution_session_id: 'sess_exec',
+          execution_progress: {
+            task_1: {
+              task_id: 'task_1',
+              status: 'started',
+              updated_at: '2026-01-01T00:02:00Z',
+              completed: 0,
+              total: 1,
+              message: 'bootstrapping',
+            },
+          },
+        })}
+        transport={transport}
+      />,
+    );
+
+    expect(screen.getByText(/executor session:/i)).toHaveTextContent('sess_exec');
+    expect(screen.getByText('Task progress')).toBeInTheDocument();
+    expect(screen.getByText(/task_1/)).toBeInTheDocument();
+    expect(screen.getByText(/bootstrapping/)).toBeInTheDocument();
+  });
+
+  it('shows completed execution outcome summary', () => {
+    const { transport } = mockTransport();
+
+    render(
+      <PacketDetail
+        packet={mkPacket({
+          status: 'completed',
+          state: 'completed',
+          execution_session_id: 'sess_exec',
+          execution_outcome: {
+            status: 'success',
+            tasks_completed: ['task_1'],
+            tasks_failed: [],
+            changeset_summary: 'mock execution complete',
+            reassessment_run_id: 'run_1',
+          },
+        })}
+        transport={transport}
+      />,
+    );
+
+    expect(screen.getByText(/outcome:/)).toHaveTextContent('success');
+    expect(screen.getByText(/completed: task_1/)).toBeInTheDocument();
+    expect(screen.getByText(/summary: mock execution complete/)).toBeInTheDocument();
+    expect(screen.getByText(/Reassessment can run next/)).toBeInTheDocument();
+  });
+
+  it('shows failed execution outcome and rollback hint', () => {
+    const { transport } = mockTransport();
+
+    render(
+      <PacketDetail
+        packet={mkPacket({
+          status: 'failed',
+          state: 'failed',
+          execution_session_id: 'sess_exec',
+          execution_outcome: {
+            status: 'failed',
+            tasks_completed: [],
+            tasks_failed: ['task_1'],
+            changeset_summary: 'mock execution failed',
+          },
+        })}
+        transport={transport}
+      />,
+    );
+
+    expect(screen.getByText(/outcome:/)).toHaveTextContent('failed');
+    expect(screen.getByText(/failed: task_1/)).toBeInTheDocument();
+    expect(screen.getByText(/Execution failed/)).toBeInTheDocument();
+  });
+
+  it('hides dispatch button once packet is dispatched', () => {
+    const { transport } = mockTransport();
+
+    render(
+      <PacketDetail
+        packet={mkPacket({
+          status: 'dispatched',
+          state: 'dispatched',
+          execution_session_id: 'sess_exec',
+        })}
+        transport={transport}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Dispatch to executor' })).toBeNull();
+  });
 });

@@ -59,7 +59,10 @@ const basePacket: Packet = {
     required_roles: [],
   },
   status: 'pending_approval',
-  state_history: [{ state: 'draft', at: 't', by: 'alice' }],
+  state_history: [
+    { state: 'draft', at: 't', by: 'alice' },
+    { state: 'pending_approval', at: 't2', by: 'alice', reason: 'created' },
+  ],
   signers: [{ name: 'alice', role: 'author', signed_at: 't' }],
   required_signers: 2,
   convergence_count: 0,
@@ -99,12 +102,51 @@ describe('handoff store', () => {
     expect(useHandoff.getState().packets.get('p1')?.status).toBe('invalidated');
   });
 
+  it('setStatus is idempotent for identical status', () => {
+    useHandoff.getState().upsert(basePacket);
+    const before = useHandoff.getState().packets.get('p1')?.state_history.length ?? 0;
+    useHandoff.getState().setStatus('p1', 'pending_approval');
+    const after = useHandoff.getState().packets.get('p1')?.state_history.length ?? 0;
+    expect(after).toBe(before);
+  });
+
   it('setExecutorSession writes both execution and legacy aliases', () => {
     useHandoff.getState().upsert(basePacket);
     useHandoff.getState().setExecutorSession('p1', 'sess_1');
     const packet = useHandoff.getState().packets.get('p1');
     expect(packet?.execution_session_id).toBe('sess_1');
     expect(packet?.executor_session_id).toBe('sess_1');
+  });
+
+  it('setExecutionProgress merges task progress map', () => {
+    useHandoff.getState().upsert(basePacket);
+    useHandoff.getState().setExecutionProgress('p1', {
+      task_id: 'task_1',
+      status: 'started',
+      updated_at: '2026-01-01T00:02:00Z',
+      completed: 0,
+      total: 1,
+      message: 'bootstrapping',
+    });
+    const packet = useHandoff.getState().packets.get('p1');
+    expect(packet).toBeDefined();
+    const progress = packet!.execution_progress!.task_1!;
+    expect(progress.status).toBe('started');
+    expect(progress.message).toBe('bootstrapping');
+  });
+
+  it('setExecutionOutcome stores terminal outcome without dropping status', () => {
+    useHandoff.getState().upsert(basePacket);
+    useHandoff.getState().setExecutionOutcome('p1', 'completed', {
+      status: 'success',
+      tasks_completed: ['task_1'],
+      tasks_failed: [],
+      changeset_summary: 'done',
+      reassessment_run_id: 'run_1',
+    });
+    const packet = useHandoff.getState().packets.get('p1');
+    expect(packet?.status).toBe('completed');
+    expect(packet?.execution_outcome?.status).toBe('success');
   });
 
   it('incrementConvergence bumps counter', () => {

@@ -2,13 +2,17 @@
 
 use crate::agent_runtime::acp::{sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS};
 use crate::audit::log_tool_event;
+use crate::handoff::packet::{ExecutionOutcome, TaskExecutionProgress};
 use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
+use crate::session::SessionHandleRef;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::AuditSeverity;
 use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
 use serde_json::json;
+use std::sync::Arc;
 use tracing::warn;
+use ulid::Ulid;
 
 pub async fn dispatch_command(
     cmd: ClientCommand,
@@ -510,7 +514,7 @@ pub async fn dispatch_command(
             (ack, events)
         }
         "handoff.dispatch_local" => {
-            let Some(_handle) = state.sessions.get(&cmd.session_id) else {
+            let Some(source_handle) = state.sessions.get(&cmd.session_id) else {
                 return (
                     ServerAck {
                         ack_of: cmd.id.clone(),
@@ -553,6 +557,56 @@ pub async fn dispatch_command(
 
             match state.handoff.check_dispatch(&packet_id, &project_root, now) {
                 Ok(packet) => {
+                    let project_key = crate::handoff::project_key_for_packet(&packet);
+                    if let Some(active) = state
+                        .handoff
+                        .active_executor_packet(&packet.target.executor_profile_id, &project_key)
+                    {
+                        let dispatch_err = crate::handoff::DispatchError::ExecutorBusy {
+                            packet_id: active.id.clone(),
+                            executor_profile_id: packet.target.executor_profile_id.clone(),
+                        };
+                        let reason_tag = dispatch_err.reason_tag();
+                        let reason_msg = dispatch_err.message();
+                        if let crate::handoff::HandoffDispatchRejectOutcome::Ok {
+                            upsert_event,
+                            status_event,
+                            ..
+                        } = state.handoff.record_dispatch_rejected(
+                            &packet_id,
+                            reason_tag,
+                            Some(reason_msg.clone()),
+                            &cmd.session_id,
+                            now,
+                        ) {
+                            events.push(upsert_event);
+                            events.push(status_event);
+                        }
+                        state.audit.log(
+                            &cmd.session_id,
+                            "handoff",
+                            bridge_core::AuditSeverity::Warn,
+                            serde_json::json!({
+                                "event": "handoff.dispatch_rejected",
+                                "packet_id": packet_id,
+                                "code": dispatch_err.code(),
+                                "reason_tag": reason_tag,
+                                "reason": reason_msg,
+                            }),
+                        );
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: dispatch_err.code().into(),
+                                    message: reason_msg,
+                                }),
+                            },
+                            events,
+                        );
+                    }
+
                     state.audit.log(
                         &cmd.session_id,
                         "handoff",
@@ -563,59 +617,18 @@ pub async fn dispatch_command(
                             "repo_ref": packet.pin.repo_ref,
                         }),
                     );
-                    // Forward to runtime provider for actual execution.
-                    match _handle.send_client_command(&cmd).await {
-                        Ok(()) => {
-                            // Provider accepted the dispatch; transition
-                            // approved → dispatched and emit upserted + status.
-                            match state
-                                .handoff
-                                .mark_dispatched(&packet_id, &cmd.session_id, now)
-                            {
-                                crate::handoff::HandoffDispatchOutcome::Ok {
-                                    upsert_event,
-                                    status_event,
-                                    ..
-                                } => {
-                                    events.push(upsert_event);
-                                    events.push(status_event);
-                                    (
-                                        ServerAck {
-                                            ack_of: cmd.id.clone(),
-                                            ok: true,
-                                            error: None,
-                                        },
-                                        events,
-                                    )
-                                }
-                                crate::handoff::HandoffDispatchOutcome::Err { code, message } => {
-                                    state.audit.log(
-                                        &cmd.session_id,
-                                        "handoff",
-                                        bridge_core::AuditSeverity::Warn,
-                                        serde_json::json!({
-                                            "event": "handoff.dispatch_state_error",
-                                            "packet_id": packet_id,
-                                            "code": code,
-                                            "reason": message,
-                                        }),
-                                    );
-                                    (
-                                        ServerAck {
-                                            ack_of: cmd.id.clone(),
-                                            ok: false,
-                                            error: Some(ErrorInfo { code, message }),
-                                        },
-                                        events,
-                                    )
-                                }
-                            }
-                        }
+                    let executor_handle = match state
+                        .sessions
+                        .create_with_agent_and_workflow(
+                            packet.target.executor_profile_id.clone(),
+                            project_root.clone(),
+                            None,
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(handle) => handle,
                         Err(e) => {
-                            // Provider rejected or was unreachable. Packet must
-                            // stay in `approved`; only record the auditable
-                            // history entry and emit upserted + status so the
-                            // FE can surface the rejection.
                             let detail = e.to_string();
                             if let crate::handoff::HandoffDispatchRejectOutcome::Ok {
                                 upsert_event,
@@ -638,7 +651,186 @@ pub async fn dispatch_command(
                                 serde_json::json!({
                                     "event": "handoff.dispatch_rejected",
                                     "packet_id": packet_id,
-                                    "code": "engine.unreachable",
+                                    "code": "executor.spawn_failed",
+                                    "reason_tag": "provider_error",
+                                    "reason": detail,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "executor.spawn_failed".into(),
+                                        message: detail,
+                                    }),
+                                },
+                                events,
+                            );
+                        }
+                    };
+
+                    let listener_state = Arc::clone(&state);
+                    let listener_source = Arc::clone(&source_handle);
+                    let listener_packet_id = packet_id.clone();
+                    let listener_executor_session_id = executor_handle.id.clone();
+                    let mut listener_rx = executor_handle.broadcast.subscribe();
+                    tokio::spawn(async move {
+                        loop {
+                            match listener_rx.recv().await {
+                                Ok(event) => {
+                                    let terminal = relay_executor_event(
+                                        &listener_state,
+                                        &listener_source,
+                                        &listener_packet_id,
+                                        &listener_executor_session_id,
+                                        event,
+                                    )
+                                    .await;
+                                    if terminal {
+                                        break;
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    continue
+                                }
+                            }
+                        }
+                    });
+
+                    match state
+                        .handoff
+                        .mark_dispatched(&packet_id, &cmd.session_id, now)
+                    {
+                        crate::handoff::HandoffDispatchOutcome::Ok {
+                            upsert_event,
+                            status_event,
+                            ..
+                        } => {
+                            events.push(upsert_event);
+                            events.push(status_event);
+                        }
+                        crate::handoff::HandoffDispatchOutcome::Err { code, message } => {
+                            let _ = executor_handle.close_stdin().await;
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.dispatch_state_error",
+                                    "packet_id": packet_id,
+                                    "code": code,
+                                    "reason": message,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo { code, message }),
+                                },
+                                events,
+                            );
+                        }
+                    }
+
+                    match state.handoff.bind_executor_session(
+                        &packet_id,
+                        &executor_handle.id,
+                        &cmd.session_id,
+                        now,
+                    ) {
+                        crate::handoff::HandoffExecutionBindOutcome::Ok {
+                            upsert_event,
+                            status_event,
+                            ..
+                        } => {
+                            events.push(upsert_event);
+                            events.push(status_event);
+                        }
+                        crate::handoff::HandoffExecutionBindOutcome::Err { code, message } => {
+                            let _ = executor_handle.close_stdin().await;
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.execution_bind_failed",
+                                    "packet_id": packet_id,
+                                    "code": code,
+                                    "reason": message,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo { code, message }),
+                                },
+                                events,
+                            );
+                        }
+                    }
+
+                    let executor_cmd = ClientCommand {
+                        id: format!("cmd_{}", Ulid::new()),
+                        session_id: executor_handle.id.clone(),
+                        cmd_type: "handoff.dispatch_local".into(),
+                        payload: build_executor_dispatch_payload(
+                            &cmd.payload,
+                            &packet,
+                            &cmd.session_id,
+                        ),
+                        v: 1,
+                    };
+                    match executor_handle.send_client_command(&executor_cmd).await {
+                        Ok(()) => (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: true,
+                                error: None,
+                            },
+                            events,
+                        ),
+                        Err(e) => {
+                            let detail = e.to_string();
+                            let fallback_outcome = ExecutionOutcome {
+                                status: "failed".into(),
+                                tasks_completed: vec![],
+                                tasks_failed: packet
+                                    .tasks
+                                    .iter()
+                                    .map(|task| task.id.clone())
+                                    .collect(),
+                                changeset_summary: Some(detail.clone()),
+                                reassessment_run_id: None,
+                            };
+                            if let crate::handoff::HandoffExecutionCompleteOutcome::Ok {
+                                upsert_event,
+                                status_event,
+                                terminal_event,
+                                ..
+                            } = state.handoff.complete_execution(
+                                &packet_id,
+                                &executor_handle.id,
+                                fallback_outcome,
+                                &cmd.session_id,
+                                now,
+                            ) {
+                                events.push(upsert_event);
+                                events.push(status_event);
+                                events.push(terminal_event);
+                            }
+                            let _ = executor_handle.close_stdin().await;
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.execution_failed",
+                                    "packet_id": packet_id,
+                                    "code": "executor.dispatch_failed",
                                     "reason_tag": "provider_error",
                                     "reason": detail,
                                 }),
@@ -648,7 +840,7 @@ pub async fn dispatch_command(
                                     ack_of: cmd.id.clone(),
                                     ok: false,
                                     error: Some(ErrorInfo {
-                                        code: "engine.unreachable".into(),
+                                        code: "executor.dispatch_failed".into(),
                                         message: detail,
                                     }),
                                 },
@@ -1120,5 +1312,311 @@ pub async fn dispatch_command(
                 }
             }
         }
+    }
+}
+
+async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
+    let seq = {
+        let mut ring = handle.ring.write().await;
+        ring.push(event.clone())
+    };
+    let mut with_seq = event;
+    with_seq.seq = seq;
+    let _ = handle.broadcast.send(with_seq);
+}
+
+fn build_executor_dispatch_payload(
+    payload: &serde_json::Value,
+    packet: &crate::handoff::packet::Packet,
+    source_session_id: &str,
+) -> serde_json::Value {
+    let mut out = if payload.is_object() {
+        payload.clone()
+    } else {
+        json!({})
+    };
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("packet_id".into(), json!(packet.id.clone()));
+        obj.insert("source_session_id".into(), json!(source_session_id));
+        obj.insert(
+            "executor_profile_id".into(),
+            json!(packet.target.executor_profile_id.clone()),
+        );
+        obj.insert(
+            "project_key".into(),
+            json!(format!(
+                "{}::{}",
+                packet.pin.repo_ref, packet.pin.base_commit_sha
+            )),
+        );
+        obj.insert(
+            "prompt".into(),
+            json!(crate::handoff::build_executor_initial_prompt(packet)),
+        );
+    }
+    out
+}
+
+fn parse_execution_outcome(payload: &serde_json::Value, fallback_status: &str) -> ExecutionOutcome {
+    if let Some(outcome_value) = payload.get("outcome") {
+        if let Ok(outcome) = serde_json::from_value::<ExecutionOutcome>(outcome_value.clone()) {
+            return outcome;
+        }
+    }
+    if let Ok(outcome) = serde_json::from_value::<ExecutionOutcome>(payload.clone()) {
+        return outcome;
+    }
+
+    let fallback_status = fallback_status.trim();
+    let status = if fallback_status.is_empty() {
+        "success"
+    } else {
+        fallback_status
+    };
+    let summary = payload
+        .get("error")
+        .or_else(|| payload.get("reason"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    ExecutionOutcome {
+        status: status.to_string(),
+        tasks_completed: vec![],
+        tasks_failed: vec![],
+        changeset_summary: summary,
+        reassessment_run_id: None,
+    }
+}
+
+async fn relay_executor_event(
+    state: &AppStateHandle,
+    source_handle: &SessionHandleRef,
+    packet_id: &str,
+    executor_session_id: &str,
+    event: ServerEvent,
+) -> bool {
+    let now = chrono::Utc::now();
+    match event.event_type.as_str() {
+        "handoff.execution_progress" | "handoff.dispatch_progress" => {
+            let task_id = event
+                .payload
+                .get("task_id")
+                .or_else(|| event.payload.get("current_task"))
+                .or_else(|| event.payload.get("currentTask"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if task_id.trim().is_empty() {
+                warn!(
+                    packet_id = %packet_id,
+                    event_type = %event.event_type,
+                    "executor progress missing task_id"
+                );
+                return false;
+            }
+            let status = event
+                .payload
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("started");
+            let completed = event
+                .payload
+                .get("completed")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let total = event
+                .payload
+                .get("total")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(completed as u64) as u32;
+            let message = event
+                .payload
+                .get("message")
+                .or_else(|| event.payload.get("reason"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            match state.handoff.record_execution_progress(
+                packet_id,
+                TaskExecutionProgress {
+                    task_id: task_id.to_string(),
+                    status: status.to_string(),
+                    updated_at: now.to_rfc3339(),
+                    completed,
+                    total,
+                    message,
+                },
+                executor_session_id,
+                &source_handle.id,
+                now,
+            ) {
+                crate::handoff::HandoffExecutionProgressOutcome::Ok {
+                    upsert_event,
+                    progress_event,
+                    ..
+                } => {
+                    emit_session_event(source_handle, upsert_event).await;
+                    emit_session_event(source_handle, progress_event).await;
+                }
+                crate::handoff::HandoffExecutionProgressOutcome::Err { code, message } => {
+                    warn!(
+                        packet_id = %packet_id,
+                        event_type = %event.event_type,
+                        %code,
+                        %message,
+                        "executor progress ignored"
+                    );
+                }
+            }
+            false
+        }
+        "handoff.status" => {
+            let status = event
+                .payload
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match status {
+                "completed" | "failed" => {
+                    let outcome = parse_execution_outcome(
+                        &event.payload,
+                        if status == "failed" {
+                            "failed"
+                        } else {
+                            "success"
+                        },
+                    );
+                    match state.handoff.complete_execution(
+                        packet_id,
+                        executor_session_id,
+                        outcome,
+                        &source_handle.id,
+                        now,
+                    ) {
+                        crate::handoff::HandoffExecutionCompleteOutcome::Ok {
+                            upsert_event,
+                            status_event,
+                            terminal_event,
+                            ..
+                        } => {
+                            emit_session_event(source_handle, upsert_event).await;
+                            emit_session_event(source_handle, status_event).await;
+                            emit_session_event(source_handle, terminal_event).await;
+                        }
+                        crate::handoff::HandoffExecutionCompleteOutcome::Err { code, message } => {
+                            warn!(
+                                packet_id = %packet_id,
+                                event_type = %event.event_type,
+                                %code,
+                                %message,
+                                "executor terminal state ignored"
+                            );
+                        }
+                    }
+                    true
+                }
+                _ => false,
+            }
+        }
+        "handoff.completed" | "handoff.failed" => {
+            let outcome = parse_execution_outcome(
+                &event.payload,
+                if event.event_type == "handoff.failed" {
+                    "failed"
+                } else {
+                    "success"
+                },
+            );
+            match state.handoff.complete_execution(
+                packet_id,
+                executor_session_id,
+                outcome,
+                &source_handle.id,
+                now,
+            ) {
+                crate::handoff::HandoffExecutionCompleteOutcome::Ok {
+                    upsert_event,
+                    status_event,
+                    terminal_event,
+                    ..
+                } => {
+                    emit_session_event(source_handle, upsert_event).await;
+                    emit_session_event(source_handle, status_event).await;
+                    emit_session_event(source_handle, terminal_event).await;
+                }
+                crate::handoff::HandoffExecutionCompleteOutcome::Err { code, message } => {
+                    warn!(
+                        packet_id = %packet_id,
+                        event_type = %event.event_type,
+                        %code,
+                        %message,
+                        "executor terminal event ignored"
+                    );
+                }
+            }
+            true
+        }
+        "transcript.completed" => {
+            let outcome = parse_execution_outcome(&event.payload, "success");
+            match state.handoff.complete_execution(
+                packet_id,
+                executor_session_id,
+                outcome,
+                &source_handle.id,
+                now,
+            ) {
+                crate::handoff::HandoffExecutionCompleteOutcome::Ok {
+                    upsert_event,
+                    status_event,
+                    terminal_event,
+                    ..
+                } => {
+                    emit_session_event(source_handle, upsert_event).await;
+                    emit_session_event(source_handle, status_event).await;
+                    emit_session_event(source_handle, terminal_event).await;
+                }
+                crate::handoff::HandoffExecutionCompleteOutcome::Err { code, message } => {
+                    warn!(
+                        packet_id = %packet_id,
+                        event_type = %event.event_type,
+                        %code,
+                        %message,
+                        "transcript completion ignored"
+                    );
+                }
+            }
+            true
+        }
+        "transcript.error" => {
+            let outcome = parse_execution_outcome(&event.payload, "failed");
+            match state.handoff.complete_execution(
+                packet_id,
+                executor_session_id,
+                outcome,
+                &source_handle.id,
+                now,
+            ) {
+                crate::handoff::HandoffExecutionCompleteOutcome::Ok {
+                    upsert_event,
+                    status_event,
+                    terminal_event,
+                    ..
+                } => {
+                    emit_session_event(source_handle, upsert_event).await;
+                    emit_session_event(source_handle, status_event).await;
+                    emit_session_event(source_handle, terminal_event).await;
+                }
+                crate::handoff::HandoffExecutionCompleteOutcome::Err { code, message } => {
+                    warn!(
+                        packet_id = %packet_id,
+                        event_type = %event.event_type,
+                        %code,
+                        %message,
+                        "transcript error ignored"
+                    );
+                }
+            }
+            true
+        }
+        _ => false,
     }
 }

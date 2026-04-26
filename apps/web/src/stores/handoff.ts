@@ -74,6 +74,15 @@ export interface Signer {
   reason?: string;
 }
 
+export interface TaskExecutionProgress {
+  task_id: string;
+  status: 'pending' | 'started' | 'completed' | 'failed';
+  updated_at: string;
+  completed: number;
+  total: number;
+  message?: string;
+}
+
 export interface HandoffApproval {
   required: boolean;
   approvers: string[];
@@ -117,6 +126,7 @@ export interface Packet {
   signers: Signer[];
   required_signers: number;
   execution_session_id?: string;
+  execution_progress?: Record<string, TaskExecutionProgress>;
   execution_outcome?: Record<string, unknown>;
   // Legacy aliases during migration.
   target_profile?: string;
@@ -134,6 +144,8 @@ interface HandoffSlice {
   setStatus(id: string, status: PacketStatus): void;
   addSigner(id: string, s: Signer): boolean; // false on self-sign conflict
   setExecutorSession(id: string, sessionId: string): void;
+  setExecutionProgress(id: string, progress: TaskExecutionProgress): void;
+  setExecutionOutcome(id: string, status: PacketStatus, outcome: Record<string, unknown>): void;
   incrementConvergence(id: string): void;
   clear(): void;
 }
@@ -164,6 +176,8 @@ export const useHandoff = create<HandoffSlice>((set, get) => ({
     set((s) => {
       const cur = s.packets.get(id);
       if (!cur) return s;
+      const lastState = cur.state_history?.[cur.state_history.length - 1]?.state;
+      if (lastState === status) return s;
       const packets = new Map(s.packets);
       packets.set(id, {
         ...cur,
@@ -206,6 +220,57 @@ export const useHandoff = create<HandoffSlice>((set, get) => ({
         ...cur,
         execution_session_id: sessionId,
         executor_session_id: sessionId,
+        updated_at: new Date().toISOString(),
+      });
+      return { packets };
+    });
+  },
+
+  setExecutionProgress(id, progress) {
+    set((s) => {
+      const cur = s.packets.get(id);
+      if (!cur) return s;
+      const packets = new Map(s.packets);
+      const existing = cur.execution_progress ?? {};
+      packets.set(id, {
+        ...cur,
+        execution_progress: {
+          ...existing,
+          [progress.task_id]: progress,
+        },
+        updated_at: new Date().toISOString(),
+      });
+      return { packets };
+    });
+  },
+
+  setExecutionOutcome(id, status, outcome) {
+    set((s) => {
+      const cur = s.packets.get(id);
+      if (!cur) return s;
+      const packets = new Map(s.packets);
+      const outcomeStatus =
+        typeof outcome.status === 'string' ? outcome.status : status === 'failed' ? 'failed' : '';
+      const packetStatus: PacketStatus =
+        outcomeStatus === 'failed' || outcomeStatus === 'cancelled' ? 'failed' : status;
+      const lastState = cur.state_history?.[cur.state_history.length - 1]?.state;
+      const nextStateHistory =
+        lastState === status
+          ? cur.state_history
+          : [
+              ...(cur.state_history ?? []),
+              {
+                state: status,
+                at: new Date().toISOString(),
+                reason: `execution_${outcomeStatus || status}`,
+              },
+            ];
+      packets.set(id, {
+        ...cur,
+        status: packetStatus,
+        state: packetStatus,
+        state_history: nextStateHistory,
+        execution_outcome: outcome,
         updated_at: new Date().toISOString(),
       });
       return { packets };

@@ -11,6 +11,7 @@ import {
   type PacketStateHistoryEntry,
   type PacketTask,
   type Signer,
+  type TaskExecutionProgress,
 } from '../../stores/handoff';
 import { useNotify } from '../../stores/notify';
 import type { TransportHandle } from '../../transport';
@@ -264,6 +265,33 @@ function normalizeStateHistory(raw: unknown, prev?: PacketStateHistoryEntry[]): 
     .filter((entry): entry is PacketStateHistoryEntry => entry !== null);
 }
 
+function normalizeExecutionProgress(
+  raw: unknown,
+  prev?: Packet['execution_progress'],
+): Packet['execution_progress'] | undefined {
+  if (!isRecord(raw)) return prev;
+  const next: Record<string, TaskExecutionProgress> = {};
+  for (const [taskId, value] of Object.entries(raw)) {
+    if (!isRecord(value)) continue;
+    const rawStatus = stringOr(value.status, 'started');
+    const status =
+      rawStatus === 'pending' || rawStatus === 'started' || rawStatus === 'completed' || rawStatus === 'failed'
+        ? rawStatus
+        : 'started';
+    const completed = typeof value.completed === 'number' && Number.isFinite(value.completed) ? Math.max(0, Math.floor(value.completed)) : 0;
+    const total = typeof value.total === 'number' && Number.isFinite(value.total) ? Math.max(0, Math.floor(value.total)) : completed;
+    next[taskId] = {
+      task_id: stringOr(value.task_id ?? value.taskId, taskId),
+      status,
+      updated_at: stringOr(value.updated_at ?? value.updatedAt, new Date().toISOString()),
+      completed,
+      total,
+      ...(typeof value.message === 'string' ? { message: value.message } : {}),
+    };
+  }
+  return Object.keys(next).length > 0 ? next : prev;
+}
+
 function normalizePacket(p: UpsertPayload, prev?: Packet): Packet {
   const mergedSigners = (() => {
     if (!p.signers) return prev?.signers ?? [];
@@ -283,14 +311,15 @@ function normalizePacket(p: UpsertPayload, prev?: Packet): Packet {
     Array.isArray(p.order_hint) && p.order_hint.length > 0
       ? p.order_hint.filter((item): item is string => typeof item === 'string')
       : prev?.order_hint ?? tasks.map((task) => task.id);
+  const executionProgress = normalizeExecutionProgress(p.execution_progress, prev?.execution_progress);
   const executionSessionId =
-    p.execution_session_id !== undefined
+    p.execution_session_id !== undefined && p.execution_session_id !== null
       ? p.execution_session_id
-      : p.executor_session_id !== undefined
+      : p.executor_session_id !== undefined && p.executor_session_id !== null
         ? p.executor_session_id
         : prev?.execution_session_id ?? prev?.executor_session_id;
   const executionOutcome =
-    p.execution_outcome !== undefined ? p.execution_outcome : prev?.execution_outcome;
+    isRecord(p.execution_outcome) ? p.execution_outcome : prev?.execution_outcome;
   const requiredSigners =
     p.required_signers ?? prev?.required_signers ?? (approval.two_party ? 2 : 1);
   return {
@@ -322,6 +351,7 @@ function normalizePacket(p: UpsertPayload, prev?: Packet): Packet {
     signers: mergedSigners,
     required_signers: requiredSigners,
     ...(executionSessionId !== undefined ? { execution_session_id: executionSessionId } : {}),
+    ...(executionProgress !== undefined ? { execution_progress: executionProgress } : {}),
     ...(executionOutcome !== undefined ? { execution_outcome: executionOutcome } : {}),
     ...(target.executor_profile_id ? { target_profile: target.executor_profile_id } : prev?.target_profile ? { target_profile: prev.target_profile } : {}),
     ...(executionSessionId !== undefined ? { executor_session_id: executionSessionId } : prev?.executor_session_id !== undefined ? { executor_session_id: prev.executor_session_id } : {}),
@@ -347,9 +377,10 @@ interface UpsertPayload {
   approval?: HandoffApproval | Record<string, unknown>;
   signers?: Signer[];
   required_signers?: number;
-  execution_session_id?: string;
-  executor_session_id?: string;
-  execution_outcome?: Record<string, unknown>;
+  execution_session_id?: string | null;
+  executor_session_id?: string | null;
+  execution_outcome?: Record<string, unknown> | null;
+  execution_progress?: Record<string, unknown> | null;
   order_hint?: string[];
   state_history?: PacketStateHistoryEntry[] | Array<Record<string, unknown>>;
   convergence_count?: number;
@@ -372,8 +403,24 @@ interface DispatchProgressPayload {
   packet_id: string;
   executor_session_id?: string;
   current_task?: string;
+  task_id?: string;
+  currentTask?: string;
+  status?: string;
   completed: number;
   total: number;
+  message?: string;
+  reason?: string;
+}
+
+interface ExecutionTerminalPayload {
+  packet_id: string;
+  executor_session_id?: string;
+  status?: string;
+  outcome?: Record<string, unknown>;
+  error?: string;
+  reason?: string;
+  message?: string;
+  updated_at?: string;
 }
 
 interface ConvergencePayload {
@@ -427,6 +474,87 @@ export function registerHandoffHandlers(transport: TransportHandle): () => void 
       if (p.executor_session_id) {
         useHandoff.getState().setExecutorSession(p.packet_id, p.executor_session_id);
       }
+      const task_id = p.task_id ?? p.current_task ?? p.currentTask;
+      if (task_id) {
+        useHandoff.getState().setExecutionProgress(p.packet_id, {
+          task_id,
+          status:
+            p.status === 'pending' ||
+            p.status === 'started' ||
+            p.status === 'completed' ||
+            p.status === 'failed'
+              ? p.status
+              : 'started',
+          updated_at: new Date().toISOString(),
+          completed: Number.isFinite(p.completed) ? Math.max(0, Math.floor(p.completed)) : 0,
+          total: Number.isFinite(p.total) ? Math.max(0, Math.floor(p.total)) : 0,
+          ...(typeof p.message === 'string' ? { message: p.message } : {}),
+        });
+      }
+    }),
+  );
+
+  offs.push(
+    transport.on('handoff.execution_progress', (ev) => {
+      const p = ev.payload as DispatchProgressPayload | null;
+      if (!p?.packet_id) return;
+      if (p.executor_session_id) {
+        useHandoff.getState().setExecutorSession(p.packet_id, p.executor_session_id);
+      }
+      const task_id = p.task_id ?? p.current_task ?? p.currentTask;
+      if (task_id) {
+        useHandoff.getState().setExecutionProgress(p.packet_id, {
+          task_id,
+          status:
+            p.status === 'pending' ||
+            p.status === 'started' ||
+            p.status === 'completed' ||
+            p.status === 'failed'
+              ? p.status
+              : 'started',
+          updated_at: new Date().toISOString(),
+          completed: Number.isFinite(p.completed) ? Math.max(0, Math.floor(p.completed)) : 0,
+          total: Number.isFinite(p.total) ? Math.max(0, Math.floor(p.total)) : 0,
+          ...(typeof p.message === 'string' ? { message: p.message } : {}),
+        });
+      }
+    }),
+  );
+
+  offs.push(
+    transport.on('handoff.completed', (ev) => {
+      const p = ev.payload as ExecutionTerminalPayload | null;
+      if (!p?.packet_id) return;
+      if (p.executor_session_id) {
+        useHandoff.getState().setExecutorSession(p.packet_id, p.executor_session_id);
+      }
+      useHandoff.getState().setExecutionOutcome(
+        p.packet_id,
+        'completed',
+        isRecord(p.outcome) ? p.outcome : { status: 'success' },
+      );
+    }),
+  );
+
+  offs.push(
+    transport.on('handoff.failed', (ev) => {
+      const p = ev.payload as ExecutionTerminalPayload | null;
+      if (!p?.packet_id) return;
+      if (p.executor_session_id) {
+        useHandoff.getState().setExecutorSession(p.packet_id, p.executor_session_id);
+      }
+      useHandoff.getState().setExecutionOutcome(
+        p.packet_id,
+        'failed',
+        isRecord(p.outcome)
+          ? p.outcome
+          : {
+              status: 'failed',
+              tasks_completed: [],
+              tasks_failed: [],
+              changeset_summary: p.message ?? p.reason ?? p.error ?? 'execution failed',
+            },
+      );
     }),
   );
 

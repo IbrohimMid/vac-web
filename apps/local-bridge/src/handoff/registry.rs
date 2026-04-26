@@ -54,6 +54,29 @@ impl HandoffRegistry {
         self.packets.iter().map(|r| r.clone()).collect()
     }
 
+    /// Return the active packet already occupying the given executor profile
+    /// for the same project identity. The project key is derived from the
+    /// packet pin (repo_ref + base_commit_sha), not the ephemeral worktree
+    /// path, so identical repo state collides reliably across sessions.
+    pub fn active_executor_packet(
+        &self,
+        executor_profile_id: &str,
+        project_key: &str,
+    ) -> Option<Packet> {
+        self.packets
+            .iter()
+            .find(|entry| {
+                let packet = entry.value();
+                matches!(
+                    packet.status,
+                    PacketStatus::Dispatched | PacketStatus::Executing
+                ) && packet.target.executor_profile_id == executor_profile_id
+                    && format!("{}::{}", packet.pin.repo_ref, packet.pin.base_commit_sha)
+                        == project_key
+            })
+            .map(|entry| entry.value().clone())
+    }
+
     pub fn set_status(&self, packet_id: &str, status: PacketStatus) -> bool {
         self.update(packet_id, |p| {
             let now = chrono::Utc::now().to_rfc3339();
@@ -135,6 +158,7 @@ mod tests {
             signers: vec![],
             required_signers: 2,
             execution_session_id: None,
+            execution_progress: None,
             execution_outcome: None,
             convergence_count: 0,
             updated_at: Utc::now().to_rfc3339(),

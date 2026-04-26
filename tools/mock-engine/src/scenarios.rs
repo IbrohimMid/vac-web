@@ -944,38 +944,86 @@ fn handle_handoff_dispatch(id: Option<Value>, params: Value, state: &mut State) 
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let force_failure = params
+        .get("force_failure")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || params
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .map(|mode| mode == "fail")
+            .unwrap_or(false);
     state.counter += 1;
     let exec_sid = format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter);
-    vec![
-        emit_notification(
-            "handoff.status",
-            json!({ "packet_id": pid, "status": "executing" }),
-        ),
-        emit_notification(
-            "handoff.dispatch_progress",
+    let mut out = vec![emit_notification(
+        "handoff.execution_progress",
+        json!({
+            "packet_id": pid,
+            "executor_session_id": exec_sid,
+            "task_id": "t1",
+            "current_task": "t1",
+            "status": "started",
+            "completed": 0,
+            "total": 1,
+        }),
+    )];
+    if force_failure {
+        out.push(emit_notification(
+            "handoff.failed",
             json!({
                 "packet_id": pid,
                 "executor_session_id": exec_sid,
-                "current_task": "t1",
-                "completed": 0,
-                "total": 1
+                "status": "failed",
+                "outcome": {
+                    "status": "failed",
+                    "tasks_completed": [],
+                    "tasks_failed": ["t1"],
+                    "changeset_summary": "mock execution failed"
+                }
             }),
-        ),
-        emit_notification(
-            "handoff.dispatch_progress",
+        ));
+        out.push(emit_notification(
+            "handoff.upserted",
+            json!({
+                "packet_id": pid,
+                "status": "failed",
+                "execution_session_id": exec_sid,
+                "execution_outcome": {
+                    "status": "failed",
+                    "tasks_completed": [],
+                    "tasks_failed": ["t1"],
+                    "changeset_summary": "mock execution failed"
+                }
+            }),
+        ));
+    } else {
+        out.push(emit_notification(
+            "handoff.execution_progress",
             json!({
                 "packet_id": pid,
                 "executor_session_id": exec_sid,
+                "task_id": "t1",
                 "current_task": "t1",
+                "status": "completed",
                 "completed": 1,
-                "total": 1
+                "total": 1,
             }),
-        ),
-        emit_notification(
-            "handoff.status",
-            json!({ "packet_id": pid, "status": "completed" }),
-        ),
-        emit_notification(
+        ));
+        out.push(emit_notification(
+            "handoff.completed",
+            json!({
+                "packet_id": pid,
+                "executor_session_id": exec_sid,
+                "status": "completed",
+                "outcome": {
+                    "status": "success",
+                    "tasks_completed": ["t1"],
+                    "tasks_failed": [],
+                    "changeset_summary": "mock execution complete"
+                }
+            }),
+        ));
+        out.push(emit_notification(
             "handoff.upserted",
             json!({
                 "packet_id": pid,
@@ -983,17 +1031,18 @@ fn handle_handoff_dispatch(id: Option<Value>, params: Value, state: &mut State) 
                 "execution_session_id": exec_sid,
                 "execution_outcome": {
                     "status": "success",
-                    "tasks_completed": [],
+                    "tasks_completed": ["t1"],
                     "tasks_failed": [],
                     "changeset_summary": "mock execution complete"
                 }
             }),
-        ),
-        emit_response(
-            id.unwrap_or(Value::Null),
-            json!({ "ok": true, "executor_session_id": exec_sid }),
-        ),
-    ]
+        ));
+    }
+    out.push(emit_response(
+        id.unwrap_or(Value::Null),
+        json!({ "ok": true, "executor_session_id": exec_sid }),
+    ));
+    out
 }
 
 fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) -> Vec<String> {

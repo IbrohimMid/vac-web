@@ -23,11 +23,13 @@ pub mod validate;
 use crate::ws::envelope::ServerEvent;
 use chrono::{DateTime, Utc};
 use packet::{
-    canonical_signer_id, Packet, PacketStateHistoryEntry, PacketStatus, PinPolicy, Signer,
+    canonical_signer_id, execution_outcome_payload, ExecutionOutcome, Packet,
+    PacketStateHistoryEntry, PacketStatus, PinPolicy, Signer, TaskExecutionProgress,
 };
 use pin::compute_pin;
 use registry::HandoffRegistry;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 use ulid::Ulid;
 use validate::validate_handoff_create;
@@ -47,6 +49,15 @@ impl HandoffService {
         Self {
             registry: HandoffRegistry::new(),
         }
+    }
+
+    pub fn active_executor_packet(
+        &self,
+        executor_profile_id: &str,
+        project_key: &str,
+    ) -> Option<Packet> {
+        self.registry
+            .active_executor_packet(executor_profile_id, project_key)
     }
 }
 
@@ -126,6 +137,49 @@ pub enum HandoffDispatchRejectOutcome {
     },
 }
 
+/// Outcome of binding a freshly spawned executor session to an approved packet.
+#[allow(clippy::large_enum_variant)]
+pub enum HandoffExecutionBindOutcome {
+    Ok {
+        packet: Packet,
+        upsert_event: ServerEvent,
+        status_event: ServerEvent,
+    },
+    Err {
+        code: String,
+        message: String,
+    },
+}
+
+/// Outcome of recording task-level progress during execution.
+#[allow(clippy::large_enum_variant)]
+pub enum HandoffExecutionProgressOutcome {
+    Ok {
+        packet: Packet,
+        upsert_event: ServerEvent,
+        progress_event: ServerEvent,
+    },
+    Err {
+        code: String,
+        message: String,
+    },
+}
+
+/// Outcome of completing an execution run.
+#[allow(clippy::large_enum_variant)]
+pub enum HandoffExecutionCompleteOutcome {
+    Ok {
+        packet: Packet,
+        upsert_event: ServerEvent,
+        status_event: ServerEvent,
+        terminal_event: ServerEvent,
+    },
+    Err {
+        code: String,
+        message: String,
+    },
+}
+
 /// Build a snake_case pin payload directly from the typed struct.
 ///
 /// Important: do NOT round-trip through `serde_json::to_value` and then
@@ -159,6 +213,8 @@ fn build_upsert_payload(packet: &Packet) -> serde_json::Value {
     let signers_payload = serde_json::to_value(&packet.signers).unwrap_or(serde_json::Value::Null);
     let state_history_payload =
         serde_json::to_value(&packet.state_history).unwrap_or(serde_json::Value::Null);
+    let execution_progress_payload =
+        serde_json::to_value(&packet.execution_progress).unwrap_or(serde_json::Value::Null);
     json!({
         "packet_id": packet.id,
         "title": packet.title,
@@ -176,6 +232,9 @@ fn build_upsert_payload(packet: &Packet) -> serde_json::Value {
         "signers": signers_payload,
         "required_signers": packet.required_signers,
         "state_history": state_history_payload,
+        "execution_session_id": packet.execution_session_id,
+        "execution_progress": execution_progress_payload,
+        "execution_outcome": packet.execution_outcome,
         "convergence_count": packet.convergence_count,
         "updated_at": packet.updated_at,
     })
@@ -207,6 +266,84 @@ fn status_event(packet: &Packet, session_id: &str, now: DateTime<Utc>) -> Server
         }),
         now,
     )
+}
+
+pub(crate) fn project_key_for_packet(packet: &Packet) -> String {
+    format!("{}::{}", packet.pin.repo_ref, packet.pin.base_commit_sha)
+}
+
+fn execution_state_from_outcome_status(status: &str) -> PacketStatus {
+    match status.trim() {
+        "failed" | "cancelled" => PacketStatus::Failed,
+        _ => PacketStatus::Completed,
+    }
+}
+
+fn execution_terminal_event_type(status: &str) -> &'static str {
+    match status.trim() {
+        "failed" | "cancelled" => "handoff.failed",
+        _ => "handoff.completed",
+    }
+}
+
+pub(crate) fn build_executor_initial_prompt(packet: &Packet) -> String {
+    let mut out = String::new();
+    out.push_str("VAC Web Handoff Packet\n\n");
+    out.push_str(&format!("Packet: {}\n", packet.id));
+    out.push_str(&format!("Title: {}\n", packet.title));
+    out.push_str(&format!(
+        "Pinned repo: {} @ {}\n",
+        packet.pin.repo_ref, packet.pin.base_commit_sha
+    ));
+    out.push_str(&format!(
+        "Executor profile: {}\n\nRules:\n- Execute only the tasks listed below.\n- Respect constraints and touches_paths.\n- Do not expand scope.\n- Emit task progress events when each task starts/completes/fails.\n\n",
+        packet.target.executor_profile_id
+    ));
+    if packet.tasks.is_empty() {
+        out.push_str("Tasks:\n- (none)\n");
+        return out;
+    }
+    out.push_str("Tasks:\n");
+    for (idx, task) in packet.tasks.iter().enumerate() {
+        out.push_str(&format!("{}. {} ({})\n", idx + 1, task.id, task.title));
+        if !task.rationale.is_empty() {
+            out.push_str(&format!("   Rationale: {}\n", task.rationale));
+        }
+        if !task.evidence_refs.is_empty() {
+            let refs = task
+                .evidence_refs
+                .iter()
+                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| String::from("{}")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("   Evidence refs: {refs}\n"));
+        }
+        if !task.steps.is_empty() {
+            out.push_str("   Steps:\n");
+            for step in &task.steps {
+                out.push_str(&format!("   - {}\n", step));
+            }
+        }
+        if !task.constraints.is_empty() {
+            out.push_str("   Constraints:\n");
+            for constraint in &task.constraints {
+                out.push_str(&format!("   - {}\n", constraint));
+            }
+        }
+        if !task.touches_paths.is_empty() {
+            out.push_str("   Touches paths:\n");
+            for path in &task.touches_paths {
+                out.push_str(&format!("   - {}\n", path));
+            }
+        }
+        if !task.rollback_steps.is_empty() {
+            out.push_str("   Rollback:\n");
+            for step in &task.rollback_steps {
+                out.push_str(&format!("   - {}\n", step));
+            }
+        }
+    }
+    out
 }
 
 impl HandoffService {
@@ -520,6 +657,7 @@ impl HandoffService {
             }],
             required_signers: if two_party { 2 } else { 1 },
             execution_session_id: None,
+            execution_progress: None,
             execution_outcome: None,
             convergence_count: 0,
             updated_at: now_ts,
@@ -949,6 +1087,280 @@ impl HandoffService {
             status_event: status_evt,
         }
     }
+
+    /// Bind a freshly created executor session to a packet that has already
+    /// been dispatched. This is the `dispatched` → `executing` bridge-owned
+    /// transition.
+    pub fn bind_executor_session(
+        &self,
+        packet_id: &str,
+        executor_session_id: &str,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> HandoffExecutionBindOutcome {
+        let Some(packet) = self.registry.get(packet_id) else {
+            return HandoffExecutionBindOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        };
+
+        if packet.status != PacketStatus::Dispatched {
+            return HandoffExecutionBindOutcome::Err {
+                code: "handoff.invalid_state".into(),
+                message: format!(
+                    "bind_executor_session requires status=dispatched, got {}",
+                    packet.status.as_str()
+                ),
+            };
+        }
+
+        let now_str = now.to_rfc3339();
+        let updated = self.registry.update(packet_id, |p| {
+            p.execution_session_id = Some(executor_session_id.to_string());
+            p.execution_progress.get_or_insert_with(BTreeMap::new);
+            p.status = PacketStatus::Executing;
+            p.state_history.push(PacketStateHistoryEntry {
+                state: "executing".to_string(),
+                at: now_str.clone(),
+                by: None,
+                reason: Some("executor_session_bound".to_string()),
+            });
+            p.updated_at = now_str.clone();
+        });
+        if !updated {
+            return HandoffExecutionBindOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        }
+
+        let updated_packet = match self.registry.get(packet_id) {
+            Some(p) => p,
+            None => {
+                return HandoffExecutionBindOutcome::Err {
+                    code: "handoff.not_found".into(),
+                    message: format!("packet {packet_id} not found"),
+                }
+            }
+        };
+
+        let upsert_event = make_event(
+            session_id,
+            "handoff.upserted",
+            build_upsert_payload(&updated_packet),
+            now,
+        );
+        let status_evt = status_event(&updated_packet, session_id, now);
+
+        HandoffExecutionBindOutcome::Ok {
+            packet: updated_packet,
+            upsert_event,
+            status_event: status_evt,
+        }
+    }
+
+    /// Record a task-level execution progress update without changing the
+    /// packet's terminal state.
+    pub fn record_execution_progress(
+        &self,
+        packet_id: &str,
+        update: TaskExecutionProgress,
+        executor_session_id: &str,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> HandoffExecutionProgressOutcome {
+        let Some(packet) = self.registry.get(packet_id) else {
+            return HandoffExecutionProgressOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        };
+
+        if !matches!(
+            packet.status,
+            PacketStatus::Dispatched | PacketStatus::Executing
+        ) {
+            return HandoffExecutionProgressOutcome::Err {
+                code: "handoff.invalid_state".into(),
+                message: format!(
+                    "execution progress requires status=dispatched|executing, got {}",
+                    packet.status.as_str()
+                ),
+            };
+        }
+
+        let task_id = update.task_id.trim();
+        if task_id.is_empty() {
+            return HandoffExecutionProgressOutcome::Err {
+                code: "handoff.invalid_payload".into(),
+                message: "task_id is required".into(),
+            };
+        }
+
+        let status = update.status.trim();
+        let status = if status.is_empty() { "started" } else { status };
+        let now_str = now.to_rfc3339();
+        let message_for_entry = update.message.clone();
+        let completed = update.completed;
+        let total = update.total;
+        let updated = self.registry.update(packet_id, |p| {
+            let task_progress = p.execution_progress.get_or_insert_with(BTreeMap::new);
+            task_progress.insert(
+                task_id.to_string(),
+                TaskExecutionProgress {
+                    task_id: task_id.to_string(),
+                    status: status.to_string(),
+                    updated_at: now_str.clone(),
+                    completed,
+                    total,
+                    message: message_for_entry.clone(),
+                },
+            );
+            if p.execution_session_id.is_none() {
+                p.execution_session_id = Some(executor_session_id.to_string());
+            }
+            p.updated_at = now_str.clone();
+        });
+        if !updated {
+            return HandoffExecutionProgressOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        }
+
+        let updated_packet = match self.registry.get(packet_id) {
+            Some(p) => p,
+            None => {
+                return HandoffExecutionProgressOutcome::Err {
+                    code: "handoff.not_found".into(),
+                    message: format!("packet {packet_id} not found"),
+                }
+            }
+        };
+
+        let upsert_event = make_event(
+            session_id,
+            "handoff.upserted",
+            build_upsert_payload(&updated_packet),
+            now,
+        );
+        let progress_event = make_event(
+            session_id,
+            "handoff.execution_progress",
+            json!({
+                "packet_id": packet_id,
+                "executor_session_id": executor_session_id,
+                "task_id": task_id,
+                "current_task": task_id,
+                "status": status,
+                "completed": completed,
+                "total": total,
+                "updated_at": now_str,
+                "message": message_for_entry,
+            }),
+            now,
+        );
+
+        HandoffExecutionProgressOutcome::Ok {
+            packet: updated_packet,
+            upsert_event,
+            progress_event,
+        }
+    }
+
+    /// Finalize execution with a structured outcome and transition the packet
+    /// into either `completed` or `failed`.
+    pub fn complete_execution(
+        &self,
+        packet_id: &str,
+        executor_session_id: &str,
+        outcome: ExecutionOutcome,
+        session_id: &str,
+        now: DateTime<Utc>,
+    ) -> HandoffExecutionCompleteOutcome {
+        let Some(packet) = self.registry.get(packet_id) else {
+            return HandoffExecutionCompleteOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        };
+
+        if !matches!(
+            packet.status,
+            PacketStatus::Dispatched | PacketStatus::Executing
+        ) {
+            return HandoffExecutionCompleteOutcome::Err {
+                code: "handoff.invalid_state".into(),
+                message: format!(
+                    "complete_execution requires status=dispatched|executing, got {}",
+                    packet.status.as_str()
+                ),
+            };
+        }
+
+        let outcome_status = outcome.status.trim().to_string();
+        let terminal_status = execution_state_from_outcome_status(outcome_status.as_str());
+        let terminal_event_type = execution_terminal_event_type(outcome_status.as_str());
+        let reason = format!("execution_{}", outcome_status.to_lowercase());
+        let now_str = now.to_rfc3339();
+        let outcome_payload = execution_outcome_payload(&outcome);
+        let updated = self.registry.update(packet_id, |p| {
+            p.execution_session_id = Some(executor_session_id.to_string());
+            p.execution_outcome = Some(outcome_payload.clone());
+            p.status = terminal_status;
+            p.state_history.push(PacketStateHistoryEntry {
+                state: terminal_status.as_str().to_string(),
+                at: now_str.clone(),
+                by: None,
+                reason: Some(reason.clone()),
+            });
+            p.updated_at = now_str.clone();
+        });
+        if !updated {
+            return HandoffExecutionCompleteOutcome::Err {
+                code: "handoff.not_found".into(),
+                message: format!("packet {packet_id} not found"),
+            };
+        }
+
+        let updated_packet = match self.registry.get(packet_id) {
+            Some(p) => p,
+            None => {
+                return HandoffExecutionCompleteOutcome::Err {
+                    code: "handoff.not_found".into(),
+                    message: format!("packet {packet_id} not found"),
+                }
+            }
+        };
+
+        let upsert_event = make_event(
+            session_id,
+            "handoff.upserted",
+            build_upsert_payload(&updated_packet),
+            now,
+        );
+        let status_evt = status_event(&updated_packet, session_id, now);
+        let terminal_event = make_event(
+            session_id,
+            terminal_event_type,
+            json!({
+                "packet_id": packet_id,
+                "executor_session_id": executor_session_id,
+                "status": terminal_status.as_str(),
+                "outcome": outcome_payload,
+                "updated_at": now_str,
+            }),
+            now,
+        );
+
+        HandoffExecutionCompleteOutcome::Ok {
+            packet: updated_packet,
+            upsert_event,
+            status_event: status_evt,
+            terminal_event,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -957,7 +1369,13 @@ pub enum DispatchError {
     NotApproved,
     PinIncomplete,
     PinExpired,
-    PinDrift { reason: String },
+    PinDrift {
+        reason: String,
+    },
+    ExecutorBusy {
+        packet_id: String,
+        executor_profile_id: String,
+    },
 }
 
 impl DispatchError {
@@ -968,6 +1386,7 @@ impl DispatchError {
             Self::PinIncomplete => "handoff.pin_incomplete",
             Self::PinExpired => "handoff.pin_expired",
             Self::PinDrift { .. } => "handoff.pin_drift",
+            Self::ExecutorBusy { .. } => "handoff.executor_busy",
         }
     }
 
@@ -978,6 +1397,12 @@ impl DispatchError {
             Self::PinIncomplete => "pin is incomplete".to_string(),
             Self::PinExpired => "pin has expired".to_string(),
             Self::PinDrift { reason } => reason.clone(),
+            Self::ExecutorBusy {
+                packet_id,
+                executor_profile_id,
+            } => {
+                format!("executor profile {executor_profile_id} already running packet {packet_id}")
+            }
         }
     }
 
@@ -990,6 +1415,7 @@ impl DispatchError {
             Self::PinIncomplete => "pin_incomplete",
             Self::PinExpired => "expired",
             Self::PinDrift { .. } => "drift",
+            Self::ExecutorBusy { .. } => "executor_busy",
         }
     }
 }
@@ -1305,6 +1731,28 @@ mod tests {
         packet
     }
 
+    fn create_approved_packet(svc: &HandoffService, root: &std::path::Path) -> Packet {
+        let packet = create_pending_packet(svc, root);
+        let HandoffApproveOutcome::Ok {
+            packet: approved, ..
+        } = svc.approve_handoff(&packet.id, "bob", "approver", None, "s1", Utc::now())
+        else {
+            panic!("approve failed");
+        };
+        approved
+    }
+
+    fn create_dispatched_packet(svc: &HandoffService, root: &std::path::Path) -> Packet {
+        let packet = create_approved_packet(svc, root);
+        let HandoffDispatchOutcome::Ok {
+            packet: dispatched, ..
+        } = svc.mark_dispatched(&packet.id, "s1", Utc::now())
+        else {
+            panic!("mark_dispatched failed");
+        };
+        dispatched
+    }
+
     #[test]
     fn create_seeds_draft_then_pending_approval_history() {
         let (_tmp, root) = init_repo();
@@ -1581,6 +2029,252 @@ mod tests {
     }
 
     #[test]
+    fn bind_executor_session_requires_dispatched() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_approved_packet(&svc, &root);
+        let outcome = svc.bind_executor_session(&packet.id, "sess_exec", "s1", Utc::now());
+        match outcome {
+            HandoffExecutionBindOutcome::Err { code, message } => {
+                assert_eq!(code, "handoff.invalid_state");
+                assert!(message.contains("dispatched"));
+            }
+            HandoffExecutionBindOutcome::Ok { .. } => {
+                panic!("bind_executor_session from approved must be rejected")
+            }
+        }
+    }
+
+    #[test]
+    fn bind_executor_session_sets_executing_and_session_id() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_dispatched_packet(&svc, &root);
+        let outcome = svc.bind_executor_session(&packet.id, "sess_exec", "s1", Utc::now());
+        let HandoffExecutionBindOutcome::Ok {
+            packet: updated,
+            upsert_event,
+            status_event,
+        } = outcome
+        else {
+            panic!("bind_executor_session must succeed");
+        };
+        assert_eq!(updated.status, PacketStatus::Executing);
+        assert_eq!(updated.execution_session_id.as_deref(), Some("sess_exec"));
+        assert_eq!(
+            updated
+                .state_history
+                .last()
+                .expect("history")
+                .state
+                .as_str(),
+            "executing"
+        );
+        assert_eq!(
+            updated
+                .state_history
+                .last()
+                .and_then(|h| h.reason.as_deref()),
+            Some("executor_session_bound")
+        );
+        assert_eq!(upsert_event.event_type, "handoff.upserted");
+        assert_eq!(status_event.event_type, "handoff.status");
+        assert_eq!(
+            status_event.payload.get("status").and_then(|v| v.as_str()),
+            Some("executing")
+        );
+        assert_eq!(
+            upsert_event
+                .payload
+                .get("execution_session_id")
+                .and_then(|v| v.as_str()),
+            Some("sess_exec")
+        );
+    }
+
+    #[test]
+    fn execution_progress_event_has_packet_task_status_counts() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_dispatched_packet(&svc, &root);
+        let _ = svc.bind_executor_session(&packet.id, "sess_exec", "s1", Utc::now());
+        let outcome = svc.record_execution_progress(
+            &packet.id,
+            TaskExecutionProgress {
+                task_id: "task_1".into(),
+                status: "started".into(),
+                updated_at: Utc::now().to_rfc3339(),
+                completed: 0,
+                total: 1,
+                message: Some("bootstrapping".into()),
+            },
+            "sess_exec",
+            "s1",
+            Utc::now(),
+        );
+        let HandoffExecutionProgressOutcome::Ok {
+            packet: updated,
+            upsert_event,
+            progress_event,
+        } = outcome
+        else {
+            panic!("record_execution_progress must succeed");
+        };
+        assert_eq!(updated.status, PacketStatus::Executing);
+        let progress = updated
+            .execution_progress
+            .as_ref()
+            .and_then(|m| m.get("task_1"))
+            .expect("task progress");
+        assert_eq!(progress.status, "started");
+        assert_eq!(progress.completed, 0);
+        assert_eq!(progress.total, 1);
+        assert_eq!(
+            progress_event
+                .payload
+                .get("task_id")
+                .and_then(|v| v.as_str()),
+            Some("task_1")
+        );
+        assert_eq!(
+            progress_event
+                .payload
+                .get("status")
+                .and_then(|v| v.as_str()),
+            Some("started")
+        );
+        assert_eq!(
+            progress_event
+                .payload
+                .get("completed")
+                .and_then(|v| v.as_u64()),
+            Some(0)
+        );
+        assert_eq!(
+            progress_event.payload.get("total").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        assert_eq!(upsert_event.event_type, "handoff.upserted");
+        assert_eq!(
+            upsert_event
+                .payload
+                .get("execution_progress")
+                .and_then(|v| v.get("task_1"))
+                .and_then(|v| v.get("status"))
+                .and_then(|v| v.as_str()),
+            Some("started")
+        );
+    }
+
+    #[test]
+    fn complete_execution_sets_completed_with_outcome() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_dispatched_packet(&svc, &root);
+        let _ = svc.bind_executor_session(&packet.id, "sess_exec", "s1", Utc::now());
+        let outcome = ExecutionOutcome {
+            status: "success".into(),
+            tasks_completed: vec!["task_1".into()],
+            tasks_failed: vec![],
+            changeset_summary: Some("all good".into()),
+            reassessment_run_id: Some("run_1".into()),
+        };
+        let result = svc.complete_execution(&packet.id, "sess_exec", outcome, "s1", Utc::now());
+        let HandoffExecutionCompleteOutcome::Ok {
+            packet: updated,
+            upsert_event,
+            status_event,
+            terminal_event,
+        } = result
+        else {
+            panic!("complete_execution(success) must succeed");
+        };
+        assert_eq!(updated.status, PacketStatus::Completed);
+        assert_eq!(
+            updated
+                .execution_outcome
+                .as_ref()
+                .and_then(|v| v.get("status"))
+                .and_then(|v| v.as_str()),
+            Some("success")
+        );
+        assert_eq!(
+            updated
+                .state_history
+                .last()
+                .and_then(|h| h.reason.as_deref()),
+            Some("execution_success")
+        );
+        assert_eq!(
+            status_event.payload.get("status").and_then(|v| v.as_str()),
+            Some("completed")
+        );
+        assert_eq!(terminal_event.event_type, "handoff.completed");
+        assert_eq!(
+            terminal_event
+                .payload
+                .get("outcome")
+                .and_then(|v| v.get("changeset_summary"))
+                .and_then(|v| v.as_str()),
+            Some("all good")
+        );
+        assert_eq!(upsert_event.event_type, "handoff.upserted");
+    }
+
+    #[test]
+    fn complete_execution_sets_failed_on_failed_outcome() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_dispatched_packet(&svc, &root);
+        let _ = svc.bind_executor_session(&packet.id, "sess_exec", "s1", Utc::now());
+        let outcome = ExecutionOutcome {
+            status: "failed".into(),
+            tasks_completed: vec![],
+            tasks_failed: vec!["task_1".into()],
+            changeset_summary: Some("boom".into()),
+            reassessment_run_id: None,
+        };
+        let result = svc.complete_execution(&packet.id, "sess_exec", outcome, "s1", Utc::now());
+        let HandoffExecutionCompleteOutcome::Ok {
+            packet: updated,
+            terminal_event,
+            ..
+        } = result
+        else {
+            panic!("complete_execution(failed) must succeed");
+        };
+        assert_eq!(updated.status, PacketStatus::Failed);
+        assert_eq!(terminal_event.event_type, "handoff.failed");
+        assert_eq!(
+            updated
+                .state_history
+                .last()
+                .and_then(|h| h.reason.as_deref()),
+            Some("execution_failed")
+        );
+    }
+
+    #[test]
+    fn active_executor_packet_rejects_second_dispatch_same_profile_project() {
+        let (_tmp, root) = init_repo();
+        let svc = HandoffService::new();
+        let packet = create_dispatched_packet(&svc, &root);
+        let project_key = project_key_for_packet(&packet);
+        let busy = svc
+            .active_executor_packet(&packet.target.executor_profile_id, &project_key)
+            .expect("active packet");
+        assert_eq!(busy.id, packet.id);
+        assert_eq!(
+            DispatchError::ExecutorBusy {
+                packet_id: packet.id.clone(),
+                executor_profile_id: packet.target.executor_profile_id.clone(),
+            }
+            .reason_tag(),
+            "executor_busy"
+        );
+    }
+
+    #[test]
     fn record_dispatch_rejected_writes_history_without_status_change() {
         let (_tmp, root) = init_repo();
         let svc = HandoffService::new();
@@ -1634,6 +2328,14 @@ mod tests {
         assert_eq!(
             DispatchError::PinDrift { reason: "x".into() }.reason_tag(),
             "drift"
+        );
+        assert_eq!(
+            DispatchError::ExecutorBusy {
+                packet_id: "pkt_1".into(),
+                executor_profile_id: "executor.code@1.0.0".into(),
+            }
+            .reason_tag(),
+            "executor_busy"
         );
     }
 
