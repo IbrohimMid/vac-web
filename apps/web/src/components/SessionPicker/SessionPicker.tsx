@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { authMethodSummary, normalizeAuthMethods } from '../../domain/sessions/auth';
 import { useSession } from '../../stores/session';
+import { ReauthAction } from '../cockpit/ReauthAction';
 import type { TransportHandle } from '../../transport';
 
 /// Session-less commands (like session.create) are routed with a placeholder
@@ -103,6 +104,9 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
           >
             ACP auth: {authMethodSummary(authMethods)}
           </span>
+        )}
+        {agentKind === 'acp' && authMethods.length > 0 && (
+          <ReauthAction transport={transport} sessionId={active} />
         )}
       </div>
     );

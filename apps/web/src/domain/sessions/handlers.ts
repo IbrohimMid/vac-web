@@ -10,6 +10,10 @@ function asStatus(raw: string | undefined): SessionStatus {
   return 'active';
 }
 
+function asString(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
 interface SessionListPayload {
   // Bridge currently emits bare session IDs; upgrade path keeps richer fields
   // as an optional object form once the registry carries metadata.
@@ -83,6 +87,58 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
       if (p?.workflow_id) {
         useSession.getState().setWorkflowMeta(p.workflow_id, p.workflow_name ?? null);
       }
+    }),
+  );
+
+  // Stage X.5d — bridge-owned reauth lifecycle. The bridge emits these
+  // alongside its audit log; the cockpit mirrors them into the session
+  // store so reauth UI can render status + diagnostics without polling.
+  offs.push(
+    transport.on('session.auth_requested', (ev) => {
+      const p = (ev.payload ?? {}) as { auth_method_id?: string };
+      const id = asString(p.auth_method_id);
+      const store = useSession.getState();
+      store.setAuthStatus('requesting');
+      store.setAuthError(null);
+      if (id) store.setLastAuthMethodId(id);
+    }),
+  );
+
+  offs.push(
+    transport.on('session.auth_updated', (ev) => {
+      const p = (ev.payload ?? {}) as {
+        auth_method_id?: string;
+        auth_method_type?: string;
+      };
+      const id = asString(p.auth_method_id);
+      const store = useSession.getState();
+      store.setAuthStatus('authenticated');
+      store.setAuthError(null);
+      if (id) store.setLastAuthMethodId(id);
+    }),
+  );
+
+  offs.push(
+    transport.on('session.auth_failed', (ev) => {
+      const p = (ev.payload ?? {}) as {
+        auth_method_id?: string;
+        auth_method_type?: string;
+        code?: string;
+        message?: string;
+      };
+      const code = asString(p.code) ?? 'auth.unknown';
+      const message = asString(p.message) ?? 'reauth failed';
+      const id = asString(p.auth_method_id);
+      const type = asString(p.auth_method_type);
+      const store = useSession.getState();
+      store.setAuthStatus('failed');
+      store.setAuthError({
+        code,
+        message,
+        ...(id ? { authMethodId: id } : {}),
+        ...(type ? { authMethodType: type } : {}),
+      });
+      if (id) store.setLastAuthMethodId(id);
     }),
   );
 

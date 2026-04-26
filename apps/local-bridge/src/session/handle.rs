@@ -2,8 +2,9 @@
 
 use crate::agent_runtime::acp::{
     classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical,
-    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, ClientCapabilities, ContentBlock,
-    FsClientCapabilities, InitializeRequest, NewSessionRequest, PermissionRequest, PromptRequest,
+    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AuthenticateRequest,
+    AuthenticateResponse, ClientCapabilities, ContentBlock, FsClientCapabilities,
+    InitializeRequest, JsonRpcError, NewSessionRequest, PermissionRequest, PromptRequest,
     SessionNotification, ToolKind, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES,
     TOOL_CALL_HASH_DROP_FIELDS,
 };
@@ -127,6 +128,108 @@ impl AcpRuntime {
             }
         }
         None
+    }
+}
+
+/// Stage X.5d — typed result of `SessionHandle::authenticate_via_acp`.
+#[derive(Debug, Clone)]
+pub struct AuthenticateOutcome {
+    pub method_id: String,
+    pub method_type: String,
+    pub response: AuthenticateResponse,
+}
+
+/// Stage X.5d — typed error for `SessionHandle::authenticate_via_acp`.
+/// Codes are stable strings consumed by the translator + the FE so the
+/// cockpit can render explicit reauth diagnostics rather than a generic
+/// failure.
+#[derive(Debug, Clone)]
+pub enum AuthenticateError {
+    /// Session is not running an ACP agent. There is no adapter to
+    /// authenticate against.
+    NotAcpSession,
+    /// `method_id` was not present in the adapter's advertised
+    /// `initialize.authMethods`. The bridge refuses to forward
+    /// arbitrary method ids — the adapter is the source of truth for
+    /// what's supported, but the bridge enforces the gate.
+    MethodNotAdvertised(String),
+    /// Method type is `terminal`. Terminal-driven auth requires the
+    /// `terminal/*` ACP capability which is intentionally HELD off in
+    /// this milestone (control plane vs. runtime capability boundary).
+    TerminalCapabilityDisabled { method_id: String },
+    /// Method type is `env_var`. Live-restart of the ACP child with a
+    /// new env overlay is sized as a follow-up slice; for now the FE
+    /// is told to recreate the session with the env var set in the
+    /// bridge's launch environment.
+    EnvVarRecreateRequired {
+        method_id: String,
+        vars: Vec<serde_json::Value>,
+    },
+    /// Adapter responded with an error to `authenticate`. `code` is the
+    /// classified JSON-RPC error code (or `"agent.protocol_error"` for
+    /// non-typed errors); `message` is the raw adapter message.
+    AdapterFailed {
+        method_id: String,
+        method_type: String,
+        code: &'static str,
+        message: String,
+    },
+}
+
+impl AuthenticateError {
+    /// Stable error code surfaced via ack + ServerEvent payload.
+    pub fn code(&self) -> &'static str {
+        match self {
+            AuthenticateError::NotAcpSession => "auth.not_supported",
+            AuthenticateError::MethodNotAdvertised(_) => "auth.method_not_advertised",
+            AuthenticateError::TerminalCapabilityDisabled { .. } => {
+                "auth.terminal_capability_disabled"
+            }
+            AuthenticateError::EnvVarRecreateRequired { .. } => "auth.env_var_recreate_required",
+            AuthenticateError::AdapterFailed { code, .. } => code,
+        }
+    }
+
+    /// Method id the user attempted to authenticate with, if any. Used
+    /// for audit + ServerEvent payloads.
+    pub fn method_id(&self) -> Option<&str> {
+        match self {
+            AuthenticateError::NotAcpSession => None,
+            AuthenticateError::MethodNotAdvertised(id) => Some(id),
+            AuthenticateError::TerminalCapabilityDisabled { method_id }
+            | AuthenticateError::EnvVarRecreateRequired { method_id, .. }
+            | AuthenticateError::AdapterFailed { method_id, .. } => Some(method_id),
+        }
+    }
+
+    /// Method type the user attempted to authenticate with, if known.
+    pub fn method_type(&self) -> Option<&str> {
+        match self {
+            AuthenticateError::TerminalCapabilityDisabled { .. } => Some("terminal"),
+            AuthenticateError::EnvVarRecreateRequired { .. } => Some("env_var"),
+            AuthenticateError::AdapterFailed { method_type, .. } => Some(method_type),
+            _ => None,
+        }
+    }
+
+    /// Human-readable message for ack + ServerEvent + audit row.
+    pub fn message(&self) -> String {
+        match self {
+            AuthenticateError::NotAcpSession => {
+                "session is not running an ACP agent; reauth is only supported for ACP sessions"
+                    .into()
+            }
+            AuthenticateError::MethodNotAdvertised(id) => format!(
+                "auth method '{id}' is not in the adapter's advertised authMethods"
+            ),
+            AuthenticateError::TerminalCapabilityDisabled { method_id } => format!(
+                "auth method '{method_id}' requires the terminal ACP capability which is held off in this milestone"
+            ),
+            AuthenticateError::EnvVarRecreateRequired { method_id, .. } => format!(
+                "auth method '{method_id}' requires env vars set in the bridge's launch environment; close and recreate the session after exporting them"
+            ),
+            AuthenticateError::AdapterFailed { message, .. } => message.clone(),
+        }
     }
 }
 
@@ -483,6 +586,87 @@ impl SessionHandle {
             other => anyhow::bail!(
                 "agent.protocol_unsupported: command '{other}' is not yet wired for ACP (X.5c scope)"
             ),
+        }
+    }
+
+    /// Stage X.5d — drive ACP `authenticate` for the given method id.
+    /// Returns the parsed adapter response on success, or a typed
+    /// [`AuthenticateError`] otherwise. The translator owns audit + event
+    /// emission; this method only owns the bridge → adapter handshake.
+    pub async fn authenticate_via_acp(
+        &self,
+        method_id: &str,
+    ) -> Result<AuthenticateOutcome, AuthenticateError> {
+        let acp = self.acp.as_ref().ok_or(AuthenticateError::NotAcpSession)?;
+
+        // Look up the requested method against what the adapter
+        // advertised at initialize time. Reject anything that wasn't
+        // advertised — the bridge is the policy point, not the adapter.
+        let methods = acp.auth_methods.as_array().cloned().unwrap_or_default();
+        let method = methods
+            .iter()
+            .find(|m| {
+                m.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| id == method_id)
+                    .unwrap_or(false)
+            })
+            .ok_or_else(|| AuthenticateError::MethodNotAdvertised(method_id.to_string()))?;
+
+        let method_type = method
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent")
+            .to_string();
+
+        // Guardrail: terminal auth requires the terminal ACP capability
+        // which is intentionally HELD off in this milestone. Surface a
+        // typed error so the FE can render an explicit "deferred" hint.
+        if method_type == "terminal" {
+            return Err(AuthenticateError::TerminalCapabilityDisabled {
+                method_id: method_id.to_string(),
+            });
+        }
+
+        // env_var live-restart of the ACP child is non-trivial and is
+        // sized as a follow-up slice; surface a typed error so the FE
+        // can prompt the user to recreate the session with the env var
+        // set in the bridge's launch environment.
+        if method_type == "env_var" {
+            return Err(AuthenticateError::EnvVarRecreateRequired {
+                method_id: method_id.to_string(),
+                vars: method
+                    .get("vars")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+            });
+        }
+
+        // "agent" (and any unrecognised) type — hand off to the adapter
+        // and let it manage its own login flow (e.g. Claude Pro/Max
+        // OAuth via `claude-login`).
+        let req = AuthenticateRequest {
+            method_id: method_id.to_string(),
+        };
+        match acp.client.authenticate(req).await {
+            Ok(resp) => Ok(AuthenticateOutcome {
+                method_id: method_id.to_string(),
+                method_type,
+                response: resp,
+            }),
+            Err(e) => {
+                let code = e
+                    .downcast_ref::<JsonRpcError>()
+                    .map(classify_jsonrpc_error)
+                    .unwrap_or("agent.protocol_error");
+                Err(AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type,
+                    code,
+                    message: e.to_string(),
+                })
+            }
         }
     }
 

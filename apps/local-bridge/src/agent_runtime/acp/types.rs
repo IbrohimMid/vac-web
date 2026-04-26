@@ -101,6 +101,27 @@ pub struct PromptResponse {
     pub meta: Value,
 }
 
+// --- authenticate ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthenticateRequest {
+    /// Identifier of the auth method advertised by `initialize.authMethods`.
+    /// E.g. `"claude-login"` for the OAuth-based Claude Pro/Max login.
+    #[serde(rename = "methodId")]
+    pub method_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticateResponse {
+    /// Adapter-defined status field. Optional in the ACP schema; we keep
+    /// it as a passthrough JSON value so vendor extensions ride along.
+    #[serde(default)]
+    pub status: Value,
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
 // --- session/cancel (notification) ---
 
 #[derive(Debug, Clone, Serialize)]

@@ -24,6 +24,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "session.snapshot",
     "session.rename",
     "session.close",
+    "session.authenticate",
     "message.submit",
     "message.cancel_stream",
     "message.retry",

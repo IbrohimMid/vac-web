@@ -280,6 +280,18 @@ impl AcpClient {
         )
         .await
     }
+
+    /// Stage X.5d — ACP `authenticate` request. Used by the bridge's
+    /// `session.authenticate` command path to drive Zed-style reauth
+    /// flows (e.g. Claude Pro/Max OAuth via `claude-login`).
+    ///
+    /// The request itself is bounded by `REQUEST_TIMEOUT`; for
+    /// adapter-managed flows that wait on a browser/CLI step the
+    /// adapter is expected to gate on its own internal state and
+    /// either resolve or fail this call within the timeout.
+    pub async fn authenticate(&self, req: AuthenticateRequest) -> Result<AuthenticateResponse> {
+        self.rpc("authenticate", req, Some(REQUEST_TIMEOUT)).await
+    }
 }
 
 fn spawn_writer(

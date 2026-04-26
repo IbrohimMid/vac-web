@@ -5,7 +5,7 @@ use crate::audit::log_tool_event;
 use crate::handoff::packet::{ExecutionOutcome, TaskExecutionProgress};
 use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
-use crate::session::SessionHandleRef;
+use crate::session::{AuthenticateError, SessionHandleRef};
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::AuditSeverity;
 use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
@@ -429,6 +429,183 @@ pub async fn dispatch_command(
                 },
                 events,
             )
+        }
+        "session.authenticate" => {
+            // Stage X.5d — bridge-owned reauth. The bridge stays the
+            // authority: it validates that the requested method id was
+            // advertised by the adapter at initialize time, enforces the
+            // terminal-capability HOLD, and emits structured audit +
+            // ServerEvents that the cockpit listens to. The adapter only
+            // sees the typed `authenticate` JSON-RPC call when allowed.
+            let Some(handle) = state.sessions.get(&cmd.session_id) else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            };
+
+            let method_id = cmd
+                .payload
+                .get("auth_method_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let Some(method_id) = method_id.filter(|s| !s.is_empty()) else {
+                state.audit.log(
+                    &cmd.session_id,
+                    "session",
+                    AuditSeverity::Warn,
+                    json!({
+                        "event": "auth_failed",
+                        "code": "auth.invalid_payload",
+                        "message": "auth_method_id is required",
+                    }),
+                );
+                events.push(ServerEvent {
+                    seq: 0,
+                    session_id: cmd.session_id.clone(),
+                    event_type: "session.auth_failed".into(),
+                    payload: json!({
+                        "code": "auth.invalid_payload",
+                        "message": "auth_method_id is required",
+                    }),
+                    v: 1,
+                    ts: chrono::Utc::now().to_rfc3339(),
+                });
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "auth.invalid_payload".into(),
+                            message: "auth_method_id is required".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+
+            // 1) auth_requested — audit + event before we touch the adapter.
+            state.audit.log(
+                &cmd.session_id,
+                "session",
+                AuditSeverity::Info,
+                json!({
+                    "event": "auth_requested",
+                    "auth_method_id": method_id,
+                }),
+            );
+            events.push(ServerEvent {
+                seq: 0,
+                session_id: cmd.session_id.clone(),
+                event_type: "session.auth_requested".into(),
+                payload: json!({
+                    "auth_method_id": method_id,
+                }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            });
+
+            // 2) Drive the adapter handshake. SessionHandle owns the
+            // policy gate (advertised methods, terminal HOLD, env_var
+            // recreate path).
+            match handle.authenticate_via_acp(&method_id).await {
+                Ok(outcome) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Info,
+                        json!({
+                            "event": "auth_updated",
+                            "auth_method_id": outcome.method_id,
+                            "auth_method_type": outcome.method_type,
+                        }),
+                    );
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "session.auth_updated".into(),
+                        payload: json!({
+                            "auth_method_id": outcome.method_id,
+                            "auth_method_type": outcome.method_type,
+                            "status": outcome.response.status,
+                        }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        events,
+                    )
+                }
+                Err(err) => {
+                    let code = err.code();
+                    let message = err.message();
+                    let logged_method_id = err
+                        .method_id()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| method_id.clone());
+                    let logged_method_type = err.method_type().map(|s| s.to_string());
+                    let env_var_vars = match &err {
+                        AuthenticateError::EnvVarRecreateRequired { vars, .. } => {
+                            Some(serde_json::Value::Array(vars.clone()))
+                        }
+                        _ => None,
+                    };
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Warn,
+                        json!({
+                            "event": "auth_failed",
+                            "auth_method_id": logged_method_id,
+                            "auth_method_type": logged_method_type,
+                            "code": code,
+                            "message": message,
+                        }),
+                    );
+                    let mut payload = json!({
+                        "auth_method_id": logged_method_id,
+                        "code": code,
+                        "message": message,
+                    });
+                    if let Some(t) = logged_method_type.as_ref() {
+                        payload["auth_method_type"] = json!(t);
+                    }
+                    if let Some(vars) = env_var_vars {
+                        payload["vars"] = vars;
+                    }
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "session.auth_failed".into(),
+                        payload,
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: code.into(),
+                                message,
+                            }),
+                        },
+                        events,
+                    )
+                }
+            }
         }
         "handoff.create" => {
             if state.sessions.get(&cmd.session_id).is_none() {

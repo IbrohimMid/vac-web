@@ -1,8 +1,12 @@
 # Stage X.5d — ACP Reauth Flow
 
-**Status.** Design plan. This slice starts from ACP `auth_methods`
-surfacing and grows toward a Zed-style reauth affordance without
-opening fs/terminal ACP capability yet.
+**Status.** Slice 1 (auth metadata surfacing) shipped at
+`753301eae273d1320f2bf7ab1cf51352eb2f8936`. Slice 2 (bridge-owned
+`session.authenticate` action flow) is the current implementation
+slice and lands the agent + env_var (soft) + audit + UI legs together.
+Live adapter restart for `env_var` and the full `terminal` leg remain
+deferred follow-ups; the cockpit's primary path — OAuth Claude Pro/Max
+via `agent`-type method — is fully wired.
 
 **Goal.** Make VAC Web show ACP auth state and a bridge-owned reauth
 flow that mirrors Zed's adapter-managed login experience.
@@ -60,30 +64,61 @@ can render it without re-querying the agent.
   active.
 - Memory rail shows the advertised auth methods and any notes the
   adapter includes.
+- Active-session banner exposes a `ReauthAction` button row, one per
+  advertised method, that issues `session.authenticate`. Disabled state
+  reflects `authStatus === 'requesting'`; failure surface includes the
+  stable error code and bridge message.
 
 ### 3.3 Reauth command
 
-Proposed cockpit command: `session.authenticate`.
+Cockpit command: `session.authenticate`. Bridge-owned dispatch via
+`translator/mod.rs`. KNOWN_COMMANDS gate enforces the profile-layer
+allowlist; the command never reaches the agent runtime when the
+session is not ACP.
 
-Proposed bridge payload:
+Bridge payload:
 
 ```json
 {
-  "auth_method_id": "openai",
-  "input": {
-    "AZURE_OPENAI_API_KEY": "...",
-    "AZURE_OPENAI_ENDPOINT": "..."
-  }
+  "auth_method_id": "claude-login"
 }
 ```
 
-Bridge behavior by auth type:
+The bridge owns audit + ServerEvent emission for every dispatch:
 
-- `agent`: adapter-managed auth, bridge surfaces the method and waits
-  for the adapter to complete.
-- `env_var`: bridge collects values, restarts the adapter with the new
-  env, then sends the adapter's auth handshake.
-- `terminal`: deferred until terminal ACP capability is enabled.
+- `session.auth_requested` — `{ auth_method_id }`
+- `session.auth_updated` — `{ auth_method_id, auth_method_type, status }`
+- `session.auth_failed` — `{ auth_method_id, auth_method_type?, code, message, vars? }`
+
+Behaviour matrix (implemented in `SessionHandle::authenticate_via_acp`):
+
+| Case | Outcome |
+| --- | --- |
+| Non-ACP session | ack + event `auth.not_supported` |
+| Missing `auth_method_id` | ack + event `auth.invalid_payload` |
+| Method not in advertised list | ack + event `auth.method_not_advertised` |
+| `terminal` method | ack + event `auth.terminal_capability_disabled` (HOLD) |
+| `env_var` method | ack + event `auth.env_var_recreate_required` carrying `vars` (soft path) |
+| `agent` method | direct ACP `authenticate({ methodId })` passthrough; bridge proxies status |
+| Adapter JSON-RPC failure | ack + event with classified bridge code (default `agent.protocol_error`) |
+
+`agent`-type passthrough is the OAuth Claude Pro/Max path: the
+adapter handles the browser-less device-code or Claude `/login`
+handshake itself; the bridge only surfaces the lifecycle.
+
+`env_var` soft path tells the cockpit which env vars to recreate the
+session with, but does not restart the adapter live. Live
+restart/reinitialize lands as a follow-up commit because it requires
+holding the `AcpRuntime` slot under a write lock, draining
+watchdog/pump tasks, and re-spawning under the same `SessionHandle` —
+worth its own slice with dedicated tests.
+
+### 3.4 Cockpit store
+
+`stores/session.ts` carries `authStatus`, `authError`, and
+`lastAuthMethodId` alongside the existing `authMethods`. The handler
+layer mirrors the three lifecycle events into those fields; the
+ReauthAction component renders them.
 
 ## 4. Guardrails
 
@@ -97,10 +132,17 @@ Bridge behavior by auth type:
 
 This plan is done when:
 
-1. ACP sessions carry `auth_methods` into `session.ready`.
-2. The cockpit visibly labels ACP auth state.
-3. The bridge can distinguish "auth advertised" from "auth required".
+1. ACP sessions carry `auth_methods` into `session.ready`. ✅ (slice 1)
+2. The cockpit visibly labels ACP auth state. ✅ (slice 1)
+3. The bridge can distinguish "auth advertised" from "auth required". ✅ (slice 1)
 4. The reauth command shape is documented and wired through the
-   control plane.
+   control plane. ✅ (slice 2)
+5. Cockpit can issue `session.authenticate` for `agent`-type methods
+   end-to-end (audit + events + UI). ✅ (slice 2)
+6. `env_var` recreate path is surfaced as a soft, structured failure
+   so cockpit can guide the user to recreate the session. ✅ (slice 2)
+7. `terminal`-type methods are explicitly held off, not silently
+   ignored. ✅ (slice 2)
 
-The terminal-auth leg remains a later milestone.
+The live `env_var` adapter restart and the full `terminal` capability
+leg remain later milestones.

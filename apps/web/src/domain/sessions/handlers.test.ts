@@ -48,6 +48,9 @@ describe('session handlers', () => {
       agentId: null,
       agentKind: null,
       authMethods: [],
+      authStatus: 'idle',
+      authError: null,
+      lastAuthMethodId: null,
     });
     useSessions.setState({ rows: [] });
   });
@@ -82,6 +85,70 @@ describe('session handlers', () => {
     const authMethod = useSession.getState().authMethods[0]!;
     expect(authMethod.type).toBe('agent');
     expect(authMethod.name).toBe('Log in with Claude Code');
+
+    off();
+  });
+
+  it('mirrors session.auth_requested into requesting status', () => {
+    const { t, emit } = mockTransport();
+    const off = registerSessionHandlers(t);
+
+    // Seed a prior failure so we can assert it gets cleared on a fresh
+    // request (the bridge always emits auth_requested before talking to
+    // the adapter).
+    useSession.setState({
+      authStatus: 'failed',
+      authError: { code: 'auth.unknown', message: 'previous attempt' },
+    });
+
+    emit('session.auth_requested', { auth_method_id: 'claude-login' });
+
+    expect(useSession.getState().authStatus).toBe('requesting');
+    expect(useSession.getState().authError).toBeNull();
+    expect(useSession.getState().lastAuthMethodId).toBe('claude-login');
+
+    off();
+  });
+
+  it('marks the session authenticated on session.auth_updated', () => {
+    const { t, emit } = mockTransport();
+    const off = registerSessionHandlers(t);
+
+    useSession.setState({
+      authStatus: 'requesting',
+      lastAuthMethodId: 'claude-login',
+    });
+
+    emit('session.auth_updated', {
+      auth_method_id: 'claude-login',
+      auth_method_type: 'agent',
+      status: { ok: true },
+    });
+
+    expect(useSession.getState().authStatus).toBe('authenticated');
+    expect(useSession.getState().authError).toBeNull();
+    expect(useSession.getState().lastAuthMethodId).toBe('claude-login');
+
+    off();
+  });
+
+  it('captures structured failure on session.auth_failed', () => {
+    const { t, emit } = mockTransport();
+    const off = registerSessionHandlers(t);
+
+    emit('session.auth_failed', {
+      auth_method_id: 'anthropic-key',
+      auth_method_type: 'env_var',
+      code: 'auth.env_var_recreate_required',
+      message: 'export ANTHROPIC_API_KEY then recreate the session',
+    });
+
+    const state = useSession.getState();
+    expect(state.authStatus).toBe('failed');
+    expect(state.authError?.code).toBe('auth.env_var_recreate_required');
+    expect(state.authError?.authMethodId).toBe('anthropic-key');
+    expect(state.authError?.authMethodType).toBe('env_var');
+    expect(state.lastAuthMethodId).toBe('anthropic-key');
 
     off();
   });
