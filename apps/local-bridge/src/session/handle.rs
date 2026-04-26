@@ -1,10 +1,10 @@
 //! Per-session state + child process handle.
 
 use crate::agent_runtime::acp::{
-    classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical, AcpClient,
-    ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest, NewSessionRequest,
-    PermissionRequest, PromptRequest, SessionNotification, ToolKind, ToolStatus,
-    DEFAULT_RAW_OUTPUT_CAP_BYTES,
+    classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical_excluding,
+    AcpClient, ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest,
+    NewSessionRequest, PermissionRequest, PromptRequest, SessionNotification, ToolKind, ToolStatus,
+    DEFAULT_RAW_OUTPUT_CAP_BYTES, TOOL_CALL_HASH_DROP_FIELDS,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::ws::envelope::{ClientCommand, ServerEvent};
@@ -84,7 +84,7 @@ impl AcpRuntime {
             self.approval_by_tool_call_id
                 .insert(tcid.to_string(), entry.clone());
         }
-        let hash = sha256_hex_canonical(tool_call);
+        let hash = sha256_hex_canonical_excluding(tool_call, TOOL_CALL_HASH_DROP_FIELDS);
         self.approval_by_full_hash.insert(hash, entry);
     }
 

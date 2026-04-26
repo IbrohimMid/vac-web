@@ -908,18 +908,12 @@ async fn x5c2_edit_tool_update_correlates_by_tool_call_id() {
 
 #[tokio::test]
 async fn x5c2_edit_tool_update_fallback_correlates_by_approval_tool_call_hash() {
-    // mock-acp rotates the toolCallId AND emits an edit whose
-    // approval_tool_call_hash matches the permission's toolCall by
-    // way of the fallback key. Wait — actually with rotation our
-    // synthesized toolCall on the activity side has different
-    // toolCallId from the permission's toolCall, so the canonical
-    // hashes differ. The fallback test here proves the bridge does
-    // NOT mis-correlate when toolCallId differs and the toolCall
-    // shape also differs — which is the realistic Claude pattern
-    // (fallback would only hit if toolCallId rotates but the rest
-    // of the toolCall envelope is identical, which mock-acp
-    // doesn't currently emit). So this test is a NEGATIVE-on-rotation
-    // assertion: rotation alone must NOT mis-attribute.
+    // POSITIVE fallback path. mock-acp rotates the toolCallId from
+    // tc_perm to tc_after BUT keeps the rest of the toolCall envelope
+    // (kind/title/locations/content/rawInput) identical to the
+    // permission's toolCall. With toolCallId/status/rawOutput stripped
+    // from approval_tool_call_hash, both sides hash to the same value
+    // and the fallback correlation key (session_id, hash) hits.
     let (url, _state) = start_bridge_with(build_acp_registry(vec![
         "--permission-prompt".into(),
         "--emit-edit-tool".into(),
@@ -956,11 +950,87 @@ async fn x5c2_edit_tool_update_fallback_correlates_by_approval_tool_call_hash() 
     })
     .await;
 
-    // Drain a few tool events; none should carry the approval id
-    // because the rotated toolCallId + different toolCall envelope
-    // can't satisfy either correlation key.
-    let mut saw_uncorrelated_edit = false;
+    // Find the first edit-related event whose tool_call_id is the
+    // rotated value AND that carries the approval badge — proves
+    // the fallback hash key resolved correlation despite the id
+    // rotation. Uses an inline poll loop instead of next_event_matching
+    // so the per-message timeout can be tuned without touching the
+    // shared T constant.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let correlated = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            panic!("no badge-carrying tool event arrived for rotated toolCallId");
+        }
+        let Ok(Some(Ok(Message::Text(txt)))) = tokio::time::timeout(remaining, ws.next()).await
+        else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        if matches!(
+            t,
+            "tool.observed" | "tool.updated" | "review.changeset_updated"
+        ) && v["payload"]
+            .get("approved_by_approval_id")
+            .and_then(|x| x.as_str())
+            == Some(approval_id.as_str())
+        {
+            break v;
+        }
+    };
+    let tool_call_id = correlated["payload"]["tool_call_id"].as_str().unwrap_or("");
+    assert_eq!(
+        tool_call_id, "tc_after",
+        "fallback correlation must fire on the rotated toolCallId, got: {tool_call_id}"
+    );
+}
+
+#[tokio::test]
+async fn x5c2_rotated_tool_call_with_different_shape_does_not_correlate() {
+    // Negative-on-rotation (rename of the old badly-named "fallback"
+    // test). When the agent rotates toolCallId AND emits a toolCall
+    // with a different envelope shape (different title/locations) so
+    // the approval_tool_call_hash differs, the bridge MUST NOT
+    // mis-attribute the approval. --same-raw-input-different-tool
+    // makes mock-acp emit exactly that shape.
+    let (url, _state) = start_bridge_with(build_acp_registry(vec![
+        "--permission-prompt".into(),
+        "--emit-edit-tool".into(),
+        "--same-raw-input-different-tool".into(),
+    ]))
+    .await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "rotate-and-reshape" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let approve = json!({
+        "v": 1, "id": "cmd_appr", "type": "approval.approve",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id }
+    });
+    ws.send(Message::Text(approve.to_string().into()))
+        .await
+        .unwrap();
+    let _resolved = next_event_matching(&mut ws, |v| {
+        v.get("type") == Some(&json!("approval.resolved"))
+            && v["payload"]["outcome"] == json!("approved")
+    })
+    .await;
+
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut saw_edit = false;
     while tokio::time::Instant::now() < deadline {
         let remaining = deadline - tokio::time::Instant::now();
         let Ok(Some(Ok(Message::Text(txt)))) = tokio::time::timeout(remaining, ws.next()).await
@@ -973,24 +1043,22 @@ async fn x5c2_edit_tool_update_fallback_correlates_by_approval_tool_call_hash() 
             t,
             "tool.observed" | "tool.updated" | "review.changeset_updated"
         ) {
+            saw_edit = true;
             assert_ne!(
                 v["payload"]
                     .get("approved_by_approval_id")
                     .and_then(|x| x.as_str()),
                 Some(approval_id.as_str()),
-                "rotated toolCallId must not mis-attribute approval"
+                "rotated id + reshape must not mis-attribute approval: {v}"
             );
-            if t == "review.changeset_updated" {
-                saw_uncorrelated_edit = true;
-            }
         }
         if t == "transcript.completed" {
             break;
         }
     }
     assert!(
-        saw_uncorrelated_edit,
-        "expected at least one review.changeset_updated for the rotated edit"
+        saw_edit,
+        "expected at least one tool/review event for the reshape"
     );
 }
 

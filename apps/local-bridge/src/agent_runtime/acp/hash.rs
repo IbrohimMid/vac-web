@@ -15,6 +15,33 @@ use sha2::{Digest, Sha256};
 /// Sorted-key recursion via `BTreeMap` produces the canonical form;
 /// `serde_json::to_vec` of the canonical form is fed to Sha256.
 pub fn sha256_hex_canonical(value: &Value) -> String {
+    sha256_hex_canonical_excluding(value, &[])
+}
+
+/// Same as [`sha256_hex_canonical`] but strips object keys whose name
+/// matches any entry in `top_level_drop` from the **top-level** object
+/// before hashing. Used to compute the
+/// [`crate::agent_runtime::acp::ObservedToolActivity::approval_tool_call_hash`]
+/// — a hash that intentionally ignores runtime-only fields
+/// (`toolCallId`, `status`, `rawOutput`) so a `tool_call_update`
+/// hashes to the same value as the original
+/// `session/request_permission.params.toolCall` even when the agent
+/// rotates the call id or carries different lifecycle fields.
+///
+/// Stripping is top-level only; nested occurrences of the same key
+/// are preserved (a nested `status` field belongs to whatever inner
+/// schema declared it).
+pub fn sha256_hex_canonical_excluding(value: &Value, top_level_drop: &[&str]) -> String {
+    let stripped = match value {
+        Value::Object(map) if !top_level_drop.is_empty() => {
+            let mut copy = map.clone();
+            for k in top_level_drop {
+                copy.remove(*k);
+            }
+            Value::Object(copy)
+        }
+        other => other.clone(),
+    };
     fn canon(v: &Value) -> Value {
         match v {
             Value::Object(map) => {
@@ -28,12 +55,18 @@ pub fn sha256_hex_canonical(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    let canonical = canon(value);
+    let canonical = canon(&stripped);
     let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
     let mut h = Sha256::new();
     h.update(&bytes);
     hex::encode(h.finalize())
 }
+
+/// Top-level fields excluded from `args_hash` /
+/// `approval_tool_call_hash` so the value stays stable across
+/// `session/request_permission` → `tool_call_update` transitions
+/// even when the agent rotates ids or adds lifecycle metadata.
+pub const TOOL_CALL_HASH_DROP_FIELDS: &[&str] = &["toolCallId", "status", "rawOutput"];
 
 #[cfg(test)]
 mod tests {
@@ -60,6 +93,46 @@ mod tests {
         assert_ne!(
             sha256_hex_canonical(&Value::Null),
             sha256_hex_canonical(&json!({})),
+        );
+    }
+
+    #[test]
+    fn excluding_strips_only_top_level() {
+        // Top-level toolCallId/status/rawOutput dropped; nested keys
+        // of the same name preserved.
+        let a = json!({
+            "toolCallId": "tc_perm",
+            "status": "pending",
+            "rawOutput": "should be ignored",
+            "kind": "edit",
+            "title": "X",
+            "content": [{ "status": "ignored?" }]
+        });
+        let b = json!({
+            "toolCallId": "tc_after",
+            "status": "completed",
+            "rawOutput": "different",
+            "kind": "edit",
+            "title": "X",
+            "content": [{ "status": "ignored?" }]
+        });
+        assert_eq!(
+            sha256_hex_canonical_excluding(&a, TOOL_CALL_HASH_DROP_FIELDS),
+            sha256_hex_canonical_excluding(&b, TOOL_CALL_HASH_DROP_FIELDS),
+        );
+
+        // Nested status difference still matters — drop is top-level only.
+        let c = json!({
+            "kind": "edit",
+            "content": [{ "status": "different" }]
+        });
+        let d = json!({
+            "kind": "edit",
+            "content": [{ "status": "other" }]
+        });
+        assert_ne!(
+            sha256_hex_canonical_excluding(&c, TOOL_CALL_HASH_DROP_FIELDS),
+            sha256_hex_canonical_excluding(&d, TOOL_CALL_HASH_DROP_FIELDS),
         );
     }
 }

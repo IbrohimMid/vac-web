@@ -15,7 +15,9 @@
 //! **Observe-only.** Nothing here enables fs/terminal capabilities or
 //! blocks tool execution — that's X.5c.3 territory.
 
-use super::hash::sha256_hex_canonical;
+use super::hash::{
+    sha256_hex_canonical, sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS,
+};
 use crate::agent_runtime::AgentKind;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -178,13 +180,16 @@ pub fn extract_observed_tool_activity(
         .map(redact_raw_input)
         .unwrap_or(Value::Null);
 
-    // `approval_tool_call_hash` hashes the *full* toolCall envelope
-    // — same input the X.5c.1 audit row uses for `args_hash`. We
-    // synthesize the toolCall object from the update fields the
-    // agent sent, omitting `sessionUpdate` itself so the hash matches
-    // what `session/request_permission.params.toolCall` would carry.
+    // `approval_tool_call_hash` hashes the toolCall envelope with
+    // runtime-only fields (toolCallId, status, rawOutput) stripped at
+    // the top level. Same helper as the X.5c.1 audit `args_hash`
+    // computation, so a tool_call_update whose only diff from the
+    // approved permission is its toolCallId/status hashes identically
+    // and the X.5c.2 fallback correlation can hit.
     let synthesized = synthesize_tool_call(&tool_call_id, update);
-    let approval_tool_call_hash = synthesized.as_ref().map(sha256_hex_canonical);
+    let approval_tool_call_hash = synthesized
+        .as_ref()
+        .map(|tc| sha256_hex_canonical_excluding(tc, TOOL_CALL_HASH_DROP_FIELDS));
 
     let raw_output_redacted = update.get("rawOutput").cloned().map(|v| match v {
         Value::String(s) => Value::String(bound_raw_output(&s, raw_output_cap_bytes)),
@@ -258,19 +263,18 @@ fn extract_locations(update: &Value) -> Vec<ToolLocation> {
 ///
 /// `{ toolCallId, kind?, title?, content?, locations?, rawInput? }`
 ///
+/// Runtime-only fields (`status`, `rawOutput`, `_meta`) are
+/// **deliberately excluded** so a `tool_call_update` whose only diff
+/// from the original is `status:"completed"` still hashes identically.
+/// Without this exclusion the X.5c.2 fallback correlation would never
+/// hit, breaking the BLOCKER-2 contract.
+///
 /// Returns `None` if no recognizable tool fields are present.
 fn synthesize_tool_call(tool_call_id: &str, update: &Value) -> Option<Value> {
     let mut obj = serde_json::Map::new();
     obj.insert("toolCallId".into(), json!(tool_call_id));
     let mut any_field = false;
-    for f in [
-        "kind",
-        "title",
-        "content",
-        "locations",
-        "rawInput",
-        "status",
-    ] {
+    for f in ["kind", "title", "content", "locations", "rawInput"] {
         if let Some(v) = update.get(f).cloned() {
             obj.insert(f.into(), v);
             any_field = true;
@@ -477,10 +481,57 @@ mod tests {
             }],
             "rawInput": { "file_path": "/repo/hello.md", "content": "hi\n" }
         });
-        let x5c1_hash = sha256_hex_canonical(&x5c1_tool_call);
+        let x5c1_hash = sha256_hex_canonical_excluding(&x5c1_tool_call, TOOL_CALL_HASH_DROP_FIELDS);
         assert_eq!(
             dto.approval_tool_call_hash.as_deref(),
             Some(x5c1_hash.as_str())
+        );
+    }
+
+    #[test]
+    fn approval_tool_call_hash_invariant_under_id_rotation() {
+        // The whole point of dropping toolCallId from the hash:
+        // permission's toolCall and a later tool_call_update with a
+        // rotated id hash to the same value.
+        let perm_tool_call = json!({
+            "toolCallId": "tc_perm",
+            "kind": "edit",
+            "title": "Mock Tool",
+            "content": [{ "type":"diff", "path":"/tmp/mock", "newText":"x", "oldText":null }],
+            "locations": [{ "path": "/tmp/mock" }],
+            "rawInput": { "file_path": "/tmp/mock", "content": "x" }
+        });
+        let permission_hash =
+            sha256_hex_canonical_excluding(&perm_tool_call, TOOL_CALL_HASH_DROP_FIELDS);
+
+        let update_payload = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tc_after",      // rotated
+                "kind": "edit",
+                "title": "Mock Tool",
+                "status": "completed",         // runtime-only — must drop
+                "content": [{ "type":"diff", "path":"/tmp/mock", "newText":"x", "oldText":null }],
+                "locations": [{ "path": "/tmp/mock" }],
+                "rawInput": { "file_path": "/tmp/mock", "content": "x" },
+                "rawOutput": "File written"    // runtime-only — must drop
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "claude",
+            AgentKind::Acp,
+            &update_payload,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .unwrap();
+        assert_eq!(dto.tool_call_id, "tc_after");
+        assert_eq!(
+            dto.approval_tool_call_hash.as_deref(),
+            Some(permission_hash.as_str()),
+            "rotated toolCallId + runtime status/rawOutput must NOT \
+             change the approval_tool_call_hash"
         );
     }
 

@@ -461,25 +461,44 @@ async fn emit_scripted_tool(
         emit_read_sequence(stdout, session_id, scripted_tool_call_id).await;
     }
     if args.emit_edit_tool {
-        // For same_raw_input_different_tool, the edit's rawInput must
-        // match the permission's rawInput so the negative correlation
-        // test can prove rawInput-only is not enough.
-        let raw_input = if args.same_raw_input_different_tool {
-            json!({ "file_path": "/tmp/mock", "content": "x" })
-        } else {
-            json!({ "file_path": "/repo/hello.md", "content": "hi from script" })
-        };
-        let title = if args.same_raw_input_different_tool {
-            "Different Tool With Same RawInput"
-        } else {
-            "Write hello.md"
-        };
+        // Three shapes:
+        //   --rotate-tool-call-id only:
+        //     mirror permission's exact toolCall shape (Mock Tool,
+        //     /tmp/mock, content "x"). Only the toolCallId differs,
+        //     so approval_tool_call_hash matches → positive fallback.
+        //   --same-raw-input-different-tool:
+        //     rawInput matches verbatim, but title/locations differ.
+        //     approval_tool_call_hash differs → negative correlation
+        //     (proves raw_input alone isn't a key).
+        //   neither:
+        //     fresh shape, no permission overlap.
+        let (title, raw_input, edit_path) =
+            if args.rotate_tool_call_id && !args.same_raw_input_different_tool {
+                (
+                    "Mock Tool",
+                    json!({ "file_path": "/tmp/mock", "content": "x" }),
+                    "/tmp/mock",
+                )
+            } else if args.same_raw_input_different_tool {
+                (
+                    "Different Tool With Same RawInput",
+                    json!({ "file_path": "/tmp/mock", "content": "x" }),
+                    "/repo/elsewhere.md",
+                )
+            } else {
+                (
+                    "Write hello.md",
+                    json!({ "file_path": "/repo/hello.md", "content": "hi from script" }),
+                    "/repo/hello.md",
+                )
+            };
         emit_edit_sequence(
             stdout,
             session_id,
             scripted_tool_call_id,
             title,
             &raw_input,
+            edit_path,
             args.oversized_output,
         )
         .await;
@@ -545,12 +564,10 @@ async fn emit_edit_sequence(
     tool_call_id: &str,
     title: &str,
     raw_input: &Value,
+    edit_path: &str,
     oversized: bool,
 ) {
-    let path = raw_input
-        .get("file_path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("/tmp/mock");
+    let path = edit_path;
     let new_text = raw_input
         .get("content")
         .and_then(|v| v.as_str())

@@ -1,6 +1,6 @@
 //! Command dispatch (WS client → session) + envelope translation.
 
-use crate::agent_runtime::acp::sha256_hex_canonical;
+use crate::agent_runtime::acp::{sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS};
 use crate::audit::log_tool_event;
 use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
@@ -453,7 +453,16 @@ pub async fn dispatch_command(
                         // audit log can correlate this approval with
                         // the eventual tool_call_update without
                         // recording the raw payload twice.
-                        let args_hash = sha256_hex_canonical(&resolution.tool_call);
+                        // X.5c.2 alignment: hash excludes runtime-only
+                        // top-level fields (toolCallId, status,
+                        // rawOutput) so the X.5c.2 ObservedToolActivity
+                        // `approval_tool_call_hash` joins this row by
+                        // value even when the agent rotates the call id
+                        // on subsequent updates.
+                        let args_hash = sha256_hex_canonical_excluding(
+                            &resolution.tool_call,
+                            TOOL_CALL_HASH_DROP_FIELDS,
+                        );
                         state.audit.log(
                             &cmd.session_id,
                             "approval",
