@@ -404,6 +404,176 @@ async fn x5c1_reject_sends_reject_option_and_completes_prompt() {
     assert_eq!(completed["payload"]["stop_reason"], json!("end_turn"));
 }
 
+async fn await_ack(ws: &mut Ws, ack_of: &str) -> Value {
+    loop {
+        let Some(msg) = tokio::time::timeout(T, ws.next()).await.unwrap() else {
+            panic!("ws closed waiting for ack {ack_of}");
+        };
+        let Message::Text(txt) = msg.unwrap() else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        if v.get("ackOf") == Some(&json!(ack_of)) {
+            return v;
+        }
+    }
+}
+
+#[tokio::test]
+async fn x5c1_explicit_allow_option_on_reject_is_kind_mismatch() {
+    // Hardening: caller can't smuggle approve semantics into a reject
+    // by overriding option_id. Bridge must refuse with
+    // approval.option_kind_mismatch.
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "trigger permission" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bad = json!({
+        "v": 1, "id": "cmd_bad", "type": "approval.reject",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id, "option_id": "allow" }
+    });
+    ws.send(Message::Text(bad.to_string().into()))
+        .await
+        .unwrap();
+    let ack = await_ack(&mut ws, "cmd_bad").await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("approval.option_kind_mismatch"));
+
+    // Pending approval must be re-armed: a follow-up approval.reject
+    // (without override) still resolves cleanly. Don't strand the agent.
+    let retry = json!({
+        "v": 1, "id": "cmd_retry", "type": "approval.reject",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id }
+    });
+    ws.send(Message::Text(retry.to_string().into()))
+        .await
+        .unwrap();
+    let resolved = next_event_matching(&mut ws, |v| {
+        v.get("type") == Some(&json!("approval.resolved"))
+            && v["payload"]["outcome"] == json!("rejected")
+    })
+    .await;
+    assert_eq!(resolved["payload"]["option_id"], json!("reject"));
+}
+
+#[tokio::test]
+async fn x5c1_explicit_reject_option_on_approve_is_kind_mismatch() {
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "trigger" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bad = json!({
+        "v": 1, "id": "cmd_bad", "type": "approval.approve",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id, "option_id": "reject" }
+    });
+    ws.send(Message::Text(bad.to_string().into()))
+        .await
+        .unwrap();
+    let ack = await_ack(&mut ws, "cmd_bad").await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("approval.option_kind_mismatch"));
+}
+
+#[tokio::test]
+async fn x5c1_unknown_option_id_returns_option_not_found() {
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "trigger" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bad = json!({
+        "v": 1, "id": "cmd_bad", "type": "approval.approve",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id, "option_id": "ghost" }
+    });
+    ws.send(Message::Text(bad.to_string().into()))
+        .await
+        .unwrap();
+    let ack = await_ack(&mut ws, "cmd_bad").await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("approval.option_not_found"));
+}
+
+#[tokio::test]
+async fn x5c1_allow_always_is_forbidden_by_policy() {
+    // Even though the agent offers `allow_always` as a valid option,
+    // the bridge default policy denies persistent permission so the
+    // user can't accidentally grant it via explicit override.
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "trigger" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let bad = json!({
+        "v": 1, "id": "cmd_bad", "type": "approval.approve",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id, "option_id": "allow_always" }
+    });
+    ws.send(Message::Text(bad.to_string().into()))
+        .await
+        .unwrap();
+    let ack = await_ack(&mut ws, "cmd_bad").await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("approval.option_forbidden"));
+}
+
 #[tokio::test]
 async fn x3_acp_assessor_profile_denied() {
     // executor.code is the only profile cleared for acp; assessor.rtd

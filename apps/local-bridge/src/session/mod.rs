@@ -3,5 +3,8 @@
 mod handle;
 mod registry;
 
-pub use handle::{SessionHandle, SessionHandleRef, SpawnOptions};
+pub use handle::{
+    ApprovalIntent, ApprovalResolution, ApprovalResolveError, SessionHandle, SessionHandleRef,
+    SpawnOptions,
+};
 pub use registry::SessionRegistry;

@@ -678,91 +678,206 @@ async fn handle_permission_request(handle: &SessionHandleRef, req: PermissionReq
     emit_event(handle, event).await;
 }
 
+/// Approve / reject intent — drives kind validation when an explicit
+/// `option_id` is supplied by the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalIntent {
+    Approve,
+    Reject,
+}
+
+/// Typed resolution failure so the translator can map to stable ack
+/// codes without string sniffing.
+#[derive(Debug, thiserror::Error)]
+pub enum ApprovalResolveError {
+    #[error("approval on non-ACP session")]
+    NotAcp,
+    #[error("approval not found: {0}")]
+    NotFound(String),
+    #[error("no approve/reject option available in pending options")]
+    NoEligibleOption,
+    #[error("approval option_id `{0}` not found in pending options")]
+    OptionNotFound(String),
+    #[error(
+        "approval option_id `{option_id}` (kind `{kind}`) does not match the {intent:?} intent"
+    )]
+    OptionKindMismatch {
+        option_id: String,
+        kind: String,
+        intent: ApprovalIntent,
+    },
+    #[error("approval option_id `{0}` is forbidden by bridge policy (allow_always not enabled)")]
+    OptionForbidden(String),
+    #[error("acp transport: {0}")]
+    Transport(String),
+}
+
+/// Result of a successful approve / reject resolution. Carries enough
+/// data for the translator to write a complete audit row.
+#[derive(Debug, Clone)]
+pub struct ApprovalResolution {
+    pub option_id: String,
+    /// The full option object (preserves `kind`, `name`, `_meta`, …).
+    pub option: serde_json::Value,
+    /// The original `toolCall` payload from the agent's
+    /// `session/request_permission` request.
+    pub tool_call: serde_json::Value,
+}
+
+/// Stage X.5c.1 policy gate. Persistent-permission options
+/// (`allow_always`) are not yet wired to a per-profile policy, so the
+/// bridge default is to refuse them. When the policy plane lands this
+/// becomes a profile/agent lookup.
+const PERSISTENT_PERMISSION_ALLOWED: bool = false;
+
 impl SessionHandle {
-    /// X.5c.1 — resolve a pending ACP approval as APPROVED. The bridge
-    /// picks an `optionId`: caller may override; otherwise prefer
-    /// `allow_once` over `allow_always` (policy-aware default).
-    /// Returns the chosen `optionId` so the caller can audit it.
+    /// X.5c.1 — resolve a pending ACP approval as APPROVED.
+    ///
+    /// If the caller supplies `explicit_option_id`, the bridge:
+    /// - confirms it exists in `pending.options`,
+    /// - confirms its `kind` is an `allow_*` variant,
+    /// - rejects `allow_always` unless persistent permission is on.
+    ///
+    /// Otherwise the policy default picker chooses `allow_once` first.
     pub async fn resolve_approval_approve(
         &self,
         approval_id: &str,
         explicit_option_id: Option<&str>,
-    ) -> anyhow::Result<String> {
-        let acp = self
-            .acp
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("approval on non-ACP session"))?;
-        let (_, pending) = acp
-            .pending_approvals
-            .remove(approval_id)
-            .ok_or_else(|| anyhow::anyhow!("approval not found: {approval_id}"))?;
-        pending.timeout_handle.abort();
-
-        let option_id = match explicit_option_id {
-            Some(id) => id.to_string(),
-            None => pick_approve_option_id(&pending.options)?,
-        };
-        let outcome = serde_json::json!({
-            "outcome": { "outcome": "selected", "optionId": option_id }
-        });
-        acp.client
-            .respond_permission(pending.acp_request_id, outcome)?;
-        let event = ServerEvent {
-            seq: 0,
-            session_id: self.id.clone(),
-            event_type: "approval.resolved".into(),
-            payload: serde_json::json!({
-                "approval_id": approval_id,
-                "outcome": "approved",
-                "option_id": option_id,
-            }),
-            v: 1,
-            ts: chrono::Utc::now().to_rfc3339(),
-        };
-        emit_to(&self.ring, &self.broadcast, event).await;
-        Ok(option_id)
+    ) -> Result<ApprovalResolution, ApprovalResolveError> {
+        self.resolve_approval(approval_id, explicit_option_id, ApprovalIntent::Approve)
+            .await
     }
 
-    /// X.5c.1 — resolve a pending ACP approval as REJECTED.
+    /// X.5c.1 — resolve a pending ACP approval as REJECTED. Same
+    /// validation rules as approve, but `kind` must start with
+    /// `reject`.
     pub async fn resolve_approval_reject(
         &self,
         approval_id: &str,
         explicit_option_id: Option<&str>,
-    ) -> anyhow::Result<String> {
-        let acp = self
-            .acp
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("approval on non-ACP session"))?;
+    ) -> Result<ApprovalResolution, ApprovalResolveError> {
+        self.resolve_approval(approval_id, explicit_option_id, ApprovalIntent::Reject)
+            .await
+    }
+
+    async fn resolve_approval(
+        &self,
+        approval_id: &str,
+        explicit_option_id: Option<&str>,
+        intent: ApprovalIntent,
+    ) -> Result<ApprovalResolution, ApprovalResolveError> {
+        let acp = self.acp.as_ref().ok_or(ApprovalResolveError::NotAcp)?;
         let (_, pending) = acp
             .pending_approvals
             .remove(approval_id)
-            .ok_or_else(|| anyhow::anyhow!("approval not found: {approval_id}"))?;
+            .ok_or_else(|| ApprovalResolveError::NotFound(approval_id.to_string()))?;
         pending.timeout_handle.abort();
 
-        let option_id = match explicit_option_id {
-            Some(id) => id.to_string(),
-            None => pick_reject_option_id(&pending.options)?,
+        // Resolve + validate option_id, re-inserting the entry on
+        // failure so the user can retry. (The agent is still waiting
+        // on this request_permission; abandoning it would deadlock
+        // the prompt.)
+        let chosen = match resolve_option(&pending.options, explicit_option_id, intent) {
+            Ok(c) => c,
+            Err(e) => {
+                // Restore for retry. Re-arm the timer? Skip for X.5c.1
+                // simplicity — the original timer was aborted; if the
+                // user keeps retrying, the prompt eventually completes
+                // when they pick a valid option.
+                acp.pending_approvals.insert(
+                    approval_id.to_string(),
+                    PendingApproval {
+                        acp_request_id: pending.acp_request_id,
+                        options: pending.options.clone(),
+                        tool_call: pending.tool_call.clone(),
+                        created_at: pending.created_at,
+                        timeout_handle: pending.timeout_handle.clone(),
+                    },
+                );
+                return Err(e);
+            }
         };
+
         let outcome = serde_json::json!({
-            "outcome": { "outcome": "selected", "optionId": option_id }
+            "outcome": { "outcome": "selected", "optionId": chosen.option_id }
         });
         acp.client
-            .respond_permission(pending.acp_request_id, outcome)?;
+            .respond_permission(pending.acp_request_id, outcome)
+            .map_err(|e| ApprovalResolveError::Transport(e.to_string()))?;
+
+        let outcome_label = match intent {
+            ApprovalIntent::Approve => "approved",
+            ApprovalIntent::Reject => "rejected",
+        };
+        let resolution = ApprovalResolution {
+            option_id: chosen.option_id.clone(),
+            option: chosen.option,
+            tool_call: pending.tool_call.clone(),
+        };
         let event = ServerEvent {
             seq: 0,
             session_id: self.id.clone(),
             event_type: "approval.resolved".into(),
             payload: serde_json::json!({
                 "approval_id": approval_id,
-                "outcome": "rejected",
-                "option_id": option_id,
+                "outcome": outcome_label,
+                "option_id": resolution.option_id,
             }),
             v: 1,
             ts: chrono::Utc::now().to_rfc3339(),
         };
         emit_to(&self.ring, &self.broadcast, event).await;
-        Ok(option_id)
+        Ok(resolution)
     }
+}
+
+struct ChosenOption {
+    option_id: String,
+    option: serde_json::Value,
+}
+
+fn resolve_option(
+    options: &[serde_json::Value],
+    explicit: Option<&str>,
+    intent: ApprovalIntent,
+) -> Result<ChosenOption, ApprovalResolveError> {
+    let chosen_id = match explicit {
+        Some(id) => id.to_string(),
+        None => match intent {
+            ApprovalIntent::Approve => pick_approve_option_id(options)
+                .map_err(|_| ApprovalResolveError::NoEligibleOption)?,
+            ApprovalIntent::Reject => pick_reject_option_id(options)
+                .map_err(|_| ApprovalResolveError::NoEligibleOption)?,
+        },
+    };
+    let option = options
+        .iter()
+        .find(|o| o.get("optionId").and_then(|v| v.as_str()) == Some(&chosen_id))
+        .ok_or_else(|| ApprovalResolveError::OptionNotFound(chosen_id.clone()))?
+        .clone();
+    let kind = option
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let kind_ok = match intent {
+        ApprovalIntent::Approve => kind.starts_with("allow"),
+        ApprovalIntent::Reject => kind.starts_with("reject"),
+    };
+    if !kind_ok {
+        return Err(ApprovalResolveError::OptionKindMismatch {
+            option_id: chosen_id,
+            kind,
+            intent,
+        });
+    }
+    if kind == "allow_always" && !PERSISTENT_PERMISSION_ALLOWED {
+        return Err(ApprovalResolveError::OptionForbidden(chosen_id));
+    }
+    Ok(ChosenOption {
+        option_id: chosen_id,
+        option,
+    })
 }
 
 /// Policy-aware option picker. Prefer `allow_once` over `allow_always`

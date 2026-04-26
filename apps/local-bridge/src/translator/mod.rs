@@ -7,7 +7,37 @@ use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::AuditSeverity;
 use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tracing::warn;
+
+/// Canonical-JSON sha256 hex digest used for audit `args_hash` fields.
+/// Sorts object keys via `serde_json` value→string roundtrip (sorted)
+/// so the same payload always hashes to the same digest regardless of
+/// field order.
+fn sha256_hex_canonical(value: &serde_json::Value) -> String {
+    // Build a sorted-key BTreeMap-backed canonical representation.
+    fn canon(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut sorted: std::collections::BTreeMap<String, serde_json::Value> =
+                    Default::default();
+                for (k, val) in map {
+                    sorted.insert(k.clone(), canon(val));
+                }
+                serde_json::to_value(sorted).unwrap_or(serde_json::Value::Null)
+            }
+            serde_json::Value::Array(arr) => {
+                serde_json::Value::Array(arr.iter().map(canon).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    let canonical = canon(value);
+    let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    hex::encode(h.finalize())
+}
 
 pub async fn dispatch_command(
     cmd: ClientCommand,
@@ -442,7 +472,17 @@ pub async fn dispatch_command(
                         .await
                 };
                 return match result {
-                    Ok(option_id) => {
+                    Ok(resolution) => {
+                        let outcome_label = if cmd.cmd_type == "approval.approve" {
+                            "approved"
+                        } else {
+                            "rejected"
+                        };
+                        // Args hash over the canonical tool_call so the
+                        // audit log can correlate this approval with
+                        // the eventual tool_call_update without
+                        // recording the raw payload twice.
+                        let args_hash = sha256_hex_canonical(&resolution.tool_call);
                         state.audit.log(
                             &cmd.session_id,
                             "approval",
@@ -450,10 +490,14 @@ pub async fn dispatch_command(
                             json!({
                                 "event": "resolved",
                                 "approval_id": approval_id,
-                                "option_id": option_id,
-                                "outcome": if cmd.cmd_type == "approval.approve" { "approved" } else { "rejected" },
+                                "option_id": resolution.option_id,
+                                "outcome": outcome_label,
                                 "agent_id": handle.agent_id,
                                 "agent_kind": handle.agent_kind.as_str(),
+                                "toolCallId": resolution.tool_call.get("toolCallId"),
+                                "kind": resolution.tool_call.get("kind"),
+                                "locations": resolution.tool_call.get("locations"),
+                                "args_hash": args_hash,
                             }),
                         );
                         (
@@ -465,17 +509,42 @@ pub async fn dispatch_command(
                             events,
                         )
                     }
-                    Err(e) => (
-                        ServerAck {
-                            ack_of: cmd.id.clone(),
-                            ok: false,
-                            error: Some(ErrorInfo {
-                                code: "approval.not_found".into(),
-                                message: e.to_string(),
+                    Err(e) => {
+                        use crate::session::ApprovalResolveError as E;
+                        let code = match &e {
+                            E::NotAcp => "approval.not_acp",
+                            E::NotFound(_) => "approval.not_found",
+                            E::NoEligibleOption => "approval.option_not_found",
+                            E::OptionNotFound(_) => "approval.option_not_found",
+                            E::OptionKindMismatch { .. } => "approval.option_kind_mismatch",
+                            E::OptionForbidden(_) => "approval.option_forbidden",
+                            E::Transport(_) => "engine.unreachable",
+                        };
+                        state.audit.log(
+                            &cmd.session_id,
+                            "approval",
+                            AuditSeverity::Warn,
+                            json!({
+                                "event": "resolve_failed",
+                                "approval_id": approval_id,
+                                "code": code,
+                                "reason": e.to_string(),
+                                "agent_id": handle.agent_id,
+                                "agent_kind": handle.agent_kind.as_str(),
                             }),
-                        },
-                        events,
-                    ),
+                        );
+                        (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: code.into(),
+                                    message: e.to_string(),
+                                }),
+                            },
+                            events,
+                        )
+                    }
                 };
             }
 
