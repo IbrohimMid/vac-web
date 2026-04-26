@@ -7,7 +7,7 @@ use crate::agent_runtime::acp::sha256_hex_canonical;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use ulid::Ulid;
 
 const VALID_CATEGORIES: &[&str] = &["technical", "product", "ux", "release", "ops"];
@@ -107,7 +107,13 @@ pub fn validate_candidate(
             "identity hash must not be empty".to_string(),
         ));
     }
-    if !identity_hash.starts_with("sha256:") || identity_hash.len() != 71 {
+    let Some(hex) = identity_hash.strip_prefix("sha256:") else {
+        return Err(rejection(
+            "identity_hash_invalid",
+            "identity hash must use sha256:<64 hex>".to_string(),
+        ));
+    };
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(rejection(
             "identity_hash_invalid",
             "identity hash must use sha256:<64 hex>".to_string(),
@@ -152,7 +158,11 @@ pub fn validate_candidate(
         evidence_events.push(evidence.payload);
     }
 
-    let subject = evidence_subject(evidence_entries[0].as_object(), &project_root);
+    let subject = evidence_events
+        .first()
+        .and_then(|event| event.get("label").and_then(Value::as_str))
+        .map(String::from)
+        .unwrap_or_else(|| "candidate evidence".to_string());
     let check = recommendation
         .clone()
         .or_else(|| optional_string(candidate, &["rationale"]))
@@ -241,23 +251,20 @@ fn validate_evidence(
             )
         })?;
 
-    if raw_path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
-        return Err(rejection(
-            "evidence_outside_project_root",
-            format!("evidence path escapes project root: {}", raw_path.display()),
-        ));
-    }
-
     let resolved = if raw_path.is_absolute() {
         raw_path.clone()
     } else {
         project_root.join(&raw_path)
     };
 
-    if !resolved.starts_with(project_root) {
+    let resolved_canon = resolved.canonicalize().map_err(|_| {
+        rejection(
+            "evidence_file_missing",
+            format!("evidence file not found: {}", raw_path.display()),
+        )
+    })?;
+
+    if !resolved_canon.starts_with(project_root) {
         return Err(rejection(
             "evidence_outside_project_root",
             format!(
@@ -267,17 +274,17 @@ fn validate_evidence(
         ));
     }
 
-    if !resolved.is_file() {
+    if !resolved_canon.is_file() {
         return Err(rejection(
             "evidence_file_missing",
             format!("evidence file not found: {}", raw_path.display()),
         ));
     }
 
-    let body = fs::read_to_string(&resolved).map_err(|_| {
+    let body = fs::read_to_string(&resolved_canon).map_err(|_| {
         rejection(
             "evidence_file_missing",
-            format!("evidence file not readable: {}", raw_path.display()),
+            format!("evidence file not readable: {}", resolved_canon.display()),
         )
     })?;
     let line_count = body.lines().count() as u64;
@@ -288,7 +295,10 @@ fn validate_evidence(
         if line == 0 || line > line_count {
             return Err(rejection(
                 "evidence_line_missing",
-                format!("evidence line {line} not found in {}", raw_path.display()),
+                format!(
+                    "evidence line {line} not found in {}",
+                    resolved_canon.display()
+                ),
             ));
         }
     }
@@ -299,18 +309,21 @@ fn validate_evidence(
                 "evidence_range_missing",
                 format!(
                     "evidence range {start}-{end} not found in {}",
-                    raw_path.display()
+                    resolved_canon.display()
                 ),
             ));
         }
     }
 
     let label = match (line, range) {
-        (Some(line), _) => format!("{}:{line}", display_path(project_root, &resolved)),
+        (Some(line), _) => format!("{}:{line}", display_path(project_root, &resolved_canon)),
         (_, Some((start, end))) => {
-            format!("{}:{start}-{end}", display_path(project_root, &resolved))
+            format!(
+                "{}:{start}-{end}",
+                display_path(project_root, &resolved_canon)
+            )
         }
-        _ => display_path(project_root, &resolved),
+        _ => display_path(project_root, &resolved_canon),
     };
 
     let locator = if let Some((start, end)) = range {
@@ -329,48 +342,12 @@ fn validate_evidence(
         "label": label,
         "captured_at": chrono::Utc::now().to_rfc3339(),
         "ttl_seconds": EVIDENCE_TTL_SECS,
-        "uri": format!("file://{}", resolved.display()),
+        "uri": format!("file://{}", resolved_canon.display()),
         "locator": locator,
         "source_event_type": "assessment.candidate_received",
     });
 
     Ok(ValidatedEvidence { id, payload })
-}
-
-fn evidence_subject(raw: Option<&serde_json::Map<String, Value>>, project_root: &Path) -> String {
-    let Some(raw) = raw else {
-        return "candidate evidence".to_string();
-    };
-    let resolved = raw
-        .get("path")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            raw.get("uri")
-                .and_then(Value::as_str)
-                .map(strip_file_uri_str)
-        })
-        .map(PathBuf::from)
-        .map(|path| {
-            if path.is_absolute() {
-                path
-            } else {
-                project_root.join(path)
-            }
-        });
-    let Some(path) = resolved else {
-        return "candidate evidence".to_string();
-    };
-    let display = display_path(project_root, &path);
-    if let Some(line) = optional_u64(&Value::Object(raw.clone()), &["line", "locator.line"]) {
-        format!("{display}:{line}")
-    } else if let Some((start, end)) = optional_range(
-        &Value::Object(raw.clone()),
-        &["range", "line_range", "locator.line_range"],
-    ) {
-        format!("{display}:{start}-{end}")
-    } else {
-        display
-    }
 }
 
 fn display_path(project_root: &Path, resolved: &Path) -> String {
@@ -512,6 +489,15 @@ mod tests {
         })
     }
 
+    fn candidate_with<F>(path: &str, line: u64, edit: F) -> Value
+    where
+        F: FnOnce(&mut Value),
+    {
+        let mut candidate = candidate(path, line);
+        edit(&mut candidate);
+        candidate
+    }
+
     #[test]
     fn validates_candidate_and_builds_payloads() {
         let dir = tempdir().unwrap();
@@ -572,6 +558,213 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.reason, "duplicate_identity_hash");
+    }
+
+    #[test]
+    fn allows_duplicate_identity_hash_in_different_runs() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\nline 2\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &candidate("src/handlers/charge.rs", 1),
+            "assessment.candidate_received",
+        )
+        .unwrap();
+        validate_candidate(
+            root,
+            &mut tracker,
+            "run_02",
+            &candidate("src/handlers/charge.rs", 1),
+            "assessment.candidate_received",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rejects_parent_dir_traversal() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside_dir = tempfile::tempdir().unwrap();
+        write_file(outside_dir.path(), "outside.rs", "line 1\n");
+        let rel = format!(
+            "../{}/outside.rs",
+            outside_dir.path().file_name().unwrap().to_str().unwrap()
+        );
+        let mut tracker = AssessmentValidationTracker::default();
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &candidate(&rel, 1),
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "evidence_outside_project_root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_escape() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        write_file(outside.path(), "outside.rs", "line 1\n");
+        let link_path = root.join("link.rs");
+        std::os::unix::fs::symlink(outside.path().join("outside.rs"), &link_path).unwrap();
+        let mut tracker = AssessmentValidationTracker::default();
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &candidate("link.rs", 1),
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "evidence_outside_project_root");
+    }
+
+    #[test]
+    fn rejects_absolute_path_outside_project_root() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        write_file(outside.path(), "outside.rs", "line 1\n");
+        let absolute = outside.path().join("outside.rs");
+        let absolute_str = absolute.to_string_lossy().into_owned();
+        let mut tracker = AssessmentValidationTracker::default();
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &candidate(&absolute_str, 1),
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "evidence_outside_project_root");
+    }
+
+    #[test]
+    fn rejects_line_out_of_range() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\nline 2\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &candidate("src/handlers/charge.rs", 3),
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "evidence_line_missing");
+    }
+
+    #[test]
+    fn rejects_invalid_range() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\nline 2\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let cand = candidate_with("src/handlers/charge.rs", 1, |candidate| {
+            if let Some(evidence) = candidate.get_mut("evidence").and_then(Value::as_array_mut) {
+                evidence[0]["range"] = json!([2, 1]);
+            }
+        });
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &cand,
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "evidence_range_missing");
+    }
+
+    #[test]
+    fn rejects_invalid_category() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let cand = candidate_with("src/handlers/charge.rs", 1, |candidate| {
+            candidate["category"] = json!("finance");
+        });
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &cand,
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "invalid_category");
+    }
+
+    #[test]
+    fn rejects_invalid_severity() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let cand = candidate_with("src/handlers/charge.rs", 1, |candidate| {
+            candidate["severity"] = json!("severe");
+        });
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &cand,
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "invalid_severity");
+    }
+
+    #[test]
+    fn rejects_critical_confidence_below_floor() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let cand = candidate_with("src/handlers/charge.rs", 1, |candidate| {
+            candidate["confidence"] = json!(0.6);
+        });
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &cand,
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "critical_confidence_floor");
+    }
+
+    #[test]
+    fn rejects_invalid_identity_hash() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let invalid = format!("sha256:{}", "z".repeat(64));
+        let cand = candidate_with("src/handlers/charge.rs", 1, |candidate| {
+            candidate["identityHash"] = json!(invalid);
+        });
+        let err = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &cand,
+            "assessment.candidate_received",
+        )
+        .unwrap_err();
+        assert_eq!(err.reason, "identity_hash_invalid");
     }
 
     #[test]
