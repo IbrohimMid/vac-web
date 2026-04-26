@@ -25,6 +25,43 @@ Run both in dev:
 ./scripts/dev.sh
 ```
 
+## Testing
+
+The Rust workspace has many crates (`local-bridge`, `relay-service`, `bridge-core`, `protocol-rs`, `profile-core`, `red-team`, `mock-engine`, `codegen`), so we use [`cargo nextest`](https://nexte.st/) as the **fast default** loop and keep `cargo test` as the compatibility gate for doctests and audit-critical runs.
+
+**Local fast loop** (use while iterating):
+
+```bash
+cargo nextest run -p local-bridge
+cargo nextest run -p red-team --features redteam
+```
+
+**Before push** (full lint + type + test sweep):
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo nextest run --workspace
+pnpm typecheck
+pnpm test
+pnpm --filter @vac-web/web build
+```
+
+**Before lock / release / audit-critical** (cargo test is the canonical baseline; it also runs doctests, which nextest does not):
+
+```bash
+cargo test -p local-bridge
+cargo test -p red-team --features redteam
+```
+
+Nextest defaults live in [`.config/nextest.toml`](./.config/nextest.toml): `fail-fast = false`, `retries = 0` for `default`; `retries = 1` on `ci`.
+
+If nextest is not installed:
+
+```bash
+cargo install cargo-nextest --locked
+```
+
 ## Project structure
 
 See [`docs/architecture.md §5.1`](./docs/architecture.md) for bridge layout, [`docs/frontend-rules.md §12`](./docs/frontend-rules.md) for web.

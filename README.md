@@ -139,12 +139,16 @@ vac-web/
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-cargo test --workspace                       # 94 tests green
-cargo test -p red-team --features redteam    # 15 red-team cases green
+cargo nextest run --workspace                # fast default dev/PR loop
+cargo nextest run -p red-team --features redteam
+cargo test --workspace                       # baseline + doctests, lock/release gate
+cargo test -p red-team --features redteam    # baseline red-team
 bash scripts/manifest-verify.sh              # schema + profile hash drift check
 bash scripts/codegen.sh                      # regenerate TS + Rust types (deterministic)
 pnpm --filter @vac-web/web build             # vite production build
 ```
+
+See [`CONTRIBUTING.md` § Testing](./CONTRIBUTING.md#testing) for the recommended Rust test loop (nextest as fast default, `cargo test` retained as compatibility gate).
 
 ## Related
 

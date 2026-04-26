@@ -1,0 +1,23 @@
+# Nextest configuration for vac-web.
+#
+# Recommended dev loop (fast feedback):
+#   cargo nextest run -p local-bridge
+#   cargo nextest run -p red-team --features redteam
+#   cargo nextest run --workspace                   # before push
+#
+# Compatibility gate (use on lock / release / audit-critical, doctests included):
+#   cargo test -p local-bridge
+#   cargo test -p red-team --features redteam
+#
+# Note: nextest does not run doctests; keep `cargo test` for those.
+
+[profile.default]
+# Surface every failure in the run rather than aborting on the first one;
+# easier to triage a batch when iterating locally.
+fail-fast = false
+retries = 0
+
+[profile.ci]
+# CI tolerates one transient retry but still runs the full suite.
+fail-fast = false
+retries = 1
