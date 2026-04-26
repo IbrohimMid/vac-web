@@ -26,9 +26,11 @@ pub enum WorkflowAdvance {
     },
     ReviewDiff {
         tool_call_id: String,
+        review_diff_count: Option<u32>,
     },
     RuntimeLog {
         tool_call_id: String,
+        runtime_command_preview: Option<String>,
     },
     TranscriptCompleted,
     TranscriptError {
@@ -124,7 +126,14 @@ pub fn classify_bridge_event(event_type: &str, payload: &Value) -> Option<Workfl
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Some(WorkflowAdvance::ReviewDiff { tool_call_id })
+            let review_diff_count = payload
+                .get("diffs")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len() as u32);
+            Some(WorkflowAdvance::ReviewDiff {
+                tool_call_id,
+                review_diff_count,
+            })
         }
         "runtime.job_log" => {
             let tool_call_id = payload
@@ -132,7 +141,14 @@ pub fn classify_bridge_event(event_type: &str, payload: &Value) -> Option<Workfl
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            Some(WorkflowAdvance::RuntimeLog { tool_call_id })
+            let runtime_command_preview = payload
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().take(120).collect::<String>());
+            Some(WorkflowAdvance::RuntimeLog {
+                tool_call_id,
+                runtime_command_preview,
+            })
         }
         "transcript.completed" => Some(WorkflowAdvance::TranscriptCompleted),
         "transcript.error" => {
@@ -263,12 +279,14 @@ mod tests {
                 "review.changeset_updated",
                 WorkflowAdvance::ReviewDiff {
                     tool_call_id: "x".into(),
+                    review_diff_count: None,
                 },
             ),
             (
                 "runtime.job_log",
                 WorkflowAdvance::RuntimeLog {
                     tool_call_id: "x".into(),
+                    runtime_command_preview: None,
                 },
             ),
             ("transcript.completed", WorkflowAdvance::TranscriptCompleted),

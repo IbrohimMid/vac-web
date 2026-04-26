@@ -95,6 +95,7 @@ pub fn workflow_step_failed(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn workflow_artifact_created(
     session_id: &str,
     run_id: &str,
@@ -104,20 +105,25 @@ pub fn workflow_artifact_created(
     tool_call_id: &str,
     source_event_type: &str,
     ts: &str,
+    extra: serde_json::Value,
 ) -> ServerEvent {
-    make_event(
-        session_id,
-        "workflow.artifact.created",
-        json!({
-            "run_id": run_id,
-            "artifact_id": artifact_id,
-            "kind": kind,
-            "step_id": step_id,
-            "tool_call_id": tool_call_id,
-            "source_event_type": source_event_type,
-            "ts": ts,
-        }),
-    )
+    let mut payload = json!({
+        "run_id": run_id,
+        "artifact_id": artifact_id,
+        "kind": kind,
+        "step_id": step_id,
+        "tool_call_id": tool_call_id,
+        "source_event_type": source_event_type,
+        "ts": ts,
+    });
+    if let (Some(obj), Some(base)) = (extra.as_object(), payload.as_object_mut()) {
+        for (k, v) in obj {
+            if !v.is_null() {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    make_event(session_id, "workflow.artifact.created", payload)
 }
 
 pub fn workflow_completed(session_id: &str, run_id: &str) -> ServerEvent {

@@ -331,18 +331,40 @@ impl WorkflowExecutor {
     }
 
     fn maybe_create_artifact(&mut self, signal: &WorkflowAdvance) -> Vec<ServerEvent> {
-        let (artifact_kind, tool_call_id, step_kind, source_event_type) = match signal {
-            WorkflowAdvance::ReviewDiff { tool_call_id } => (
+        let (artifact_kind, tool_call_id, step_kind, source_event_type, extra) = match signal {
+            WorkflowAdvance::ReviewDiff {
+                tool_call_id,
+                review_diff_count,
+            } => (
                 "review_diff",
                 tool_call_id.clone(),
                 ActivityKind::CollectReviewDiff,
                 "review.changeset_updated",
+                serde_json::json!({ "review_diff_count": review_diff_count }),
             ),
-            WorkflowAdvance::RuntimeLog { tool_call_id } => (
+            WorkflowAdvance::RuntimeLog {
+                tool_call_id,
+                runtime_command_preview,
+            } => (
                 "runtime_log",
                 tool_call_id.clone(),
                 ActivityKind::CollectRuntimeLog,
                 "runtime.job_log",
+                serde_json::json!({ "runtime_command_preview": runtime_command_preview }),
+            ),
+            WorkflowAdvance::ToolObserved { tool_call_id, .. } => (
+                "tool_activity",
+                tool_call_id.clone(),
+                ActivityKind::ObserveToolActivity,
+                "tool.observed",
+                serde_json::Value::Object(Default::default()),
+            ),
+            WorkflowAdvance::ApprovalPending { approval_id } => (
+                "approval",
+                approval_id.clone(),
+                ActivityKind::AwaitApproval,
+                "approval.pending",
+                serde_json::json!({ "approval_id": approval_id }),
             ),
             _ => return vec![],
         };
@@ -365,6 +387,7 @@ impl WorkflowExecutor {
             &tool_call_id,
             source_event_type,
             &ts,
+            extra,
         );
         self.artifacts.push(WorkflowArtifact {
             artifact_id,
@@ -567,6 +590,7 @@ flows:
         // RuntimeLog has no matching edge from trigger (which is the only completed step)
         let evs = ex.advance(WorkflowAdvance::RuntimeLog {
             tool_call_id: "tc1".to_string(),
+            runtime_command_preview: None,
         });
         // No step transitions should happen (no artifact either since no CollectRuntimeLog step started)
         assert!(!evs.iter().any(|e| e.event_type == "workflow.step.started"));
@@ -674,6 +698,7 @@ flows:
         ex.advance(WorkflowAdvance::PromptSubmitted); // starts collect_diff
         let evs = ex.advance(WorkflowAdvance::ReviewDiff {
             tool_call_id: "tc1".to_string(),
+            review_diff_count: None,
         });
         assert!(evs
             .iter()
