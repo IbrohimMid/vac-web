@@ -58,6 +58,8 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   };
 
   const selectedCount = selected.size;
+  const validatedCount = runFindings.length;
+  const rejectedCount = run.validation?.rejected ?? 0;
 
   return (
     <div style={{ padding: 'var(--pad)' }}>
@@ -108,8 +110,9 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
           >
             <span className="badge accent">{selectedCount} selected</span>
             <span className="muted">
-              {runFindings.length} finding{runFindings.length === 1 ? '' : 's'} in this run
+              {validatedCount} validated finding{validatedCount === 1 ? '' : 's'} in this run
             </span>
+            {rejectedCount > 0 && <span className="badge warn">{rejectedCount} rejected</span>}
             <div style={{ flex: 1 }} />
             <button
               className="btn sm ghost"
@@ -130,7 +133,7 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
 
         <aside style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
           <VerdictCard verdict={run.verdict} findings={runFindings} />
-          <RunDetailsCard run={run} />
+          <RunDetailsCard run={run} validatedFindings={validatedCount} />
           <CompareCard run={run} />
         </aside>
       </div>

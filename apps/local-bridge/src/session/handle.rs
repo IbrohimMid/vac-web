@@ -1,12 +1,14 @@
 //! Per-session state + child process handle.
 
 use crate::agent_runtime::acp::{
-    classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical_excluding,
-    AcpClient, ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest,
-    NewSessionRequest, PermissionRequest, PromptRequest, SessionNotification, ToolKind, ToolStatus,
-    DEFAULT_RAW_OUTPUT_CAP_BYTES, TOOL_CALL_HASH_DROP_FIELDS,
+    classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical,
+    sha256_hex_canonical_excluding, AcpClient, ClientCapabilities, ContentBlock,
+    FsClientCapabilities, InitializeRequest, NewSessionRequest, PermissionRequest, PromptRequest,
+    SessionNotification, ToolKind, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES,
+    TOOL_CALL_HASH_DROP_FIELDS,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
+use crate::notify::{activity_event, Severity as NotifySeverity};
 use crate::ws::envelope::{ClientCommand, ServerEvent};
 use bridge_core::{EventRing, StateHolder};
 use std::path::PathBuf;
@@ -16,6 +18,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{info, warn};
+
+use super::assessment_validation::{
+    validate_candidate, AssessmentValidationTracker, CandidateRejection, ValidatedCandidate,
+};
 
 pub type SessionHandleRef = Arc<SessionHandle>;
 
@@ -136,6 +142,9 @@ pub struct SessionHandle {
     pub broadcast: broadcast::Sender<ServerEvent>,
     /// ACP runtime state when this session is backed by an ACP agent.
     pub acp: Option<Arc<AcpRuntime>>,
+    /// Bridge audit sink, shared across ACP and JSON-RPC sessions.
+    pub audit: Option<Arc<crate::audit::AuditFacility>>,
+    assessment_validation: Arc<Mutex<AssessmentValidationTracker>>,
 }
 
 pub struct SpawnOptions {
@@ -245,6 +254,8 @@ impl SessionHandle {
             stdin: Arc::new(Mutex::new(Some(stdin))),
             broadcast: bcast_tx.clone(),
             acp: None,
+            audit: opts.audit.clone(),
+            assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
 
         info!(
@@ -515,17 +526,373 @@ async fn process_jsonrpc_line(line: &str, handle: &SessionHandleRef) {
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let ts = chrono::Utc::now().to_rfc3339();
+    match method {
+        "assessment.candidate_received" => {
+            handle_assessment_candidate(handle, &params, method).await;
+        }
+        "assessment.finding_added" => {
+            emit_passthrough_event(
+                handle,
+                "assessment.finding_added",
+                params,
+                "assessment.finding_added",
+            )
+            .await;
+        }
+        "assessment.evidence_attached" => {
+            emit_passthrough_event(
+                handle,
+                "assessment.evidence_attached",
+                params,
+                "assessment.evidence_attached",
+            )
+            .await;
+        }
+        "assessment.finding" => {
+            emit_passthrough_event(
+                handle,
+                "assessment.finding_added",
+                params,
+                "assessment.finding",
+            )
+            .await;
+        }
+        "assessment.evidence" => {
+            emit_passthrough_event(
+                handle,
+                "assessment.evidence_attached",
+                params,
+                "assessment.evidence",
+            )
+            .await;
+        }
+        _ => {
+            let ts = chrono::Utc::now().to_rfc3339();
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: method.to_string(),
+                payload: params,
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+    }
+}
 
+async fn emit_passthrough_event(
+    handle: &SessionHandleRef,
+    event_type: &str,
+    payload: serde_json::Value,
+    source_event_type: &str,
+) {
+    let payload = augment_payload(
+        payload,
+        &[("source_event_type", serde_json::json!(source_event_type))],
+    );
     let event = ServerEvent {
         seq: 0,
         session_id: handle.id.clone(),
-        event_type: method.to_string(),
-        payload: params,
+        event_type: event_type.to_string(),
+        payload,
         v: 1,
-        ts,
+        ts: chrono::Utc::now().to_rfc3339(),
     };
     emit_event(handle, event).await;
+}
+
+async fn handle_assessment_candidate(
+    handle: &SessionHandleRef,
+    params: &serde_json::Value,
+    source_event_type: &str,
+) {
+    let Some(run_id) = extract_string(params, &["run_id", "runId"]) else {
+        warn!(
+            session = %handle.id,
+            source_event_type,
+            "assessment candidate missing run_id"
+        );
+        return;
+    };
+
+    let candidates = extract_candidates(params);
+    if candidates.is_empty() {
+        warn!(
+            session = %handle.id,
+            run_id = %run_id,
+            source_event_type,
+            "assessment candidate payload carried no candidates"
+        );
+        return;
+    }
+
+    let batch_hash = sha256_hex_canonical(params);
+    let received_event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: "assessment.candidate_received".into(),
+        payload: serde_json::json!({
+            "run_id": run_id,
+            "candidate_hash": batch_hash,
+            "candidate_count": candidates.len(),
+            "source_event_type": source_event_type,
+            "agent_id": handle.agent_id,
+            "agent_kind": handle.agent_kind.as_str(),
+        }),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_event(handle, received_event).await;
+
+    for candidate in candidates {
+        let candidate_hash = sha256_hex_canonical(&candidate);
+        let validation = {
+            let mut tracker = handle.assessment_validation.lock().await;
+            validate_candidate(
+                &handle.project_root,
+                &mut tracker,
+                &run_id,
+                &candidate,
+                source_event_type,
+            )
+        };
+
+        match validation {
+            Ok(validated) => {
+                emit_validated_candidate(
+                    handle,
+                    &run_id,
+                    source_event_type,
+                    &candidate_hash,
+                    validated,
+                )
+                .await
+            }
+            Err(rejection) => {
+                emit_candidate_rejection(
+                    handle,
+                    &run_id,
+                    source_event_type,
+                    &candidate_hash,
+                    rejection,
+                )
+                .await
+            }
+        }
+    }
+}
+
+async fn emit_validated_candidate(
+    handle: &SessionHandleRef,
+    run_id: &str,
+    source_event_type: &str,
+    candidate_hash: &str,
+    validated: ValidatedCandidate,
+) {
+    let ValidatedCandidate {
+        title,
+        summary,
+        finding_event,
+        evidence_events,
+        ..
+    } = validated;
+
+    let finding_id = finding_event
+        .get("finding_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("fnd_unknown")
+        .to_string();
+
+    for evidence in evidence_events {
+        let payload = augment_payload(
+            evidence,
+            &[
+                ("run_id", serde_json::json!(run_id)),
+                ("candidate_hash", serde_json::json!(candidate_hash)),
+                ("source_event_type", serde_json::json!(source_event_type)),
+                ("agent_id", serde_json::json!(handle.agent_id)),
+                ("agent_kind", serde_json::json!(handle.agent_kind.as_str())),
+                ("finding_id", serde_json::json!(finding_id)),
+            ],
+        );
+        let event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "assessment.evidence_attached".into(),
+            payload,
+            v: 1,
+            ts: chrono::Utc::now().to_rfc3339(),
+        };
+        emit_event(handle, event).await;
+    }
+
+    let payload = augment_payload(
+        finding_event,
+        &[
+            ("run_id", serde_json::json!(run_id)),
+            ("candidate_hash", serde_json::json!(candidate_hash)),
+            ("source_event_type", serde_json::json!(source_event_type)),
+            ("agent_id", serde_json::json!(handle.agent_id)),
+            ("agent_kind", serde_json::json!(handle.agent_kind.as_str())),
+        ],
+    );
+    let event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: "assessment.finding_added".into(),
+        payload: payload.clone(),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_event(handle, event).await;
+
+    if let Some(audit) = handle.audit.as_ref() {
+        audit.log(
+            &handle.id,
+            "assessment",
+            bridge_core::AuditSeverity::Info,
+            serde_json::json!({
+                "event": "finding_added",
+                "run_id": run_id,
+                "candidate_hash": candidate_hash,
+                "finding_id": payload.get("finding_id").cloned().unwrap_or(serde_json::Value::Null),
+                "identity_hash": payload.get("identity_hash").cloned().unwrap_or(serde_json::Value::Null),
+                "title": title,
+                "summary": summary,
+                "agent_id": handle.agent_id,
+                "agent_kind": handle.agent_kind.as_str(),
+                "source_event_type": source_event_type,
+            }),
+        );
+    }
+
+    let summary = format!(
+        "Validated finding: {}",
+        payload
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("candidate")
+    );
+    let activity = activity_event(
+        handle.id.clone(),
+        "assessment",
+        NotifySeverity::Info,
+        &summary,
+    );
+    emit_event(handle, activity).await;
+}
+
+async fn emit_candidate_rejection(
+    handle: &SessionHandleRef,
+    run_id: &str,
+    source_event_type: &str,
+    candidate_hash: &str,
+    rejection: CandidateRejection,
+) {
+    let payload = serde_json::json!({
+        "run_id": run_id,
+        "candidate_hash": candidate_hash,
+        "reason": rejection.reason,
+        "summary": rejection.summary,
+        "source_event_type": source_event_type,
+        "agent_id": handle.agent_id,
+        "agent_kind": handle.agent_kind.as_str(),
+    });
+    let event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: "assessment.candidate_rejected".into(),
+        payload: payload.clone(),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_event(handle, event).await;
+
+    if let Some(audit) = handle.audit.as_ref() {
+        audit.log(
+            &handle.id,
+            "assessment",
+            bridge_core::AuditSeverity::Warn,
+            serde_json::json!({
+                "event": "candidate_rejected",
+                "run_id": run_id,
+                "candidate_hash": candidate_hash,
+                "reason": payload.get("reason").cloned().unwrap_or(serde_json::Value::Null),
+                "summary": payload.get("summary").cloned().unwrap_or(serde_json::Value::Null),
+                "agent_id": handle.agent_id,
+                "agent_kind": handle.agent_kind.as_str(),
+                "source_event_type": source_event_type,
+            }),
+        );
+    }
+
+    let summary = format!(
+        "Rejected candidate: {}",
+        payload
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("validation failed")
+    );
+    let activity = activity_event(
+        handle.id.clone(),
+        "assessment",
+        NotifySeverity::Warn,
+        &summary,
+    );
+    emit_event(handle, activity).await;
+}
+
+fn extract_candidates(params: &serde_json::Value) -> Vec<serde_json::Value> {
+    if let Some(arr) = params.get("candidates").and_then(|v| v.as_array()) {
+        return arr.clone();
+    }
+    if let Some(candidate) = params.get("candidate") {
+        return vec![candidate.clone()];
+    }
+    if params
+        .as_object()
+        .map(|obj| {
+            obj.contains_key("title")
+                || obj.contains_key("identityHash")
+                || obj.contains_key("identity_hash")
+        })
+        .unwrap_or(false)
+    {
+        return vec![params.clone()];
+    }
+    Vec::new()
+}
+
+fn extract_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(v) = value_at(value, key).and_then(|v| v.as_str()) {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+fn value_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    if let Some((head, tail)) = key.split_once('.') {
+        value.get(head).and_then(|child| value_at(child, tail))
+    } else {
+        value.get(key)
+    }
+}
+
+fn augment_payload(
+    payload: serde_json::Value,
+    fields: &[(&str, serde_json::Value)],
+) -> serde_json::Value {
+    let mut payload = payload;
+    let Some(obj) = payload.as_object_mut() else {
+        return payload;
+    };
+    for (k, v) in fields {
+        obj.insert((*k).to_string(), v.clone());
+    }
+    payload
 }
 
 impl SessionHandle {
@@ -620,6 +987,8 @@ impl SessionHandle {
             stdin: Arc::new(Mutex::new(None)),
             broadcast: bcast_tx.clone(),
             acp: Some(Arc::clone(&acp_runtime)),
+            audit: opts.audit.clone(),
+            assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
 
         info!(

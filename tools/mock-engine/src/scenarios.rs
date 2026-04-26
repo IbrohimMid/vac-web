@@ -802,8 +802,6 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
             continue;
         }
         total_findings += 1;
-        let fid = format!("f_{run_id}_{i}");
-        let eid = format!("ev_{run_id}_{i}");
         // 64-hex-char deterministic stand-in for sha256(category|subject|check).
         // Real identity hash lands when upstream PR #7 ships; the field shape
         // (64 hex chars) is what matters for web-side dedup today.
@@ -817,35 +815,72 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
             seed ^ 0x5a,
             seed ^ 0xff
         );
-        // Evidence first so the finding's evidence_ids resolve.
+        let evidence_path = match i % 4 {
+            0 => "apps/web/src/stores/assessment.ts",
+            1 => "apps/web/src/components/Readiness/AssessmentReportDetail.tsx",
+            2 => "apps/local-bridge/src/session/handle.rs",
+            _ => "tools/mock-engine/src/scenarios.rs",
+        };
         out.push(emit_notification(
-            "assessment.evidence",
+            "assessment.candidate_received",
             json!({
-                "id": eid,
-                "connector": if i % 2 == 0 { "github" } else { "notion" },
-                "kind": "artifact",
-                "label": format!("{agent}_evidence_{i}"),
-                "captured_at": "2026-04-24T09:59:00Z",
-                "ttl_seconds": 3600
-            }),
-        ));
-        out.push(emit_notification(
-            "assessment.finding",
-            json!({
-                "finding_id": fid,
-                "identity_hash": identity,
                 "run_id": run_id,
-                "category": category,
-                "subject": format!("{agent} subject"),
-                "check": check,
-                "severity": if i == 0 { "high" } else if i == 1 { "medium" } else { "low" },
-                "confidence": 0.8,
-                "title": format!("{agent}: {check}"),
-                "summary": format!("Automated {check} surfaced a {category} concern in {agent}."),
-                "evidence_ids": [eid],
-                "emitted_at": "2026-04-24T10:00:01Z"
+                "candidate_count": 1,
+                "agent_id": agent,
+                "candidate": {
+                    "title": format!("{agent}: {check}"),
+                    "category": category,
+                    "severity": if i == 0 { "high" } else if i == 1 { "medium" } else { "low" },
+                    "confidence": 0.8,
+                    "description": format!("Automated {check} surfaced a {category} concern in {agent}."),
+                    "rationale": format!("{agent} flagged {check} during the assessment sweep."),
+                    "recommendation": format!("Resolve {check} before the next pass."),
+                    "evidence": [
+                        { "kind": "file", "path": evidence_path, "line": 1 }
+                    ],
+                    "fixability": "assisted",
+                    "handoffCandidate": true,
+                    "identityHash": format!("sha256:{identity}"),
+                    "createdAt": "2026-04-24T10:00:01Z",
+                    "emittedBy": agent
+                }
             }),
         ));
+        if i == 0 {
+            let bad_seed = format!("{}|{}|{}|bad", category, agent, check)
+                .bytes()
+                .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+            let bad_identity = format!(
+                "{:016x}{:016x}{:016x}{:016x}",
+                bad_seed,
+                bad_seed ^ 0xaa,
+                bad_seed ^ 0x55,
+                bad_seed ^ 0xff
+            );
+            out.push(emit_notification(
+                "assessment.candidate_received",
+                json!({
+                    "run_id": run_id,
+                    "candidate_count": 1,
+                    "agent_id": agent,
+                    "candidate": {
+                        "title": format!("{agent}: {check} without evidence"),
+                        "category": category,
+                        "severity": "medium",
+                        "confidence": 0.6,
+                        "description": format!("Mock candidate for {check} intentionally omits evidence."),
+                        "rationale": "Exercise bridge rejection path.",
+                        "recommendation": "Attach evidence before emitting.",
+                        "evidence": [],
+                        "fixability": "manual",
+                        "handoffCandidate": false,
+                        "identityHash": format!("sha256:{bad_identity}"),
+                        "createdAt": "2026-04-24T10:00:02Z",
+                        "emittedBy": agent
+                    }
+                }),
+            ));
+        }
     }
 
     out.push(emit_notification(

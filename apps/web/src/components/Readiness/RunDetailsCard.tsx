@@ -1,16 +1,24 @@
 // Run details card for AssessmentReportDetail — Stage J.
 //
-// Per the audit-reviewed plan: only fields that actually exist in the
-// `Run` store today (id, swarm, status, started_at, finished_at, progress,
-// verdict, score). No fabricated `profile` / `repo` / `connectors` /
-// `base_commit` / `snapshot_ttl` rows — those land if/when the protocol
-// payload is extended upstream.
+// The card only reads fields that actually exist in the `Run` store today
+// (id, swarm, status, started_at, finished_at, progress, verdict, score,
+// validation). Validation now includes candidate received / rejected
+// counters so the assessment report can surface rejected candidate audit
+// data without inventing extra protocol rows.
 
 import type { Run } from '../../stores/assessment';
 
-export function RunDetailsCard({ run }: { run: Run }) {
+export function RunDetailsCard({
+  run,
+  validatedFindings,
+}: {
+  run: Run;
+  validatedFindings: number;
+}) {
+  const validation = run.validation;
   const checksTotal = run.progress.total;
   const checksDone = run.progress.completed;
+  const rejectedSummary = summarizeRejectionReasons(validation?.rejection_reasons);
   return (
     <div className="card">
       <div className="card-hd">
@@ -33,10 +41,33 @@ export function RunDetailsCard({ run }: { run: Run }) {
         <Row k="Started" v={run.started_at} mono />
         {run.finished_at && <Row k="Finished" v={run.finished_at} mono />}
         <Row k="Checks" v={`${checksDone} / ${checksTotal}`} />
+        <Row
+          k="Validated"
+          v={`${validatedFindings} finding${validatedFindings === 1 ? '' : 's'}`}
+        />
+        <Row
+          k="Candidates"
+          v={`${validation?.received ?? 0} candidate${(validation?.received ?? 0) === 1 ? '' : 's'}`}
+        />
+        <Row
+          k="Rejected"
+          v={`${validation?.rejected ?? 0} candidate${(validation?.rejected ?? 0) === 1 ? '' : 's'}`}
+        />
+        {rejectedSummary && <Row k="Reasons" v={rejectedSummary} />}
         {run.verdict && <Row k="Verdict" v={run.verdict} />}
       </div>
     </div>
   );
+}
+
+function summarizeRejectionReasons(reasons?: Record<string, number>): string | null {
+  const entries = Object.entries(reasons ?? {}).filter(([, n]) => n > 0);
+  if (entries.length === 0) return null;
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return entries
+    .slice(0, 3)
+    .map(([reason, count]) => `${reason} (${count})`)
+    .join(', ');
 }
 
 function Row({

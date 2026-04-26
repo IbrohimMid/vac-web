@@ -21,7 +21,7 @@
         "plan.updated",
         "shell.started", "shell.output", "shell.exited",
         "system_pulse.updated", "notify.event", "overlay.opened", "overlay.dismissed", "activity.appended",
-        "assessment.started", "assessment.progress", "assessment.finding_added",
+        "assessment.started", "assessment.progress", "assessment.candidate_received", "assessment.candidate_rejected", "assessment.finding_added",
         "assessment.evidence_attached", "assessment.evidence_stale_detected",
         "assessment.completed", "assessment.failed", "assessment.diff_ready",
         "handoff.created", "handoff.approved", "handoff.rejected",

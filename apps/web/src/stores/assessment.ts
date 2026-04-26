@@ -38,6 +38,12 @@ export interface Finding {
   emitted_at: string;
 }
 
+export interface CandidateValidationStats {
+  received: number;
+  rejected: number;
+  rejection_reasons: Record<string, number>;
+}
+
 // Phase 4 shipped with `rtd | pm`; Phase 6 widens the string to the full
 // 12-family catalog. Kept as a plain string so upstream can introduce new
 // families without a protocol-ts regen blocking the UI.
@@ -79,6 +85,7 @@ export interface Run {
   progress: { completed: number; total: number; current?: string };
   verdict?: Verdict;
   score?: Record<Category, number>;
+  validation?: CandidateValidationStats;
 }
 
 interface AssessmentSlice {
@@ -93,6 +100,8 @@ interface AssessmentSlice {
   setProgress(runId: string, progress: Run['progress']): void;
   completeRun(runId: string, verdict: Verdict, score: Record<Category, number>): void;
   setActive(runId: string | null): void;
+  recordCandidateReceived(runId: string, count?: number): void;
+  recordCandidateRejected(runId: string, reason: string): void;
 
   emitFinding(f: Finding): void;
   upsertEvidence(e: EvidenceRef): void;
@@ -113,7 +122,16 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
     set((s) => {
       const runs = new Map(s.runs);
       const runOrder = runs.has(run.id) ? s.runOrder : [...s.runOrder, run.id];
-      runs.set(run.id, run);
+      const prev = runs.get(run.id);
+      runs.set(run.id, {
+        ...prev,
+        ...run,
+        validation: prev?.validation ?? run.validation ?? {
+          received: 0,
+          rejected: 0,
+          rejection_reasons: {},
+        },
+      });
       return {
         runs,
         runOrder,
@@ -150,6 +168,55 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
 
   setActive(runId) {
     set({ activeRunId: runId });
+  },
+
+  recordCandidateReceived(runId, count = 1) {
+    if (count <= 0) return;
+    set((s) => {
+      const cur = s.runs.get(runId);
+      if (!cur) return s;
+      const runs = new Map(s.runs);
+      const validation = cur.validation ?? {
+        received: 0,
+        rejected: 0,
+        rejection_reasons: {},
+      };
+      runs.set(runId, {
+        ...cur,
+        validation: {
+          received: validation.received + count,
+          rejected: validation.rejected,
+          rejection_reasons: { ...validation.rejection_reasons },
+        },
+      });
+      return { runs };
+    });
+  },
+
+  recordCandidateRejected(runId, reason) {
+    const key = reason.trim() || 'unknown';
+    set((s) => {
+      const cur = s.runs.get(runId);
+      if (!cur) return s;
+      const runs = new Map(s.runs);
+      const validation = cur.validation ?? {
+        received: 0,
+        rejected: 0,
+        rejection_reasons: {},
+      };
+      runs.set(runId, {
+        ...cur,
+        validation: {
+          received: validation.received,
+          rejected: validation.rejected + 1,
+          rejection_reasons: {
+            ...validation.rejection_reasons,
+            [key]: (validation.rejection_reasons[key] ?? 0) + 1,
+          },
+        },
+      });
+      return { runs };
+    });
   },
 
   emitFinding(f) {

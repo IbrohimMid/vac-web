@@ -50,6 +50,17 @@ describe('assessment store', () => {
     expect(r?.verdict).toBe('pass');
   });
 
+  it('records candidate received/rejected counts and reasons', () => {
+    useAssessment.getState().upsertRun(baseRun);
+    useAssessment.getState().recordCandidateReceived('r1', 2);
+    useAssessment.getState().recordCandidateRejected('r1', 'missing_evidence');
+    useAssessment.getState().recordCandidateRejected('r1', 'missing_evidence');
+    const r = useAssessment.getState().runs.get('r1');
+    expect(r?.validation?.received).toBe(2);
+    expect(r?.validation?.rejected).toBe(2);
+    expect(r?.validation?.rejection_reasons.missing_evidence).toBe(2);
+  });
+
   it('emitFinding dedups by identity_hash (replaces old id)', () => {
     useAssessment.getState().emitFinding(baseFinding);
     useAssessment.getState().emitFinding({ ...baseFinding, id: 'f2', title: 'newer' });
