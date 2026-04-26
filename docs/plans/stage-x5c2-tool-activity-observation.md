@@ -73,12 +73,19 @@ pub struct ObservedToolActivity {
     pub title: Option<String>,
     pub status: ToolStatus,        // Pending | InProgress | Completed | Failed
     pub locations: Vec<ToolLocation>, // [{ path, line? }]
-    pub args_hash: String,         // sha256 over canonical(rawInput)
+    /// sha256 over canonical(full toolCall). MUST match the
+    /// `args_hash` field that X.5c.1 already records on
+    /// `approval.resolved` audit rows so the two streams are
+    /// joinable when toolCallId is missing or has been rotated.
+    /// See §3.1 for the hash contract.
+    pub approval_tool_call_hash: Option<String>,
+    /// sha256 over canonical(toolCall.rawInput). Used only for
+    /// activity-level dedupe / display correlation; **never** as the
+    /// approval-correlation key (that's `approval_tool_call_hash`).
+    pub raw_input_hash: Option<String>,
     pub raw_input_redacted: serde_json::Value, // see §4
     pub raw_output_redacted: Option<serde_json::Value>, // see §4
-    pub approved_by_approval_id: Option<String>, // populated when args_hash
-                                                 // matches a recently-resolved
-                                                 // X.5c.1 approval
+    pub approved_by_approval_id: Option<String>, // see §5
     pub ts: chrono::DateTime<chrono::Utc>,
 }
 
@@ -90,6 +97,24 @@ pub struct ToolLocation { pub path: String, pub line: Option<u64> }
 
 Web events carry the DTO serialized; web stores never see the
 agent's raw `_meta` payload.
+
+### 3.1 Hash contract (binding)
+
+Two distinct hashes, each with one job:
+
+| Name | Input | Used for |
+| --- | --- | --- |
+| `approval_tool_call_hash` | `sha256(canonical(full toolCall))` — same input X.5c.1 already feeds `sha256_hex_canonical` in `apps/local-bridge/src/translator/mod.rs` | Approval ↔ activity correlation. Joinable with the `args_hash` field on existing `approval.resolved` audit rows. |
+| `raw_input_hash` | `sha256(canonical(toolCall.rawInput))` | Activity-level dedupe / display only. Never the approval-correlation key. |
+
+Both hashes use the same canonical-JSON form (sorted object keys,
+whitespace-free) the existing `sha256_hex_canonical` helper produces,
+so a single helper can emit both by changing the input.
+
+> **Don't rename `args_hash` on the X.5c.1 audit row.** The X.5c.1
+> contract is locked at `2987fa2`. X.5c.2's
+> `approval_tool_call_hash` is the same value computed the same way
+> — only the field name on the new DTO is more specific.
 
 ## 4. Redaction rules
 
@@ -109,13 +134,46 @@ agent's raw `_meta` payload.
 
 ## 5. Correlation keys
 
-When the bridge holds a recently-resolved X.5c.1 approval, it should
-attach `approved_by_approval_id` to the matching `ObservedToolActivity`
-so the UI can render the "approved by you" provenance:
+When the bridge holds a recently-resolved X.5c.1 approval, it
+should attach `approved_by_approval_id` to the matching
+`ObservedToolActivity` so the UI can render the "approved by you"
+provenance.
 
-- key on `(session_id, args_hash)` from the X.5c.1 audit row,
-- TTL: 60 seconds after `approval.resolved`,
-- if no match, leave `approved_by_approval_id = None`.
+The cache stored at approval-resolve time keys both ways and the
+lookup walks them in order:
+
+```text
+primary:   (session_id, toolCallId)
+fallback:  (session_id, approval_tool_call_hash)
+never:     raw_input_hash alone
+```
+
+`toolCallId` is the strongest key — the agent emits it on
+`session/request_permission` and re-uses it on every subsequent
+`tool_call` / `tool_call_update` for the same tool. When the agent
+omits or rotates `toolCallId` (rare on Claude 0.31.0 but allowed by
+ACP), `approval_tool_call_hash` is the deterministic fallback because
+its input matches the X.5c.1 audit-row hash byte-for-byte.
+
+`raw_input_hash` is **explicitly forbidden** as a correlation key —
+two distinct `toolCall` objects can carry the same `rawInput` (e.g.
+two consecutive identical Bash commands), and using it for approval
+correlation would mis-attribute a fresh prompt to a stale approval.
+
+Cache shape (per AcpRuntime):
+
+```text
+TTL:  60 seconds after approval.resolved
+keys:
+  by_tool_call_id: HashMap<(session_id, toolCallId), approval_id>
+  by_full_hash:    HashMap<(session_id, approval_tool_call_hash), approval_id>
+```
+
+Both maps are populated atomically from the same
+`ApprovalResolution` so a lookup hit on either yields the same
+`approval_id`. If neither key matches, leave
+`approved_by_approval_id = None` (the activity still surfaces — it
+just doesn't carry the provenance badge).
 
 ## 6. Audit events
 
@@ -128,8 +186,23 @@ tool.failed     — terminal status:"failed"; severity Warn (NOT Error)
 Required fields on every row:
 
 ```text
-toolCallId, kind, status, locations, args_hash, agent_id, agent_kind, session_id, ts
+toolCallId
+kind
+status
+locations
+approval_tool_call_hash   (when toolCall is present — same value as the
+                           X.5c.1 audit-row args_hash)
+raw_input_hash            (when toolCall.rawInput is present)
+approved_by_approval_id   (when correlated; see §5)
+agent_id
+agent_kind
+session_id
+ts
 ```
+
+The two hashes serve different audits: `approval_tool_call_hash`
+joins this row to the X.5c.1 `approval.resolved` row;
+`raw_input_hash` is for downstream dedupe / display.
 
 `severity Error` is reserved for bridge crashes / transport
 failures. A user reject is `tool.failed @ Warn`, not `Error`.
@@ -163,15 +236,33 @@ bypass), matching the X.5b/X.5c.1 discipline.
 ```text
 x5c2_read_tool_update_emits_activity_event
   triggers --emit-read-tool, asserts a tool.updated event with
-  kind="read", locations[].path set, args_hash present,
+  kind="read", locations[].path set, both
+  approval_tool_call_hash and raw_input_hash present (no
+  approval was issued, so approved_by_approval_id is null), and
   raw_output_redacted does not include the full file content.
 
 x5c2_edit_tool_update_emits_review_candidate
   triggers --emit-edit-tool, asserts review.changeset_updated
   arrives with the diff path + (newText, oldText), AND a
-  tool.updated event with kind="edit". When the X.5c.1 approval
-  was just resolved with the matching args_hash, asserts
-  approved_by_approval_id is populated.
+  tool.updated event with kind="edit".
+
+x5c2_edit_tool_update_correlates_by_tool_call_id
+  Drives X.5c.1 permission_prompt → approval.approve, then
+  emits a tool_call_update with the same toolCallId. Asserts
+  ObservedToolActivity.approved_by_approval_id matches the
+  resolved approval. Primary correlation key (toolCallId).
+
+x5c2_edit_tool_update_fallback_correlates_by_approval_tool_call_hash
+  Same flow but the agent's tool_call_update carries a fresh
+  toolCallId (simulated via mock-acp). Asserts the bridge falls
+  back to (session_id, approval_tool_call_hash) and still
+  attaches approved_by_approval_id.
+
+x5c2_raw_input_hash_alone_does_not_correlate
+  Negative test. Two semantically-different toolCalls with the
+  same rawInput must NOT be cross-attributed. Resolves an
+  approval for one; emits a tool_call_update whose only overlap
+  is rawInput. approved_by_approval_id MUST be null.
 
 x5c2_execute_tool_update_emits_runtime_activity
   triggers --emit-execute-tool, asserts runtime.job_log lines
@@ -186,7 +277,9 @@ x5c2_rejected_tool_update_is_task_failure_not_session_error
 x5c2_raw_payload_is_redacted_or_bounded
   triggers --oversized-output, asserts the audit row + WS event
   carry truncated output with a marker, NOT the full payload.
-  Also asserts that an env-style key in rawInput is redacted.
+  Also asserts that an env-style key in rawInput is redacted
+  but raw_input_hash is still present (computed before
+  redaction).
 ```
 
 ## 9. Capability invariants — enforce in PR review
