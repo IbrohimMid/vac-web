@@ -396,6 +396,89 @@ pub async fn dispatch_command(
                     events,
                 );
             };
+
+            // Stage X.5c.1 — for ACP sessions, intercept
+            // approval.approve / approval.reject and resolve the held
+            // session/request_permission directly, bypassing the
+            // agent's stdin (the agent never sees these commands —
+            // it only sees the JSON-RPC response on its
+            // request_permission call).
+            if matches!(handle.agent_kind, crate::agent_runtime::AgentKind::Acp)
+                && (cmd.cmd_type == "approval.approve" || cmd.cmd_type == "approval.reject")
+            {
+                let approval_id = match cmd
+                    .payload
+                    .get("approval_id")
+                    .or_else(|| cmd.payload.get("approvalId"))
+                    .and_then(|v| v.as_str())
+                {
+                    Some(s) => s.to_string(),
+                    None => {
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "protocol.bad_envelope".into(),
+                                    message: "approval.* missing approval_id".into(),
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                };
+                let explicit_option_id = cmd
+                    .payload
+                    .get("option_id")
+                    .or_else(|| cmd.payload.get("optionId"))
+                    .and_then(|v| v.as_str());
+                let result = if cmd.cmd_type == "approval.approve" {
+                    handle
+                        .resolve_approval_approve(&approval_id, explicit_option_id)
+                        .await
+                } else {
+                    handle
+                        .resolve_approval_reject(&approval_id, explicit_option_id)
+                        .await
+                };
+                return match result {
+                    Ok(option_id) => {
+                        state.audit.log(
+                            &cmd.session_id,
+                            "approval",
+                            AuditSeverity::Info,
+                            json!({
+                                "event": "resolved",
+                                "approval_id": approval_id,
+                                "option_id": option_id,
+                                "outcome": if cmd.cmd_type == "approval.approve" { "approved" } else { "rejected" },
+                                "agent_id": handle.agent_id,
+                                "agent_kind": handle.agent_kind.as_str(),
+                            }),
+                        );
+                        (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: true,
+                                error: None,
+                            },
+                            events,
+                        )
+                    }
+                    Err(e) => (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "approval.not_found".into(),
+                                message: e.to_string(),
+                            }),
+                        },
+                        events,
+                    ),
+                };
+            }
+
             // Stage X.3 — translate to the agent's wire dialect rather
             // than forwarding raw JSON-RPC. SessionHandle decides
             // (mock/vac-native: JSON-RPC; acp: ACP envelope) and

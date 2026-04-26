@@ -69,6 +69,15 @@ impl std::fmt::Display for JsonRpcError {
 
 impl std::error::Error for JsonRpcError {}
 
+/// Inbound `session/request_permission` request held open for the
+/// approval bridge. The numeric `id` must round-trip into the JSON-RPC
+/// response that resolves it. See `AcpClient::respond_permission`.
+#[derive(Debug)]
+pub struct PermissionRequest {
+    pub id: u64,
+    pub params: Value,
+}
+
 pub struct AcpClient {
     next_id: Arc<Mutex<u64>>,
     pending: Pending,
@@ -76,6 +85,10 @@ pub struct AcpClient {
     /// Broadcast receiver for inbound `session/update` notifications.
     /// Subscribers attach with `subscribe_updates()`.
     updates: broadcast::Sender<SessionNotification>,
+    /// Single-consumer receiver for `session/request_permission`
+    /// requests. SessionHandle's ACP path takes this once at spawn
+    /// time. Stage X.5c.1 hook.
+    permission_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>>>,
 }
 
 impl AcpClient {
@@ -108,18 +121,23 @@ impl AcpClient {
         let (updates_tx, _) = broadcast::channel::<SessionNotification>(256);
 
         let (stdin_tx, stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
 
         // Writer task — owns stdin, receives ndjson lines from a channel.
         spawn_writer(stdin, stdin_rx);
 
         // Reader task — owns stdout, dispatches responses/notifications.
         // Hand the reader a clone of the writer channel so it can answer
-        // inbound JSON-RPC requests without going through AcpClient.
+        // inbound JSON-RPC requests without going through AcpClient,
+        // plus the permission_request sender so it can surface
+        // session/request_permission to SessionHandle for the X.5c.1
+        // approval bridge.
         spawn_reader(
             stdout,
             Arc::clone(&pending),
             updates_tx.clone(),
             stdin_tx.clone(),
+            perm_tx,
         );
 
         // Stderr pump — bridge debug logs only.
@@ -135,12 +153,39 @@ impl AcpClient {
             pending,
             stdin_tx,
             updates: updates_tx,
+            permission_rx: Mutex::new(Some(perm_rx)),
         };
         Ok((client, child))
     }
 
     pub fn subscribe_updates(&self) -> broadcast::Receiver<SessionNotification> {
         self.updates.subscribe()
+    }
+
+    /// Take the permission-request receiver. Single-consumer; only the
+    /// SessionHandle's ACP spawn path calls this, exactly once.
+    pub async fn take_permission_receiver(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>> {
+        self.permission_rx.lock().await.take()
+    }
+
+    /// Resolve a pending `session/request_permission` request by its
+    /// JSON-RPC `id` with the given `outcome` value. Used by the X.5c.1
+    /// approval bridge once the user (or policy) decides.
+    ///
+    /// `outcome` should be a `RequestPermissionResponse` shape:
+    /// `{ "outcome": { "outcome": "selected", "optionId": "<id>" } }`
+    /// or `{ "outcome": { "outcome": "cancelled" } }`.
+    pub fn respond_permission(&self, id: u64, outcome: Value) -> Result<()> {
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": outcome,
+        });
+        let mut bytes = serde_json::to_vec(&frame)?;
+        bytes.push(b'\n');
+        self.write_line(bytes)
     }
 
     async fn next_id(&self) -> u64 {
@@ -253,13 +298,16 @@ fn spawn_reader(
     pending: Pending,
     updates: broadcast::Sender<SessionNotification>,
     writer_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    permission_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
 ) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    if let Err(e) = dispatch_line(&line, &pending, &updates, &writer_tx).await {
+                    if let Err(e) =
+                        dispatch_line(&line, &pending, &updates, &writer_tx, &permission_tx).await
+                    {
                         warn!(error=%e, line=%line, "acp reader: dispatch failed");
                     }
                 }
@@ -290,6 +338,7 @@ async fn dispatch_line(
     pending: &Pending,
     updates: &broadcast::Sender<SessionNotification>,
     writer_tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    permission_tx: &tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
 ) -> Result<()> {
     let v: Value = serde_json::from_str(line).context("non-JSON line on ACP stdout")?;
 
@@ -311,12 +360,41 @@ async fn dispatch_line(
         return Ok(());
     }
 
-    // Inbound request from the agent — Stage X.5b answers with a typed
-    // -32601 "method not handled" so the agent doesn't hang waiting on
-    // X.5c (permission / fs / terminal). The reader holds a clone of
-    // the writer channel so it can respond without bouncing through
-    // AcpClient.
+    // Inbound request from the agent.
     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
+        // Stage X.5c.1 — surface session/request_permission to the
+        // approval bridge. Don't write a response here; the bridge
+        // calls AcpClient::respond_permission once the user (or
+        // policy) decides. The numeric id is required.
+        if method == "session/request_permission" {
+            if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
+                let params = v.get("params").cloned().unwrap_or(Value::Null);
+                if permission_tx
+                    .send(PermissionRequest { id, params })
+                    .is_err()
+                {
+                    warn!(
+                        id,
+                        "session/request_permission: receiver dropped; auto-cancelling"
+                    );
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": { "outcome": { "outcome": "cancelled" } }
+                    });
+                    let mut bytes = serde_json::to_vec(&resp)?;
+                    bytes.push(b'\n');
+                    let _ = writer_tx.send(bytes);
+                }
+                return Ok(());
+            }
+            warn!("session/request_permission without numeric id; ignoring");
+            return Ok(());
+        }
+
+        // Other inbound methods (fs/*, terminal/*, future…) — Stage
+        // X.5b fallback: typed -32601 so the agent doesn't hang.
+        // X.5c.2/X.5c.3 will replace per-method as handlers ship.
         let id = v.get("id").cloned().unwrap_or(Value::Null);
         let resp = json!({
             "jsonrpc": "2.0",
@@ -436,6 +514,7 @@ mod tests {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (perm_tx, _perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
 
         let inbound = json!({
             "jsonrpc": "2.0",
@@ -443,9 +522,15 @@ mod tests {
             "method": "fs/read_text_file",
             "params": { "sessionId": "sid", "path": "/tmp/x" }
         });
-        super::dispatch_line(&inbound.to_string(), &pending, &updates_tx, &writer_tx)
-            .await
-            .expect("dispatch ok");
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &perm_tx,
+        )
+        .await
+        .expect("dispatch ok");
 
         let bytes = writer_rx.try_recv().expect("expected response on writer");
         let resp: Value = serde_json::from_slice(bytes.trim_ascii_end()).unwrap();
@@ -456,27 +541,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inbound_request_session_request_permission_also_answered() {
+    async fn inbound_session_request_permission_routes_to_permission_channel() {
+        // X.5c.1: session/request_permission is no longer answered with
+        // -32601. It surfaces on the permission channel so the bridge
+        // can hold the JSON-RPC id open until approval.approve/reject.
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
 
         let inbound = json!({
             "jsonrpc": "2.0",
             "id": 5,
             "method": "session/request_permission",
+            "params": {
+                "sessionId": "sid",
+                "toolCall": { "kind": "edit", "toolCallId": "tc-1" },
+                "options": [
+                    { "kind": "allow_once", "name": "Allow", "optionId": "allow" },
+                    { "kind": "reject_once", "name": "Reject", "optionId": "reject" }
+                ]
+            }
+        });
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &perm_tx,
+        )
+        .await
+        .expect("dispatch ok");
+
+        // Writer must NOT receive an immediate response.
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "session/request_permission must be held open, not auto-replied"
+        );
+
+        // Permission channel must carry the request with its id.
+        let req = perm_rx.try_recv().expect("permission request on channel");
+        assert_eq!(req.id, 5);
+        assert_eq!(req.params["sessionId"], json!("sid"));
+        assert_eq!(req.params["options"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn permission_request_auto_cancels_when_receiver_dropped() {
+        // If the bridge has no consumer (closed receiver), dispatch_line
+        // must not leak the request — auto-cancel so the agent unblocks.
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        drop(perm_rx);
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "session/request_permission",
             "params": { "sessionId": "sid", "toolCall": {}, "options": [] }
         });
-        super::dispatch_line(&inbound.to_string(), &pending, &updates_tx, &writer_tx)
-            .await
-            .expect("dispatch ok");
-        let bytes = writer_rx.try_recv().expect("expected response on writer");
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &perm_tx,
+        )
+        .await
+        .expect("dispatch ok");
+
+        let bytes = writer_rx.try_recv().expect("auto-cancel response");
         let resp: Value = serde_json::from_slice(bytes.trim_ascii_end()).unwrap();
-        assert_eq!(resp["error"]["code"], json!(-32601));
-        assert_eq!(
-            resp["error"]["data"]["method"],
-            json!("session/request_permission")
-        );
+        assert_eq!(resp["id"], json!(9));
+        assert_eq!(resp["result"]["outcome"]["outcome"], json!("cancelled"));
     }
 
     #[test]

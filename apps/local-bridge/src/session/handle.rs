@@ -2,7 +2,7 @@
 
 use crate::agent_runtime::acp::{
     classify_jsonrpc_error, AcpClient, ClientCapabilities, ContentBlock, FsClientCapabilities,
-    InitializeRequest, NewSessionRequest, PromptRequest, SessionNotification,
+    InitializeRequest, NewSessionRequest, PermissionRequest, PromptRequest, SessionNotification,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::ws::envelope::{ClientCommand, ServerEvent};
@@ -17,6 +17,25 @@ use tracing::{info, warn};
 
 pub type SessionHandleRef = Arc<SessionHandle>;
 
+/// One in-flight `session/request_permission` waiting on a user
+/// decision via the bridge's `approval.approve` / `approval.reject`
+/// commands. Stage X.5c.1.
+#[derive(Debug, Clone)]
+pub struct PendingApproval {
+    /// JSON-RPC request id from the agent. Required to round-trip
+    /// the response.
+    pub acp_request_id: u64,
+    /// Permission options as the agent sent them. Each entry is a
+    /// JSON object with at least `optionId` and `kind`. Bridge picks
+    /// one based on the user's approve/reject choice.
+    pub options: Vec<serde_json::Value>,
+    /// Agent's `toolCall` payload — surfaced to the UI verbatim so
+    /// the user knows what they're approving.
+    pub tool_call: serde_json::Value,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub timeout_handle: Arc<tokio::task::AbortHandle>,
+}
+
 /// ACP-specific runtime state. Present iff `agent_kind = Acp`.
 pub struct AcpRuntime {
     pub client: AcpClient,
@@ -24,6 +43,11 @@ pub struct AcpRuntime {
     /// Distinct from VAC's `SessionHandle::id` — the bridge needs both
     /// to route prompts and cancellations.
     pub acp_session_id: String,
+    /// In-flight `session/request_permission` requests keyed by the
+    /// VAC approval id (ULID generated on inbound). X.5c.1.
+    pub pending_approvals: dashmap::DashMap<String, PendingApproval>,
+    /// Default permission timeout for this agent (from agents.toml).
+    pub permission_timeout_ms: u64,
 }
 
 pub struct SessionHandle {
@@ -410,9 +434,12 @@ impl SessionHandle {
         let (bcast_tx, _) = broadcast::channel::<ServerEvent>(512);
 
         let mut update_rx = client.subscribe_updates();
+        let permission_rx = client.take_permission_receiver().await;
         let acp_runtime = Arc::new(AcpRuntime {
             client,
             acp_session_id: acp_session_id.clone(),
+            pending_approvals: dashmap::DashMap::new(),
+            permission_timeout_ms: opts.agent.permission_timeout_ms,
         });
 
         let handle = Arc::new(Self {
@@ -456,6 +483,25 @@ impl SessionHandle {
                 }
             }
         });
+
+        // Stage X.5c.1 — pump session/request_permission requests
+        // into the bridge's approval queue. For each request:
+        //   1. Mint a VAC approvalId (ULID) and stash the
+        //      acp_request_id + options + toolCall in pending_approvals.
+        //   2. Schedule an auto-cancel timer keyed on
+        //      permission_timeout_ms; when it fires, the bridge sends
+        //      `{outcome:"cancelled"}` and removes the entry.
+        //   3. Emit `approval.pending` ServerEvent with the approvalId
+        //      and the agent's payload so the web surface can render.
+        if let Some(mut perm_rx) = permission_rx {
+            let perm_handle = Arc::clone(&handle);
+            tokio::spawn(async move {
+                while let Some(req) = perm_rx.recv().await {
+                    handle_permission_request(&perm_handle, req).await;
+                }
+                info!(session = %perm_handle.id, "ACP permission channel closed");
+            });
+        }
 
         // Watchdog — same shape as JSON-RPC path.
         let handle_wait = Arc::clone(&handle);
@@ -544,4 +590,282 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
 #[allow(dead_code)]
 fn classify_for_ack(e: &crate::agent_runtime::acp::JsonRpcError) -> &'static str {
     classify_jsonrpc_error(e)
+}
+
+/// X.5c.1 — receive a `session/request_permission`, register a pending
+/// approval, schedule an auto-cancel timer, and emit `approval.pending`
+/// to the broadcast.
+async fn handle_permission_request(handle: &SessionHandleRef, req: PermissionRequest) {
+    let Some(acp) = handle.acp.clone() else {
+        warn!("permission request on non-ACP session — dropping");
+        return;
+    };
+    let approval_id = format!("appr_{}", ulid::Ulid::new());
+    let options = req
+        .params
+        .get("options")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let tool_call = req
+        .params
+        .get("toolCall")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    // Auto-cancel timer.
+    let acp_for_timer = Arc::clone(&acp);
+    let approval_id_for_timer = approval_id.clone();
+    let acp_request_id = req.id;
+    let timeout_ms = acp.permission_timeout_ms;
+    let handle_for_timer = Arc::clone(handle);
+    let timer = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
+        // Only fire if still pending.
+        if acp_for_timer
+            .pending_approvals
+            .remove(&approval_id_for_timer)
+            .is_some()
+        {
+            warn!(
+                approval_id = %approval_id_for_timer,
+                "permission auto-cancelled after timeout"
+            );
+            let outcome = serde_json::json!({ "outcome": { "outcome": "cancelled" } });
+            let _ = acp_for_timer
+                .client
+                .respond_permission(acp_request_id, outcome);
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle_for_timer.id.clone(),
+                event_type: "approval.resolved".into(),
+                payload: serde_json::json!({
+                    "approval_id": approval_id_for_timer,
+                    "outcome": "timeout",
+                }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            };
+            emit_event(&handle_for_timer, event).await;
+        }
+    });
+    let timer_handle = Arc::new(timer.abort_handle());
+
+    acp.pending_approvals.insert(
+        approval_id.clone(),
+        PendingApproval {
+            acp_request_id,
+            options: options.clone(),
+            tool_call: tool_call.clone(),
+            created_at: chrono::Utc::now(),
+            timeout_handle: timer_handle,
+        },
+    );
+
+    let event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: "approval.pending".into(),
+        payload: serde_json::json!({
+            "approval_id": approval_id,
+            "tool_call": tool_call,
+            "options": options,
+            "expires_in_ms": timeout_ms,
+        }),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    };
+    emit_event(handle, event).await;
+}
+
+impl SessionHandle {
+    /// X.5c.1 — resolve a pending ACP approval as APPROVED. The bridge
+    /// picks an `optionId`: caller may override; otherwise prefer
+    /// `allow_once` over `allow_always` (policy-aware default).
+    /// Returns the chosen `optionId` so the caller can audit it.
+    pub async fn resolve_approval_approve(
+        &self,
+        approval_id: &str,
+        explicit_option_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let acp = self
+            .acp
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("approval on non-ACP session"))?;
+        let (_, pending) = acp
+            .pending_approvals
+            .remove(approval_id)
+            .ok_or_else(|| anyhow::anyhow!("approval not found: {approval_id}"))?;
+        pending.timeout_handle.abort();
+
+        let option_id = match explicit_option_id {
+            Some(id) => id.to_string(),
+            None => pick_approve_option_id(&pending.options)?,
+        };
+        let outcome = serde_json::json!({
+            "outcome": { "outcome": "selected", "optionId": option_id }
+        });
+        acp.client
+            .respond_permission(pending.acp_request_id, outcome)?;
+        let event = ServerEvent {
+            seq: 0,
+            session_id: self.id.clone(),
+            event_type: "approval.resolved".into(),
+            payload: serde_json::json!({
+                "approval_id": approval_id,
+                "outcome": "approved",
+                "option_id": option_id,
+            }),
+            v: 1,
+            ts: chrono::Utc::now().to_rfc3339(),
+        };
+        emit_to(&self.ring, &self.broadcast, event).await;
+        Ok(option_id)
+    }
+
+    /// X.5c.1 — resolve a pending ACP approval as REJECTED.
+    pub async fn resolve_approval_reject(
+        &self,
+        approval_id: &str,
+        explicit_option_id: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let acp = self
+            .acp
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("approval on non-ACP session"))?;
+        let (_, pending) = acp
+            .pending_approvals
+            .remove(approval_id)
+            .ok_or_else(|| anyhow::anyhow!("approval not found: {approval_id}"))?;
+        pending.timeout_handle.abort();
+
+        let option_id = match explicit_option_id {
+            Some(id) => id.to_string(),
+            None => pick_reject_option_id(&pending.options)?,
+        };
+        let outcome = serde_json::json!({
+            "outcome": { "outcome": "selected", "optionId": option_id }
+        });
+        acp.client
+            .respond_permission(pending.acp_request_id, outcome)?;
+        let event = ServerEvent {
+            seq: 0,
+            session_id: self.id.clone(),
+            event_type: "approval.resolved".into(),
+            payload: serde_json::json!({
+                "approval_id": approval_id,
+                "outcome": "rejected",
+                "option_id": option_id,
+            }),
+            v: 1,
+            ts: chrono::Utc::now().to_rfc3339(),
+        };
+        emit_to(&self.ring, &self.broadcast, event).await;
+        Ok(option_id)
+    }
+}
+
+/// Policy-aware option picker. Prefer `allow_once` over `allow_always`
+/// so the bridge doesn't accidentally grant persistent permission when
+/// the user just clicks Approve once. If neither is present, fall back
+/// to the first non-reject option.
+fn pick_approve_option_id(options: &[serde_json::Value]) -> anyhow::Result<String> {
+    let id_for = |kind: &str| -> Option<String> {
+        options
+            .iter()
+            .find(|o| o.get("kind").and_then(|k| k.as_str()) == Some(kind))
+            .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
+            .map(String::from)
+    };
+    if let Some(id) = id_for("allow_once") {
+        return Ok(id);
+    }
+    if let Some(id) = id_for("allow_always") {
+        return Ok(id);
+    }
+    // Last resort: first option whose kind doesn't start with "reject".
+    options
+        .iter()
+        .find(|o| {
+            o.get("kind")
+                .and_then(|k| k.as_str())
+                .map(|s| !s.starts_with("reject"))
+                .unwrap_or(false)
+        })
+        .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
+        .map(String::from)
+        .ok_or_else(|| anyhow::anyhow!("no approve-eligible option in {options:?}"))
+}
+
+fn pick_reject_option_id(options: &[serde_json::Value]) -> anyhow::Result<String> {
+    let id_for = |kind: &str| -> Option<String> {
+        options
+            .iter()
+            .find(|o| o.get("kind").and_then(|k| k.as_str()) == Some(kind))
+            .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
+            .map(String::from)
+    };
+    if let Some(id) = id_for("reject_once") {
+        return Ok(id);
+    }
+    if let Some(id) = id_for("reject_always") {
+        return Ok(id);
+    }
+    options
+        .iter()
+        .find(|o| {
+            o.get("kind")
+                .and_then(|k| k.as_str())
+                .map(|s| s.starts_with("reject"))
+                .unwrap_or(false)
+        })
+        .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
+        .map(String::from)
+        .ok_or_else(|| anyhow::anyhow!("no reject-eligible option in {options:?}"))
+}
+
+#[cfg(test)]
+mod approval_picker_tests {
+    use super::{pick_approve_option_id, pick_reject_option_id};
+    use serde_json::json;
+
+    fn opts() -> Vec<serde_json::Value> {
+        vec![
+            json!({"kind":"allow_always","optionId":"AA"}),
+            json!({"kind":"allow_once","optionId":"AO"}),
+            json!({"kind":"reject_once","optionId":"RO"}),
+        ]
+    }
+
+    #[test]
+    fn approve_prefers_allow_once_over_allow_always() {
+        assert_eq!(pick_approve_option_id(&opts()).unwrap(), "AO");
+    }
+
+    #[test]
+    fn approve_falls_back_to_allow_always_when_only_persistent_offered() {
+        let only_persistent = vec![
+            json!({"kind":"allow_always","optionId":"AA"}),
+            json!({"kind":"reject_once","optionId":"RO"}),
+        ];
+        assert_eq!(pick_approve_option_id(&only_persistent).unwrap(), "AA");
+    }
+
+    #[test]
+    fn reject_prefers_reject_once_over_reject_always() {
+        let with_persistent_reject = vec![
+            json!({"kind":"reject_always","optionId":"RA"}),
+            json!({"kind":"reject_once","optionId":"RO"}),
+        ];
+        assert_eq!(
+            pick_reject_option_id(&with_persistent_reject).unwrap(),
+            "RO"
+        );
+    }
+
+    #[test]
+    fn reject_errors_when_no_reject_option() {
+        let no_reject = vec![json!({"kind":"allow_once","optionId":"AO"})];
+        assert!(pick_reject_option_id(&no_reject).is_err());
+    }
 }

@@ -8,7 +8,7 @@
 pub mod client;
 pub mod types;
 
-pub use client::{classify_jsonrpc_error, AcpClient, JsonRpcError};
+pub use client::{classify_jsonrpc_error, AcpClient, JsonRpcError, PermissionRequest};
 pub use types::{
     CancelNotification, ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest,
     InitializeResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,

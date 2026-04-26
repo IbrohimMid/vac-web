@@ -283,6 +283,127 @@ async fn x5b_prompt_jsonrpc_error_classified_as_bridge_code() {
     );
 }
 
+async fn next_event_matching<F: Fn(&Value) -> bool>(ws: &mut Ws, pred: F) -> Value {
+    loop {
+        let Some(msg) = tokio::time::timeout(T, ws.next()).await.unwrap() else {
+            panic!("ws closed waiting for matching event");
+        };
+        let Message::Text(txt) = msg.unwrap() else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        if pred(&v) {
+            return v;
+        }
+    }
+}
+
+#[tokio::test]
+async fn x5c1_approval_pending_emitted_then_approve_resolves_prompt() {
+    // mock-acp --permission-prompt issues session/request_permission
+    // before emitting chunks. Bridge surfaces approval.pending; we
+    // approve via a normal WS approval.approve command; mock-acp
+    // proceeds and the prompt completes with end_turn.
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1,
+        "id": "cmd_msg",
+        "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "do the thing" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    // First: bridge emits approval.pending with toolCall + options.
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(pending["payload"]["options"].as_array().unwrap().len() >= 2);
+    assert_eq!(pending["payload"]["tool_call"]["kind"], json!("edit"));
+
+    // Approve via WS — bridge picks the policy-preferred optionId.
+    let approve = json!({
+        "v": 1,
+        "id": "cmd_appr",
+        "type": "approval.approve",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id }
+    });
+    ws.send(Message::Text(approve.to_string().into()))
+        .await
+        .unwrap();
+
+    // approval.resolved should arrive with optionId = "allow"
+    // (allow_once preferred over allow_always).
+    let resolved = next_event_matching(&mut ws, |v| {
+        v.get("type") == Some(&json!("approval.resolved"))
+            && v["payload"]["outcome"] == json!("approved")
+    })
+    .await;
+    assert_eq!(resolved["payload"]["option_id"], json!("allow"));
+
+    // Then transcript.delta + transcript.completed arrive (happy path).
+    let _delta = next_event_of_type(&mut ws, "transcript.delta").await;
+    let _completed = next_event_of_type(&mut ws, "transcript.completed").await;
+}
+
+#[tokio::test]
+async fn x5c1_reject_sends_reject_option_and_completes_prompt() {
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--permission-prompt".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1,
+        "id": "cmd_msg",
+        "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "do the dangerous thing" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let reject = json!({
+        "v": 1,
+        "id": "cmd_rej",
+        "type": "approval.reject",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id }
+    });
+    ws.send(Message::Text(reject.to_string().into()))
+        .await
+        .unwrap();
+
+    let resolved = next_event_matching(&mut ws, |v| {
+        v.get("type") == Some(&json!("approval.resolved"))
+            && v["payload"]["outcome"] == json!("rejected")
+    })
+    .await;
+    assert_eq!(resolved["payload"]["option_id"], json!("reject"));
+
+    // mock-acp emits a tool_call_update with status=failed (not yet
+    // mapped to a VAC event in X.5c.1; X.5c.2 wires it). Prompt still
+    // completes with end_turn — task-level failure, not session error.
+    let completed = next_event_of_type(&mut ws, "transcript.completed").await;
+    assert_eq!(completed["payload"]["stop_reason"], json!("end_turn"));
+}
+
 #[tokio::test]
 async fn x3_acp_assessor_profile_denied() {
     // executor.code is the only profile cleared for acp; assessor.rtd
