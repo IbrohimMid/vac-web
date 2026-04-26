@@ -64,6 +64,13 @@ struct Args {
     /// approved one is `rawInput`. Used by the negative
     /// correlation test.
     same_raw_input_different_tool: bool,
+    /// X.5d — advertised authMethods in the `initialize` reply.
+    /// Defaults to `[]`. Tests pass a JSON array via
+    /// `--auth-methods <JSON>` to drive the bridge’s
+    /// `session.authenticate` matrix without needing a real
+    /// adapter. Each entry should at minimum have `id` and `type`
+    /// (and optionally `name`, `vars`).
+    auth_methods_json: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -82,6 +89,7 @@ fn parse_args() -> Args {
             "--oversized-output" => a.oversized_output = true,
             "--rotate-tool-call-id" => a.rotate_tool_call_id = true,
             "--same-raw-input-different-tool" => a.same_raw_input_different_tool = true,
+            "--auth-methods" => a.auth_methods_json = argv.next(),
             "--profile" | "--session-id" | "--project" => {
                 let _ = argv.next();
                 a.cli_passthrough = true;
@@ -162,6 +170,17 @@ async fn main() -> Result<()> {
 
         match method {
             "initialize" => {
+                // X.5d — emit configured authMethods so the bridge can
+                // exercise the `session.authenticate` matrix without
+                // a real adapter. Defaults to `[]` to preserve
+                // backwards compatibility with every pre-X.5d test.
+                let auth_methods: Value = match args.auth_methods_json.as_deref() {
+                    Some(raw) => serde_json::from_str(raw).unwrap_or_else(|e| {
+                        warn!("--auth-methods JSON parse failed: {e}; falling back to []");
+                        json!([])
+                    }),
+                    None => json!([]),
+                };
                 let resp = json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -178,7 +197,7 @@ async fn main() -> Result<()> {
                             "title": "Mock ACP",
                             "version": env!("CARGO_PKG_VERSION")
                         },
-                        "authMethods": []
+                        "authMethods": auth_methods
                     }
                 });
                 writeln_json(&stdout, &resp).await?;

@@ -106,4 +106,46 @@ describe('cockpit ReauthAction', () => {
     expect(state.authError?.code).toBe('auth.transport_error');
     expect(state.authError?.message).toContain('socket closed');
   });
+
+  it('ack ok=false flips authStatus failed and surfaces ack error', async () => {
+    // Cover the path where the bridge resolves a structured ack with
+    // `ok=false` but no `session.auth_failed` lifecycle event arrives
+    // (e.g. the translator-level `session.not_found` short-circuit on a
+    // stale session id). The button must fail-closed instead of staying
+    // in `requesting`.
+    const send = vi.fn(async () => ({
+      ackOf: 'cmd_x',
+      ok: false,
+      error: { code: 'session.not_found', message: 'sess_01' },
+    }));
+    render(<ReauthAction transport={baseTransport(send)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Reauth: Log in with Claude/ }));
+    // Flush microtasks so the ack handler runs.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const state = useSession.getState();
+    expect(state.authStatus).toBe('failed');
+    expect(state.authError?.code).toBe('session.not_found');
+    expect(state.authError?.message).toBe('sess_01');
+    expect(state.authError?.authMethodId).toBe('claude-login');
+    expect(state.authError?.authMethodType).toBe('agent');
+  });
+
+  it('ack ok=true with no error keeps requesting until lifecycle event lands', async () => {
+    // ack.ok=true is purely a delivery confirmation here — the visual
+    // state must still come from the bridge's `session.auth_updated` /
+    // `session.auth_failed` event. Until that arrives the button stays
+    // in `requesting` (which is the optimistic state set on click).
+    const send = vi.fn(async () => ({ ackOf: 'cmd_x', ok: true }));
+    render(<ReauthAction transport={baseTransport(send)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Reauth: Log in with Claude/ }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSession.getState().authStatus).toBe('requesting');
+    expect(useSession.getState().authError).toBeNull();
+  });
 });

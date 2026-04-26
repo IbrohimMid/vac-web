@@ -66,6 +66,26 @@ export function ReauthAction({ transport, sessionId }: ReauthActionProps) {
     useSession.getState().setLastAuthMethodId(method.id);
     void transport
       .send(sid, 'session.authenticate', { auth_method_id: method.id })
+      .then((ack) => {
+        // Fail-closed on ack.ok=false even if no `session.auth_failed`
+        // event arrived. This covers translator-level failures that
+        // bypass the lifecycle event path (e.g. `session.not_found` on
+        // a stale session id) so the button can never get stuck in
+        // `requesting`.
+        if (!ack.ok) {
+          useSession.getState().setAuthStatus('failed');
+          useSession.getState().setAuthError({
+            code: ack.error?.code ?? 'auth.ack_failed',
+            message: ack.error?.message ?? 'reauth failed',
+            authMethodId: method.id,
+            authMethodType: method.type,
+          });
+        }
+        // ack.ok=true is a no-op here — the lifecycle events
+        // (`session.auth_updated` / `session.auth_failed`) drive the
+        // final visual state from the bridge. The bridge has already
+        // emitted at least `session.auth_requested` on every dispatch.
+      })
       .catch((e) => {
         // Network / transport failure before the bridge could ack.
         useSession.getState().setAuthStatus('failed');
@@ -73,6 +93,7 @@ export function ReauthAction({ transport, sessionId }: ReauthActionProps) {
           code: 'auth.transport_error',
           message: String(e),
           authMethodId: method.id,
+          authMethodType: method.type,
         });
       });
   };
