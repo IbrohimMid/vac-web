@@ -29,7 +29,7 @@ export function Sidebar() {
   const setRoute = useCockpit((s) => s.setRoute);
   const sidebarCollapsed = useCockpit((s) => s.sidebarCollapsed);
 
-  const pendingApprovals = useApprovals((s) => s.order.length);
+  const pendingApprovals = useApprovals((s) => s.pendingOrder.length);
   const runningRuns = useAssessment((s) => {
     let n = 0;
     for (const r of s.runs.values()) if (r.status === 'running') n++;

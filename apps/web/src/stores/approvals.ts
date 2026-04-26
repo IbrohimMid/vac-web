@@ -1,71 +1,150 @@
-// Approvals store. Pending tool-call list + decided set.
+// Approvals store. Pending approval list + resolved history.
 //
 // Multi-client: the bridge is authoritative. Local optimistic state is cleared
-// by the authoritative `tool_call.decided` event (first decision wins; losers
+// by the authoritative `approval.resolved` event (first decision wins; losers
 // see the same resolution arrive and converge).
 
 import { create } from 'zustand';
 
 export type RiskLevel = 'low' | 'medium' | 'high';
-export type Decision = 'approved' | 'rejected';
+export type Decision = 'approved' | 'rejected' | 'expired';
 
-export interface ToolCall {
-  id: string;
+export interface ApprovalOption {
+  optionId: string;
+  kind: string;
+  name: string;
+}
+
+interface ApprovalBase {
+  approvalId: string;
+  toolCallId: string;
   tool: string;
   risk: RiskLevel;
   summary: string;
   args: Record<string, unknown>;
   createdAt: string;
-  state: 'pending' | 'deciding' | 'decided';
-  decision?: Decision;
+  sourceEventType: string;
+  toolCall: Record<string, unknown>;
+}
+
+export interface ApprovalRequest extends ApprovalBase {
+  state: 'pending' | 'deciding';
+  expiresInMs: number | null;
+  options: ApprovalOption[];
+}
+
+export interface ApprovalResolution extends ApprovalBase {
+  state: 'resolved';
+  resolvedAt: string;
+  decision: Decision;
+  outcome: string;
+  optionId?: string;
+  options: ApprovalOption[];
+}
+
+export interface ApprovalResolutionInput {
+  approvalId: string;
+  decision: Decision;
+  outcome: string;
+  optionId?: string;
+  resolvedAt?: string;
+  sourceEventType: string;
 }
 
 interface ApprovalsSlice {
-  pending: Map<string, ToolCall>;
-  order: string[];
-  decided: Map<string, Decision>;
-  upsertPending(tc: ToolCall): void;
-  markDeciding(id: string): void;
-  resolve(id: string, decision: Decision): void;
+  pending: Map<string, ApprovalRequest>;
+  pendingOrder: string[];
+  resolved: Map<string, ApprovalResolution>;
+  resolvedOrder: string[];
+  upsertPending(tc: ApprovalRequest): void;
+  markDeciding(approvalId: string): void;
+  resolve(resolution: ApprovalResolutionInput): void;
   clear(): void;
 }
 
 export const useApprovals = create<ApprovalsSlice>((set) => ({
   pending: new Map(),
-  order: [],
-  decided: new Map(),
+  pendingOrder: [],
+  resolved: new Map(),
+  resolvedOrder: [],
 
   upsertPending(tc) {
     set((s) => {
       const pending = new Map(s.pending);
-      const order = pending.has(tc.id) ? s.order : [...s.order, tc.id];
-      pending.set(tc.id, tc);
-      return { pending, order };
+      const pendingOrder = pending.has(tc.approvalId) ? s.pendingOrder : [...s.pendingOrder, tc.approvalId];
+      pending.set(tc.approvalId, tc);
+      return { pending, pendingOrder };
     });
   },
 
-  markDeciding(id) {
+  markDeciding(approvalId) {
     set((s) => {
-      const cur = s.pending.get(id);
+      const cur = s.pending.get(approvalId);
       if (!cur || cur.state !== 'pending') return s;
       const pending = new Map(s.pending);
-      pending.set(id, { ...cur, state: 'deciding' });
+      pending.set(approvalId, { ...cur, state: 'deciding' });
       return { pending };
     });
   },
 
-  resolve(id, decision) {
+  resolve(resolution) {
     set((s) => {
       const pending = new Map(s.pending);
-      pending.delete(id);
-      const order = s.order.filter((x) => x !== id);
-      const decided = new Map(s.decided);
-      decided.set(id, decision);
-      return { pending, order, decided };
+      const prior = pending.get(resolution.approvalId) ?? s.resolved.get(resolution.approvalId);
+      pending.delete(resolution.approvalId);
+      const pendingOrder = s.pendingOrder.filter((x) => x !== resolution.approvalId);
+      const resolved = new Map(s.resolved);
+      const resolvedOrder = resolved.has(resolution.approvalId)
+        ? s.resolvedOrder.filter((x) => x !== resolution.approvalId)
+        : [...s.resolvedOrder];
+      const resolvedAt = resolution.resolvedAt ?? new Date().toISOString();
+      const base: ApprovalResolution = prior
+        ? {
+            approvalId: prior.approvalId,
+            toolCallId: prior.toolCallId,
+            tool: prior.tool,
+            risk: prior.risk,
+            summary: prior.summary,
+            args: prior.args,
+            createdAt: prior.createdAt,
+            sourceEventType: resolution.sourceEventType,
+            toolCall: prior.toolCall,
+            state: 'resolved',
+            resolvedAt,
+            decision: resolution.decision,
+            outcome: resolution.outcome,
+            ...(resolution.optionId !== undefined && { optionId: resolution.optionId }),
+            options: 'options' in prior ? prior.options : [],
+          }
+        : {
+            approvalId: resolution.approvalId,
+            toolCallId: resolution.approvalId,
+            tool: resolution.approvalId,
+            risk: 'medium',
+            summary: '',
+            args: {},
+            createdAt: resolvedAt,
+            sourceEventType: resolution.sourceEventType,
+            toolCall: {},
+            state: 'resolved',
+            resolvedAt,
+            decision: resolution.decision,
+            outcome: resolution.outcome,
+            ...(resolution.optionId !== undefined && { optionId: resolution.optionId }),
+            options: [],
+          };
+      resolved.set(resolution.approvalId, base);
+      resolvedOrder.push(resolution.approvalId);
+      return { pending, pendingOrder, resolved, resolvedOrder };
     });
   },
 
   clear() {
-    set({ pending: new Map(), order: [], decided: new Map() });
+    set({
+      pending: new Map(),
+      pendingOrder: [],
+      resolved: new Map(),
+      resolvedOrder: [],
+    });
   },
 }));

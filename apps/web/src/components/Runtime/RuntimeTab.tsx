@@ -1,6 +1,6 @@
 // Runtime tab: job list + selected-job log tail + X.5c.2 ACP execute stream.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRuntime } from '../../stores/runtime';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useSession } from '../../stores/session';
@@ -8,6 +8,10 @@ import type { TransportHandle } from '../../transport';
 
 interface Props {
   transport: TransportHandle | null;
+}
+
+function shortId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
 }
 
 export function RuntimeTab({ transport }: Props) {
@@ -27,6 +31,11 @@ export function RuntimeTab({ transport }: Props) {
         .map((k) => acpLogs.get(k))
         .filter((x) => x != null)
     : [];
+
+  useEffect(() => {
+    if (selected && order.includes(selected)) return;
+    setSelected(order[0] ?? null);
+  }, [order, selected]);
 
   const cancel = async (id: string) => {
     if (!transport || !sessionId) return;
@@ -65,12 +74,44 @@ export function RuntimeTab({ transport }: Props) {
                     background: selected === id ? 'var(--bg-2, #222)' : 'transparent',
                     cursor: 'pointer',
                   }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <strong>{j.label}</strong>
                     <span style={{ fontSize: 11 }}>{j.status}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{j.kind}</div>
+                  <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-2)' }}>{j.kind}</div>
+                  <div style={{ marginTop: 2, fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                    {j.toolCallId && `tool_call: ${shortId(j.toolCallId)}`}
+                    {j.approvedByApprovalId && ` · approval: ${shortId(j.approvedByApprovalId)}`}
+                    {j.sourceEventType && ` · src: ${j.sourceEventType}`}
+                  </div>
+                  {(j.commandPreview || j.outputTruncated || j.outputRedacted) && (
+                    <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {j.commandPreview && (
+                        <code
+                          aria-label="Command preview"
+                          style={{
+                            background: 'var(--surface-2)',
+                            padding: '1px 6px',
+                            borderRadius: 3,
+                            fontSize: 11,
+                          }}
+                        >
+                          {j.commandPreview}
+                        </code>
+                      )}
+                      {j.outputRedacted && (
+                        <span aria-label="Output redacted" style={{ fontSize: 10, color: 'var(--warn)' }}>
+                          Output redacted
+                        </span>
+                      )}
+                      {j.outputTruncated && (
+                        <span aria-label="Output truncated" style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                          Output truncated
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {(j.status === 'running' || j.status === 'pending') && (
                     <button
                       onClick={(e) => {
@@ -172,6 +213,11 @@ export function RuntimeTab({ transport }: Props) {
                     Output truncated
                   </span>
                 )}
+              </div>
+              <div style={{ marginTop: 3, fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                tool_call: {shortId(e!.tool_call_id)}
+                {e!.approved_by_approval_id && ` · approval: ${shortId(e!.approved_by_approval_id)}`}
+                {e!.source_event_type && ` · src: ${e!.source_event_type}`}
               </div>
               {e!.output && (
                 <pre

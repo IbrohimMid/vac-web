@@ -30,7 +30,7 @@ interface Props {
 export function Workbench({ panes }: Props) {
   const active = useWorkbench((s) => s.active);
   const select = useWorkbench((s) => s.select);
-  const pendingCount = useApprovals((s) => s.order.length);
+  const pendingCount = useApprovals((s) => s.pendingOrder.length);
   const jobsCount = useRuntime((s) => s.order.length);
   const reviewCount = useReview((s) => s.files.length);
   // Reduce over Map values — primitive return keeps selector stable without a

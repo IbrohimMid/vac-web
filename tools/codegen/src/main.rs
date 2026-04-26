@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -76,18 +77,74 @@ fn gen_one(name: &str, schema: &Value) -> Result<(String, String)> {
 // ---------- TypeScript ----------
 
 fn ts_for_schema(name: &str, schema: &Value) -> String {
+    let imports = ts_imports_for_schema(name, schema);
     if let Some(enum_vals) = schema.get("enum").and_then(|v| v.as_array()) {
-        return ts_string_literal_union(name, enum_vals);
+        return format!("{imports}{}", ts_string_literal_union(name, enum_vals));
     }
     // Discriminated union: `type` prop is an enum AND `payload` prop exists.
     if let Some(du) = try_ts_discriminated_union(name, schema) {
-        return du;
+        return format!("{imports}{du}");
     }
-    match schema.get("type").and_then(|v| v.as_str()) {
+    let body = match schema.get("type").and_then(|v| v.as_str()) {
         Some("object") => ts_object(name, schema),
         Some("string") => format!("export type {name} = string;\n"),
         _ => ts_object(name, schema),
+    };
+    format!("{imports}{body}")
+}
+
+fn ts_imports_for_schema(current_name: &str, schema: &Value) -> String {
+    let mut refs = BTreeSet::new();
+    let is_discriminated_union = try_ts_discriminated_union(current_name, schema).is_some();
+    if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
+        for (key, value) in props {
+            if key == "type" || (is_discriminated_union && key == "payload") {
+                continue;
+            }
+            collect_ts_refs(value, &mut refs);
+        }
+    } else {
+        collect_ts_refs(schema, &mut refs);
     }
+    refs.remove(current_name);
+    if refs.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for name in refs {
+        out.push_str(&format!("import type {{ {name} }} from './{name}';\n"));
+    }
+    out.push('\n');
+    out
+}
+
+fn collect_ts_refs(value: &Value, refs: &mut BTreeSet<String>) {
+    if let Some(r) = value.get("$ref").and_then(|v| v.as_str()) {
+        if let Some(name) = ts_ref_import_name(r) {
+            refs.insert(name);
+        }
+        return;
+    }
+    if value.get("enum").and_then(|v| v.as_array()).is_some() {
+        return;
+    }
+    if matches!(value.get("type").and_then(|v| v.as_str()), Some("array")) {
+        if let Some(items) = value.get("items") {
+            collect_ts_refs(items, refs);
+        }
+    }
+}
+
+fn ts_ref_import_name(r: &str) -> Option<String> {
+    if r.contains("primitives.schema.json#/$defs/") {
+        return None;
+    }
+    let without_fragment = r.split('#').next().unwrap_or(r);
+    let file = without_fragment
+        .rsplit('/')
+        .next()
+        .unwrap_or(without_fragment);
+    file.strip_suffix(".json").map(|s| s.to_string())
 }
 
 /// Emit a TS discriminated union for envelope-style schemas like Command/Event:
@@ -560,5 +617,26 @@ mod tests {
         assert!(out.contains("'a'"));
         assert!(out.contains("'b'"));
         assert!(out.contains("export type Foo"));
+    }
+
+    #[test]
+    fn ts_for_schema_adds_type_imports_for_refs() {
+        let schema: Value = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "evidence": {
+                    "type": "array",
+                    "items": { "$ref": "EvidenceRef.json" }
+                },
+                "verdict": { "$ref": "AssessmentVerdict.json" },
+                "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" }
+            },
+            "required": ["evidence", "verdict", "id"]
+        });
+
+        let out = ts_for_schema("AssessmentFinding", &schema);
+        assert!(out.contains("import type { AssessmentVerdict } from './AssessmentVerdict';"));
+        assert!(out.contains("import type { EvidenceRef } from './EvidenceRef';"));
+        assert!(!out.contains("ulid"));
     }
 }

@@ -10,6 +10,9 @@ export interface ReviewFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed';
   additions: number;
   deletions: number;
+  toolCallId?: string;
+  approvedByApprovalId?: string | null;
+  sourceEventType?: string;
 }
 
 export interface DiffBody {

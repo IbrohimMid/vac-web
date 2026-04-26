@@ -43,6 +43,10 @@ const ARTIFACT_KIND_TARGET: Record<string, WorkflowArtifactTarget> = {
   tool_activity: 'activity',
 };
 
+function shortId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
 interface ChipProps {
   artifact: WorkflowArtifact;
   onNavigate: (target: WorkflowArtifactTarget) => void;
@@ -51,11 +55,15 @@ interface ChipProps {
 function ArtifactKindChip({ artifact, onNavigate }: ChipProps) {
   const target = ARTIFACT_KIND_TARGET[artifact.kind] ?? 'transcript';
   const label = ARTIFACT_KIND_CHIPS[artifact.kind] ?? artifact.kind;
-  const tooltip = artifact.source_event_type ?? artifact.kind;
+  const tooltipBits = [
+    artifact.source_event_type ?? artifact.kind,
+    `tool_call: ${artifact.tool_call_id}`,
+    artifact.approval_id ? `approval: ${artifact.approval_id}` : null,
+  ].filter((x): x is string => Boolean(x));
   return (
     <button
       className={`workflow-artifact-chip workflow-artifact-chip--${artifact.kind}`}
-      title={tooltip}
+      title={tooltipBits.join(' · ')}
       onClick={() => onNavigate(target)}
       style={{
         fontSize: 10,
@@ -114,14 +122,29 @@ function ArtifactRow({ artifact, onNavigate }: ArtifactRowProps) {
       : artifact.review_diff_count != null
         ? `${artifact.review_diff_count} file${artifact.review_diff_count !== 1 ? 's' : ''}`
         : artifact.tool_call_id.slice(0, 8) + '…';
+  const correlation = [
+    `tool_call: ${shortId(artifact.tool_call_id)}`,
+    artifact.approval_id ? `approval: ${shortId(artifact.approval_id)}` : null,
+    `src: ${artifact.source_event_type ?? artifact.kind}`,
+  ]
+    .filter((x): x is string => Boolean(x))
+    .join(' · ');
   return (
     <div
       className="workflow-artifact-row"
-      style={{ display: 'flex', gap: 6, padding: '2px 0 2px 16px', fontSize: 12, color: 'var(--text-2)', alignItems: 'center' }}
+      style={{ display: 'flex', gap: 6, padding: '2px 0 2px 16px', fontSize: 12, color: 'var(--text-2)', alignItems: 'flex-start' }}
+      title={correlation}
     >
-      <span>↳</span>
-      <ArtifactKindChip artifact={artifact} onNavigate={onNavigate} />
-      <code style={{ fontSize: 11, opacity: 0.7 }}>{meta}</code>
+      <span style={{ marginTop: 1 }}>↳</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <ArtifactKindChip artifact={artifact} onNavigate={onNavigate} />
+          <code style={{ fontSize: 11, opacity: 0.7 }}>{meta}</code>
+        </div>
+        <div style={{ marginTop: 2, fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-3)' }}>
+          {correlation}
+        </div>
+      </div>
     </div>
   );
 }

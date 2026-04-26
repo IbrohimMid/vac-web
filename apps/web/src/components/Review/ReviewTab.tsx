@@ -11,6 +11,10 @@ interface Props {
   transport: TransportHandle | null;
 }
 
+function shortId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
+}
+
 const STATUS_SEV: Record<ReviewFile['status'], Severity> = {
   added: 'ok',
   modified: 'info',
@@ -78,7 +82,14 @@ export function ReviewTab({ transport }: Props) {
                 onClick={() => open(f.path)}
               >
                 <SeverityIcon severity={STATUS_SEV[f.status]} />
-                <span style={{ flex: 1, fontFamily: 'monospace' }}>{f.path}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'monospace' }}>{f.path}</div>
+                  <div style={{ marginTop: 2, fontSize: 10, color: 'var(--text-2)', fontFamily: 'var(--font-mono)' }}>
+                    {f.toolCallId && `tool_call: ${shortId(f.toolCallId)}`}
+                    {f.approvedByApprovalId && ` · approval: ${shortId(f.approvedByApprovalId)}`}
+                    {f.sourceEventType && ` · src: ${f.sourceEventType}`}
+                  </div>
+                </div>
                 <span style={{ color: 'var(--sev-ok)', fontSize: 12 }}>+{f.additions}</span>
                 <span style={{ color: 'var(--sev-error)', fontSize: 12 }}>-{f.deletions}</span>
               </li>
@@ -142,6 +153,18 @@ export function ReviewTab({ transport }: Props) {
                       </span>
                     )}
                   </span>
+                </div>
+                <div
+                  style={{
+                    padding: '0 8px 5px',
+                    fontSize: 10,
+                    color: 'var(--text-2)',
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  tool_call: {shortId(d!.tool_call_id)}
+                  {d!.approved_by_approval_id && ` · approval: ${shortId(d!.approved_by_approval_id)}`}
+                  {d!.source_event_type && ` · src: ${d!.source_event_type}`}
                 </div>
                 {diff.old_text == null ? (
                   <div style={{ padding: '4px 8px', fontSize: 11, color: 'var(--sev-ok)' }}>

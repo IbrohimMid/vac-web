@@ -131,7 +131,7 @@ interface WorkbenchProps {
 }
 
 function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: WorkbenchProps) {
-  const pendingApprovals = useApprovals((s) => s.order.length);
+  const pendingApprovals = useApprovals((s) => s.pendingOrder.length);
   const reviewFiles = useReview((s) => s.files.length);
   const runningJobs = useRuntime((s) => {
     let n = 0;
@@ -235,7 +235,7 @@ function AgentsView() {
   const activeRunId = useAssessment((s) => s.activeRunId);
   const packets = useHandoff((s) => s.packets);
   const order = useHandoff((s) => s.order);
-  const approvalsCount = useApprovals((s) => s.order.length);
+  const approvalsCount = useApprovals((s) => s.pendingOrder.length);
 
   const activeRun = activeRunId ? runs.get(activeRunId) : null;
   const planner = activeRun

@@ -228,7 +228,18 @@ describe('WorkflowRail DOM rendering', () => {
 
   // ── Chip click navigation ──────────────────────────────────────────────────
 
-  function seedArtifact(kind: string, stepKind: string, artifactId: string, toolCallId: string) {
+  function seedArtifact(
+    kind: string,
+    stepKind: string,
+    artifactId: string,
+    toolCallId: string,
+    extras: Partial<{
+      approval_id: string;
+      source_event_type: string;
+      review_diff_count: number;
+      runtime_command_preview: string;
+    }> = {},
+  ) {
     seedRun();
     useWorkflow.getState().applyWorkflowStepStarted({
       session_id: 'sess1', run_id: 'run_01', step_id: 'step_nav',
@@ -239,6 +250,7 @@ describe('WorkflowRail DOM rendering', () => {
       artifact_id: artifactId, kind,
       step_id: 'step_nav', tool_call_id: toolCallId,
       ts: '2026-01-01T00:00:00Z',
+      ...extras,
     });
   }
 
@@ -276,5 +288,16 @@ describe('WorkflowRail DOM rendering', () => {
     fireEvent.click(screen.getByText('tool activity'));
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith('activity');
+  });
+
+  it('renders correlation metadata for artifact target audit', () => {
+    seedArtifact('approval', 'await_approval', 'art_ap', 'appr_01', {
+      approval_id: 'appr_01',
+      source_event_type: 'approval.pending',
+    });
+    render(<WorkflowRail sessionId="sess1" />);
+    expect(
+      screen.getByTitle('tool_call: appr_01 · approval: appr_01 · src: approval.pending'),
+    ).toBeInTheDocument();
   });
 });

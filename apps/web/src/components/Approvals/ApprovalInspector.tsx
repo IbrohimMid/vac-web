@@ -12,8 +12,13 @@ const RISK_BADGE: Record<RiskLevel, { className: string; label: string }> = {
 };
 
 export function ApprovalInspector({ params, dismiss }: OverlayRenderProps) {
-  const toolCallId = typeof params.toolCallId === 'string' ? params.toolCallId : null;
-  const tc = useApprovals((s) => (toolCallId ? s.pending.get(toolCallId) : undefined));
+  const approvalId =
+    typeof params.approvalId === 'string'
+      ? params.approvalId
+      : typeof params.toolCallId === 'string'
+        ? params.toolCallId
+        : null;
+  const tc = useApprovals((s) => (approvalId ? s.pending.get(approvalId) : undefined));
 
   if (!tc) {
     return (
@@ -35,7 +40,7 @@ export function ApprovalInspector({ params, dismiss }: OverlayRenderProps) {
           className="muted"
           style={{ padding: 16, fontSize: 13, margin: 0 }}
         >
-          Tool call not found (already resolved?).
+          Approval not found (already resolved?).
         </p>
       </div>
     );
@@ -66,6 +71,24 @@ export function ApprovalInspector({ params, dismiss }: OverlayRenderProps) {
       </header>
       <div className="card-body" style={{ padding: 16, fontSize: 12.5 }}>
         <div className="kv-row">
+          <span className="k">Approval ID</span>
+          <span className="v" style={{ fontFamily: 'var(--font-mono)' }}>
+            {tc.approvalId}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="k">Tool call ID</span>
+          <span className="v" style={{ fontFamily: 'var(--font-mono)' }}>
+            {tc.toolCallId}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="k">Source</span>
+          <span className="v" style={{ fontFamily: 'var(--font-mono)' }}>
+            {tc.sourceEventType}
+          </span>
+        </div>
+        <div className="kv-row">
           <span className="k">Summary</span>
           <span className="v" style={{ fontFamily: 'var(--font-sans)' }}>
             {tc.summary || '—'}
@@ -75,6 +98,12 @@ export function ApprovalInspector({ params, dismiss }: OverlayRenderProps) {
           <span className="k">Created</span>
           <span className="v" style={{ fontFamily: 'var(--font-sans)' }}>
             {tc.createdAt}
+          </span>
+        </div>
+        <div className="kv-row">
+          <span className="k">Expires</span>
+          <span className="v" style={{ fontFamily: 'var(--font-sans)' }}>
+            {tc.expiresInMs != null ? `${tc.expiresInMs} ms` : '—'}
           </span>
         </div>
         <div className="kv-row">
@@ -114,6 +143,35 @@ export function ApprovalInspector({ params, dismiss }: OverlayRenderProps) {
         >
           {JSON.stringify(tc.args, null, 2)}
         </pre>
+
+        {tc.options.length > 0 && (
+          <>
+            <div
+              style={{
+                display: 'block',
+                fontSize: 11,
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+                color: 'var(--ink-3)',
+                margin: '14px 0 6px',
+              }}
+            >
+              Options
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {tc.options.map((opt) => (
+                <span
+                  key={opt.optionId}
+                  className="badge"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}
+                >
+                  {opt.kind} · {opt.name}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

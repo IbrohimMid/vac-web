@@ -31,6 +31,44 @@ interface LogPayload {
   text: string;
 }
 
+interface BridgeRuntimeLogPayload {
+  tool_call_id?: unknown;
+  status?: unknown;
+  command?: unknown;
+  output?: unknown;
+  approved_by_approval_id?: unknown;
+  agent_id?: unknown;
+  ts?: unknown;
+}
+
+function asRecord(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+}
+
+function asString(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+function preview(raw: string): string {
+  return raw.length > 120 ? `${raw.slice(0, 120)}…` : raw;
+}
+
+function outputFlags(output: string | null): { outputTruncated: boolean; outputRedacted: boolean } {
+  return {
+    outputTruncated: output?.includes('…[truncated by VAC bridge]') ?? false,
+    outputRedacted: output?.includes('<REDACTED-SECRET>') ?? false,
+  };
+}
+
+function bridgeStatus(raw: unknown): JobStatus {
+  if (raw === 'pending') return 'pending';
+  if (raw === 'in_progress' || raw === 'running') return 'running';
+  if (raw === 'completed') return 'succeeded';
+  if (raw === 'failed') return 'failed';
+  if (raw === 'cancelled') return 'cancelled';
+  return 'pending';
+}
+
 export function registerRuntimeHandlers(transport: TransportHandle): () => void {
   const offs: Array<() => void> = [];
 
@@ -58,6 +96,43 @@ export function registerRuntimeHandlers(transport: TransportHandle): () => void 
         stream: p.stream === 'stderr' ? 'stderr' : 'stdout',
         text: p.text,
       });
+    }),
+  );
+
+  offs.push(
+    transport.on('runtime.job_log', (ev) => {
+      const p = asRecord(ev.payload) as BridgeRuntimeLogPayload;
+      const toolCallId = asString(p.tool_call_id) ?? '';
+      if (!toolCallId) return;
+      const command = asString(p.command);
+      const output = asString(p.output);
+      const flags = outputFlags(output);
+      const label = command ? preview(command) : 'Runtime job';
+      useRuntime.getState().upsert({
+        id: toolCallId,
+        kind: 'execute',
+        label,
+        status: bridgeStatus(p.status),
+        startedAt: typeof p.ts === 'string' ? p.ts : ev.ts,
+        ...(bridgeStatus(p.status) === 'succeeded' || bridgeStatus(p.status) === 'failed'
+          ? { finishedAt: typeof p.ts === 'string' ? p.ts : ev.ts }
+          : {}),
+        toolCallId,
+        approvedByApprovalId: asString(p.approved_by_approval_id),
+        sourceEventType: 'runtime.job_log',
+        commandPreview: command ? preview(command) : null,
+        outputPreview: output ? preview(output) : null,
+        outputTruncated: flags.outputTruncated,
+        outputRedacted: flags.outputRedacted,
+      });
+      const logText = output ?? command ?? '';
+      if (logText) {
+        useRuntime.getState().appendLog(toolCallId, {
+          ts: typeof p.ts === 'string' ? p.ts : ev.ts,
+          stream: 'stdout',
+          text: logText,
+        });
+      }
     }),
   );
 

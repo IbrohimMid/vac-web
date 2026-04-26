@@ -170,6 +170,7 @@ export function registerToolActivityHandlers(transport: TransportHandle): () => 
         locations: asLocations(p.locations),
         diffs,
         approved_by_approval_id: asNullableString(p.approved_by_approval_id),
+        source_event_type: 'review.changeset_updated',
         ts: typeof p.ts === 'string' ? p.ts : ev.ts,
         seq: nextSeq(),
       });
@@ -193,6 +194,7 @@ export function registerToolActivityHandlers(transport: TransportHandle): () => 
         output,
         status: asToolStatus(p.status),
         approved_by_approval_id: asNullableString(p.approved_by_approval_id),
+        source_event_type: 'runtime.job_log',
         truncated: flags.outputTruncated,
         redacted: flags.outputRedacted,
         ts: typeof p.ts === 'string' ? p.ts : ev.ts,

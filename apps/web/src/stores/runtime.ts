@@ -11,6 +11,13 @@ export interface Job {
   status: JobStatus;
   startedAt: string;
   finishedAt?: string;
+  toolCallId?: string;
+  approvedByApprovalId?: string | null;
+  sourceEventType?: string;
+  commandPreview?: string | null;
+  outputPreview?: string | null;
+  outputTruncated?: boolean;
+  outputRedacted?: boolean;
 }
 
 export interface LogLine {

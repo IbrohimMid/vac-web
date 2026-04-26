@@ -51,6 +51,7 @@ export interface AcpJobLog {
   output: string | null;
   status: ToolStatus;
   approved_by_approval_id: string | null;
+  source_event_type?: string;
   truncated: boolean;
   redacted: boolean;
   ts: string;
@@ -64,6 +65,7 @@ export interface InlineReviewDiff {
   locations: ToolLocation[];
   diffs: ToolDiff[];
   approved_by_approval_id: string | null;
+  source_event_type?: string;
   ts: string;
   seq: number;
 }
