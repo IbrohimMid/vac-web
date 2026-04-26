@@ -1,7 +1,9 @@
 //! Per-session VIL-style workflow run executor.
 //!
 //! Flow-driven: step transitions follow YAML `flows` graph edges.
-//! Artifact creation is still kind-based (ReviewDiff, RuntimeLog).
+//! Artifact creation maps selected bridge signals to metadata-only payloads
+//! (tool_activity, approval, review_diff, runtime_log). Raw output and raw
+//! diffs are never included.
 
 use super::adapters::WorkflowAdvance;
 use super::events;

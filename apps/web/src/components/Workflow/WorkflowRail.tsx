@@ -1,9 +1,15 @@
 // VIL-style workflow rail — shows the current session's workflow run
 // as a step list with status badges. Artifact chips navigate workbench tabs.
+//
+// Navigation is driven by the onSelectArtifactTarget prop (cockpit BuildSurface
+// passes setTab). Falls back to useWorkbench for non-cockpit usage.
 
 import { useWorkflow, type WorkflowStep, type WorkflowArtifact } from '../../stores/workflow';
 import { useSession } from '../../stores/session';
-import { useWorkbench, type WorkbenchTab } from '../../stores/workbench';
+import { useWorkbench } from '../../stores/workbench';
+
+// Subset of WBTabId that artifacts can navigate to.
+export type WorkflowArtifactTarget = 'review' | 'runtime' | 'approvals' | 'activity' | 'transcript';
 
 const KIND_LABEL: Record<string, string> = {
   trigger: 'Start',
@@ -30,23 +36,27 @@ const ARTIFACT_KIND_CHIPS: Record<string, string> = {
   tool_activity: 'tool activity',
 };
 
-const ARTIFACT_KIND_TAB: Record<string, WorkbenchTab> = {
+const ARTIFACT_KIND_TARGET: Record<string, WorkflowArtifactTarget> = {
   review_diff: 'review',
   runtime_log: 'runtime',
   approval: 'approvals',
-  tool_activity: 'transcript',
+  tool_activity: 'activity',
 };
 
-function ArtifactKindChip({ artifact }: { artifact: WorkflowArtifact }) {
-  const select = useWorkbench((s) => s.select);
-  const tab = ARTIFACT_KIND_TAB[artifact.kind] ?? 'transcript';
+interface ChipProps {
+  artifact: WorkflowArtifact;
+  onNavigate: (target: WorkflowArtifactTarget) => void;
+}
+
+function ArtifactKindChip({ artifact, onNavigate }: ChipProps) {
+  const target = ARTIFACT_KIND_TARGET[artifact.kind] ?? 'transcript';
   const label = ARTIFACT_KIND_CHIPS[artifact.kind] ?? artifact.kind;
   const tooltip = artifact.source_event_type ?? artifact.kind;
   return (
     <button
       className={`workflow-artifact-chip workflow-artifact-chip--${artifact.kind}`}
       title={tooltip}
-      onClick={() => select(tab)}
+      onClick={() => onNavigate(target)}
       style={{
         fontSize: 10,
         padding: '1px 5px',
@@ -92,7 +102,12 @@ function StepRow({ step }: { step: WorkflowStep }) {
   );
 }
 
-function ArtifactRow({ artifact }: { artifact: WorkflowArtifact }) {
+interface ArtifactRowProps {
+  artifact: WorkflowArtifact;
+  onNavigate: (target: WorkflowArtifactTarget) => void;
+}
+
+function ArtifactRow({ artifact, onNavigate }: ArtifactRowProps) {
   const meta =
     artifact.runtime_command_preview
       ? artifact.runtime_command_preview
@@ -105,7 +120,7 @@ function ArtifactRow({ artifact }: { artifact: WorkflowArtifact }) {
       style={{ display: 'flex', gap: 6, padding: '2px 0 2px 16px', fontSize: 12, color: 'var(--text-2)', alignItems: 'center' }}
     >
       <span>↳</span>
-      <ArtifactKindChip artifact={artifact} />
+      <ArtifactKindChip artifact={artifact} onNavigate={onNavigate} />
       <code style={{ fontSize: 11, opacity: 0.7 }}>{meta}</code>
     </div>
   );
@@ -113,13 +128,17 @@ function ArtifactRow({ artifact }: { artifact: WorkflowArtifact }) {
 
 interface Props {
   sessionId?: string;
+  onSelectArtifactTarget?: (target: WorkflowArtifactTarget) => void;
 }
 
-export function WorkflowRail({ sessionId: propSessionId }: Props) {
+export function WorkflowRail({ sessionId: propSessionId, onSelectArtifactTarget }: Props) {
   const sessionId = useSession((s) => propSessionId ?? s.sessionId);
   const run = useWorkflow((s) => (sessionId ? s.runs.get(sessionId) : undefined));
   const workflowId = useSession((s) => s.workflowId);
   const workflowName = useSession((s) => s.workflowName);
+  // Fallback for non-cockpit surfaces that don't supply the prop.
+  const globalSelect = useWorkbench((s) => s.select);
+  const navigate = onSelectArtifactTarget ?? ((t) => globalSelect(t as Parameters<typeof globalSelect>[0]));
 
   if (!run) {
     return (
@@ -175,7 +194,7 @@ export function WorkflowRail({ sessionId: propSessionId }: Props) {
               <div key={step.step_id}>
                 <StepRow step={step} />
                 {stepArtifacts.map((a) => (
-                  <ArtifactRow key={a.artifact_id} artifact={a} />
+                  <ArtifactRow key={a.artifact_id} artifact={a} onNavigate={navigate} />
                 ))}
               </div>
             );

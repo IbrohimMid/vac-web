@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 // DOM render tests for WorkflowRail.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { useWorkflow } from '../../stores/workflow';
 import { useSession } from '../../stores/session';
-import { WorkflowRail } from './WorkflowRail';
+import { WorkflowRail, type WorkflowArtifactTarget } from './WorkflowRail';
 
 function resetStores() {
   useWorkflow.setState({ runs: new Map() });
@@ -224,5 +224,57 @@ describe('WorkflowRail DOM rendering', () => {
     useSession.setState({ workflowId: 'build.basic', workflowName: null });
     render(<WorkflowRail sessionId="sess1" />);
     expect(screen.getByText('Workflow: build.basic — waiting for prompt')).toBeInTheDocument();
+  });
+
+  // ── Chip click navigation ──────────────────────────────────────────────────
+
+  function seedArtifact(kind: string, stepKind: string, artifactId: string, toolCallId: string) {
+    seedRun();
+    useWorkflow.getState().applyWorkflowStepStarted({
+      session_id: 'sess1', run_id: 'run_01', step_id: 'step_nav',
+      activity_kind: stepKind, label: 'Test step',
+    });
+    useWorkflow.getState().applyWorkflowArtifactCreated({
+      session_id: 'sess1', run_id: 'run_01',
+      artifact_id: artifactId, kind,
+      step_id: 'step_nav', tool_call_id: toolCallId,
+      ts: '2026-01-01T00:00:00Z',
+    });
+  }
+
+  it('clicking review_diff chip calls onSelectArtifactTarget with "review"', () => {
+    const onSelect = vi.fn<(target: WorkflowArtifactTarget) => void>();
+    seedArtifact('review_diff', 'collect_review_diff', 'art_rv', 'tc_rv');
+    render(<WorkflowRail sessionId="sess1" onSelectArtifactTarget={onSelect} />);
+    fireEvent.click(screen.getByText('review diff'));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith('review');
+  });
+
+  it('clicking runtime_log chip calls onSelectArtifactTarget with "runtime"', () => {
+    const onSelect = vi.fn<(target: WorkflowArtifactTarget) => void>();
+    seedArtifact('runtime_log', 'collect_runtime_log', 'art_rt', 'tc_rt');
+    render(<WorkflowRail sessionId="sess1" onSelectArtifactTarget={onSelect} />);
+    fireEvent.click(screen.getByText('runtime log'));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith('runtime');
+  });
+
+  it('clicking approval chip calls onSelectArtifactTarget with "approvals"', () => {
+    const onSelect = vi.fn<(target: WorkflowArtifactTarget) => void>();
+    seedArtifact('approval', 'await_approval', 'art_ap', 'tc_ap');
+    render(<WorkflowRail sessionId="sess1" onSelectArtifactTarget={onSelect} />);
+    fireEvent.click(screen.getByText('approval'));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith('approvals');
+  });
+
+  it('clicking tool_activity chip calls onSelectArtifactTarget with "activity"', () => {
+    const onSelect = vi.fn<(target: WorkflowArtifactTarget) => void>();
+    seedArtifact('tool_activity', 'observe_tool_activity', 'art_ta', 'tc_ta');
+    render(<WorkflowRail sessionId="sess1" onSelectArtifactTarget={onSelect} />);
+    fireEvent.click(screen.getByText('tool activity'));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith('activity');
   });
 });

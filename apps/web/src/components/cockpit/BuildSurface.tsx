@@ -196,7 +196,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
           {tab === 'plan' && <PlanView transport={transport} />}
           {tab === 'workflow' && (
             <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
-              <WorkflowRail />
+              <WorkflowRail onSelectArtifactTarget={(target) => setTab(target as WBTabId)} />
             </Suspense>
           )}
           {tab === 'vil' && <VilView />}
