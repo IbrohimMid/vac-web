@@ -767,36 +767,32 @@ impl SessionHandle {
         intent: ApprovalIntent,
     ) -> Result<ApprovalResolution, ApprovalResolveError> {
         let acp = self.acp.as_ref().ok_or(ApprovalResolveError::NotAcp)?;
+
+        // X.5c.1 hardening: validate the option *before* removing the
+        // pending entry or aborting its timeout. A bad override must
+        // not strip timeout protection from a still-held permission
+        // request — otherwise an invalid attempt followed by user
+        // silence leaves the agent waiting forever.
+        let (options_snapshot, _peek_keep_pending) = {
+            let entry = acp
+                .pending_approvals
+                .get(approval_id)
+                .ok_or_else(|| ApprovalResolveError::NotFound(approval_id.to_string()))?;
+            // Clone only what `resolve_option` needs; release the
+            // DashMap read guard before any await.
+            (entry.options.clone(), ())
+        };
+        let chosen = resolve_option(&options_snapshot, explicit_option_id, intent)?;
+
+        // Validation passed — now remove + abort. If the entry
+        // disappeared between the get() and the remove() (e.g. the
+        // timer fired or another concurrent resolve won the race),
+        // surface NotFound so the caller doesn't double-resolve.
         let (_, pending) = acp
             .pending_approvals
             .remove(approval_id)
             .ok_or_else(|| ApprovalResolveError::NotFound(approval_id.to_string()))?;
         pending.timeout_handle.abort();
-
-        // Resolve + validate option_id, re-inserting the entry on
-        // failure so the user can retry. (The agent is still waiting
-        // on this request_permission; abandoning it would deadlock
-        // the prompt.)
-        let chosen = match resolve_option(&pending.options, explicit_option_id, intent) {
-            Ok(c) => c,
-            Err(e) => {
-                // Restore for retry. Re-arm the timer? Skip for X.5c.1
-                // simplicity — the original timer was aborted; if the
-                // user keeps retrying, the prompt eventually completes
-                // when they pick a valid option.
-                acp.pending_approvals.insert(
-                    approval_id.to_string(),
-                    PendingApproval {
-                        acp_request_id: pending.acp_request_id,
-                        options: pending.options.clone(),
-                        tool_call: pending.tool_call.clone(),
-                        created_at: pending.created_at,
-                        timeout_handle: pending.timeout_handle.clone(),
-                    },
-                );
-                return Err(e);
-            }
-        };
 
         let outcome = serde_json::json!({
             "outcome": { "outcome": "selected", "optionId": chosen.option_id }

@@ -14,7 +14,7 @@
 use futures::{SinkExt, StreamExt};
 use local_bridge::agent_runtime::{
     AgentDefinition, AgentKind, AgentRuntimeRegistry, AgentsConfig, ConfigSource,
-    DEFAULT_PERMISSION_TIMEOUT_MS,
+    DEFAULT_PERMISSION_TIMEOUT_MS, MIN_PERMISSION_TIMEOUT_MS,
 };
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
@@ -48,6 +48,13 @@ fn mock_acp_bin() -> PathBuf {
 }
 
 fn build_acp_registry(extra_args: Vec<String>) -> AgentRuntimeRegistry {
+    build_acp_registry_with_timeout(extra_args, DEFAULT_PERMISSION_TIMEOUT_MS)
+}
+
+fn build_acp_registry_with_timeout(
+    extra_args: Vec<String>,
+    permission_timeout_ms: u64,
+) -> AgentRuntimeRegistry {
     let mut args = vec!["--acp".to_string()];
     args.extend(extra_args);
     let agent = AgentDefinition {
@@ -57,7 +64,7 @@ fn build_acp_registry(extra_args: Vec<String>) -> AgentRuntimeRegistry {
         command: mock_acp_bin(),
         args,
         enabled: true,
-        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        permission_timeout_ms,
     };
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),
@@ -503,6 +510,78 @@ async fn x5c1_explicit_reject_option_on_approve_is_kind_mismatch() {
     let ack = await_ack(&mut ws, "cmd_bad").await;
     assert_eq!(ack["ok"], json!(false));
     assert_eq!(ack["error"]["code"], json!("approval.option_kind_mismatch"));
+}
+
+#[tokio::test]
+async fn x5c1_invalid_override_does_not_disarm_timeout() {
+    // X.5c.1 lock-blocker regression. A bad explicit option_id must
+    // NOT remove the pending approval or abort its auto-cancel timer.
+    // We use the minimum permitted permission_timeout_ms so the timer
+    // fires within the test wall clock; then assert
+    // approval.resolved {outcome:"timeout"} arrives even though the
+    // user only sent invalid retries afterwards.
+    let (url, _state) = start_bridge_with(build_acp_registry_with_timeout(
+        vec!["--permission-prompt".into()],
+        MIN_PERMISSION_TIMEOUT_MS, // 10s
+    ))
+    .await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "trigger" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    let pending = next_event_of_type(&mut ws, "approval.pending").await;
+    let approval_id = pending["payload"]["approval_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Send a bad override. Must fail with kind_mismatch — and crucially,
+    // must NOT abort the timer.
+    let bad = json!({
+        "v": 1, "id": "cmd_bad", "type": "approval.reject",
+        "session_id": session_id,
+        "payload": { "approval_id": approval_id, "option_id": "allow" }
+    });
+    ws.send(Message::Text(bad.to_string().into()))
+        .await
+        .unwrap();
+    let ack = await_ack(&mut ws, "cmd_bad").await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("approval.option_kind_mismatch"));
+
+    // Do nothing else and wait for the timer. It should fire and
+    // emit approval.resolved {outcome:"timeout"}, proving the timer
+    // survived the failed validation. MIN_PERMISSION_TIMEOUT_MS = 10s;
+    // poll up to 14s with a longer per-message timeout than the
+    // standard `T` (5s) so we can outlast the agent's idle gaps.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(14);
+    let resolved = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            panic!("timeout-driven approval.resolved did not arrive");
+        }
+        let msg = match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(m)) => m.unwrap(),
+            _ => panic!("ws closed before timeout-driven approval.resolved"),
+        };
+        let Message::Text(txt) = msg else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        if v.get("type") == Some(&json!("approval.resolved"))
+            && v["payload"]["outcome"] == json!("timeout")
+        {
+            break v;
+        }
+    };
+    assert_eq!(resolved["payload"]["approval_id"], json!(approval_id));
 }
 
 #[tokio::test]
