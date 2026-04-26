@@ -39,6 +39,31 @@ struct Args {
     cli_passthrough: bool,
     bad_session_prompt: bool,
     permission_prompt: bool,
+    /// X.5c.2 deterministic emit flags. When set, every
+    /// `session/prompt` first emits a scripted tool_call /
+    /// tool_call_update sequence and then completes the prompt.
+    /// At most one of these should be set per run.
+    emit_read_tool: bool,
+    emit_edit_tool: bool,
+    emit_execute_tool: bool,
+    emit_failed_tool: bool,
+    /// When set, scripted tool_call_update emits an oversized
+    /// rawOutput (~200 KB) so the bridge's bounded-output helper is
+    /// exercised end-to-end.
+    oversized_output: bool,
+    /// When set in combination with --permission-prompt, the
+    /// scripted tool_call/tool_call_update use a *different*
+    /// toolCallId than the request_permission carried, so the
+    /// bridge must fall back to approval_tool_call_hash for
+    /// X.5c.2 correlation.
+    rotate_tool_call_id: bool,
+    /// When set, after a permission for one toolCall is approved,
+    /// the agent emits a *different* tool_call (different
+    /// toolCallId, different `kind`/title — therefore different
+    /// approval_tool_call_hash) whose only overlap with the
+    /// approved one is `rawInput`. Used by the negative
+    /// correlation test.
+    same_raw_input_different_tool: bool,
 }
 
 fn parse_args() -> Args {
@@ -50,6 +75,13 @@ fn parse_args() -> Args {
             "--crash-after" => a.crash_after = argv.next().and_then(|v| v.parse().ok()),
             "--bad-session-prompt" => a.bad_session_prompt = true,
             "--permission-prompt" => a.permission_prompt = true,
+            "--emit-read-tool" => a.emit_read_tool = true,
+            "--emit-edit-tool" => a.emit_edit_tool = true,
+            "--emit-execute-tool" => a.emit_execute_tool = true,
+            "--emit-failed-tool" => a.emit_failed_tool = true,
+            "--oversized-output" => a.oversized_output = true,
+            "--rotate-tool-call-id" => a.rotate_tool_call_id = true,
+            "--same-raw-input-different-tool" => a.same_raw_input_different_tool = true,
             "--profile" | "--session-id" | "--project" => {
                 let _ = argv.next();
                 a.cli_passthrough = true;
@@ -209,12 +241,19 @@ async fn main() -> Result<()> {
 
                 tokio::spawn(async move {
                     // X.5c.1 — issue session/request_permission first.
+                    // X.5c.2 — the permission's toolCallId becomes the
+                    // anchor for downstream tool_call notifications;
+                    // when --rotate-tool-call-id or
+                    // --same-raw-input-different-tool is set, the
+                    // scripted tool deliberately uses a different id.
+                    let perm_tool_call_id: &str = "tc_perm";
                     if args_clone.permission_prompt {
                         let outcome = match request_permission_round_trip(
                             &stdout_emit,
                             &session_id,
                             &pending_outbound_e,
                             &outbound_next_id_e,
+                            perm_tool_call_id,
                         )
                         .await
                         {
@@ -259,7 +298,7 @@ async fn main() -> Result<()> {
                                     "sessionId": session_id,
                                     "update": {
                                         "sessionUpdate": "tool_call_update",
-                                        "toolCallId": "tc_mock",
+                                        "toolCallId": perm_tool_call_id,
                                         "status": "failed",
                                         "rawOutput": "User refused permission to run tool",
                                         "content": [{
@@ -282,6 +321,13 @@ async fn main() -> Result<()> {
                             return;
                         }
                     }
+
+                    // X.5c.2 — scripted tool_call sequences. Optional;
+                    // emitted before the regular agent_message_chunk
+                    // stream so tests can assert on the
+                    // ObservedToolActivity surface independently.
+                    emit_scripted_tool(&args_clone, &stdout_emit, &session_id, perm_tool_call_id)
+                        .await;
 
                     for chunk in echo_chunks(&prompt_text) {
                         if cancelled_e.load(Ordering::SeqCst) {
@@ -353,6 +399,7 @@ async fn request_permission_round_trip(
     session_id: &str,
     pending: &PendingOutbound,
     next_id: &Arc<AtomicU32>,
+    tool_call_id: &str,
 ) -> Result<Value> {
     let id = next_id.fetch_add(1, Ordering::SeqCst) as u64;
     let (tx, rx) = oneshot::channel();
@@ -364,7 +411,7 @@ async fn request_permission_round_trip(
         "params": {
             "sessionId": session_id,
             "toolCall": {
-                "toolCallId": "tc_mock",
+                "toolCallId": tool_call_id,
                 "kind": "edit",
                 "title": "Mock Tool",
                 "content": [{ "type":"diff", "path":"/tmp/mock", "newText":"x", "oldText":null }],
@@ -381,6 +428,268 @@ async fn request_permission_round_trip(
     writeln_json(stdout, &req).await?;
     let outcome = tokio::time::timeout(Duration::from_secs(30), rx).await??;
     Ok(outcome)
+}
+
+/// X.5c.2 scripted tool emit. Called once per `session/prompt` if any
+/// `--emit-*-tool` flag is set. Determines the toolCallId based on
+/// `--rotate-tool-call-id` / `--same-raw-input-different-tool` so
+/// tests can assert correlation paths.
+async fn emit_scripted_tool(
+    args: &Args,
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    perm_tool_call_id: &str,
+) {
+    if !(args.emit_read_tool
+        || args.emit_edit_tool
+        || args.emit_execute_tool
+        || args.emit_failed_tool)
+    {
+        return;
+    }
+
+    // Pick the toolCallId for downstream notifications.
+    let scripted_tool_call_id = if args.rotate_tool_call_id || args.same_raw_input_different_tool {
+        "tc_after"
+    } else if args.permission_prompt {
+        perm_tool_call_id
+    } else {
+        "tc_script"
+    };
+
+    if args.emit_read_tool {
+        emit_read_sequence(stdout, session_id, scripted_tool_call_id).await;
+    }
+    if args.emit_edit_tool {
+        // For same_raw_input_different_tool, the edit's rawInput must
+        // match the permission's rawInput so the negative correlation
+        // test can prove rawInput-only is not enough.
+        let raw_input = if args.same_raw_input_different_tool {
+            json!({ "file_path": "/tmp/mock", "content": "x" })
+        } else {
+            json!({ "file_path": "/repo/hello.md", "content": "hi from script" })
+        };
+        let title = if args.same_raw_input_different_tool {
+            "Different Tool With Same RawInput"
+        } else {
+            "Write hello.md"
+        };
+        emit_edit_sequence(
+            stdout,
+            session_id,
+            scripted_tool_call_id,
+            title,
+            &raw_input,
+            args.oversized_output,
+        )
+        .await;
+    }
+    if args.emit_execute_tool {
+        emit_execute_sequence(
+            stdout,
+            session_id,
+            scripted_tool_call_id,
+            args.oversized_output,
+        )
+        .await;
+    }
+    if args.emit_failed_tool {
+        emit_failed_sequence(stdout, session_id, scripted_tool_call_id).await;
+    }
+}
+
+async fn emit_read_sequence(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+) {
+    let pending = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "kind": "read",
+                "title": "Read File",
+                "status": "pending",
+                "content": [],
+                "locations": []
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &pending).await;
+    let completed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "read",
+                "status": "completed",
+                "locations": [{ "path": "/repo/notes.txt", "line": 1 }],
+                "rawInput": { "file_path": "/repo/notes.txt" },
+                "rawOutput": "hello world\nthis is line two\n"
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &completed).await;
+}
+
+async fn emit_edit_sequence(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    title: &str,
+    raw_input: &Value,
+    oversized: bool,
+) {
+    let path = raw_input
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("/tmp/mock");
+    let new_text = raw_input
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let pending = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "kind": "edit",
+                "title": "Write",
+                "status": "pending",
+                "content": [],
+                "locations": []
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &pending).await;
+    let with_diff = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "edit",
+                "title": title,
+                "status": "in_progress",
+                "locations": [{ "path": path }],
+                "content": [{
+                    "type": "diff",
+                    "path": path,
+                    "newText": new_text,
+                    "oldText": null
+                }],
+                "rawInput": raw_input
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &with_diff).await;
+    let raw_output = if oversized {
+        Value::String("y".repeat(200_000))
+    } else {
+        Value::String("File written".into())
+    };
+    let completed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "edit",
+                "status": "completed",
+                "rawOutput": raw_output
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &completed).await;
+}
+
+async fn emit_execute_sequence(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    oversized: bool,
+) {
+    let pending = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "kind": "execute",
+                "title": "Bash",
+                "status": "pending",
+                "content": [],
+                "locations": []
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &pending).await;
+    let raw_output = if oversized {
+        Value::String("z".repeat(200_000))
+    } else {
+        Value::String("hello from real bash\n".into())
+    };
+    let completed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "execute",
+                "status": "completed",
+                "rawInput": {
+                    "command": "echo hello from real bash",
+                    "API_KEY": "leaky-secret"
+                },
+                "rawOutput": raw_output
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &completed).await;
+}
+
+async fn emit_failed_sequence(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+) {
+    let failed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "edit",
+                "status": "failed",
+                "rawOutput": "User refused permission to run tool",
+                "content": [{
+                    "type": "content",
+                    "content": { "type": "text", "text": "denied" }
+                }]
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &failed).await;
 }
 
 async fn writeln_json(out: &Arc<Mutex<tokio::io::Stdout>>, v: &Value) -> Result<()> {
