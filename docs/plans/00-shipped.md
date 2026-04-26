@@ -60,6 +60,22 @@ Ported from the `/vacweb` prototype into the live cockpit, gz initial bundle hel
 - Claude Code `--acp` flag flagged **PROVISIONAL/unverified** until handshake test against a real Claude binary lands.
 - Stages X.1–X.8 queued — see [`10-stage-x-agent-runtime.md`](./10-stage-x-agent-runtime.md).
 
+## Stage X — ACP agent runtime
+
+- **X.1–X.4** — bridge + profile core locked at `d136b8a`.
+- **X.5a** — Rust-native ACP client driver.
+- **X.5b** — ACP session handshake + transcript variants mapped.
+- **X.5c.1** — Approval bridge locked at `2987fa2`.
+- **X.5c.2 backend** — Observe-only tool activity events locked at `7eda69f`. All future work on `main`.
+- **X.5c.2 frontend** — Cockpit consumes X.5c.2 events end-to-end:
+  - `toolActivity` Zustand store — activities, ACP job logs, inline review diffs, diagnostics.
+  - `domain/toolActivity/handlers.ts` — 5 event types; defensive parser; no throws.
+  - `ToolActivityLane` — new Activity workbench tab (kind/status/provenance/observed-only badges).
+  - `ReviewTab` — ACP inline diffs (old/new text side-by-side, new-file state, approved badge).
+  - `RuntimeTab` — ACP execute log (command, output, redaction/truncation notices).
+  - 235 total tests pass. `ToolActivityLane` lazy-split at 4.18 kB gzip. Capability guard: clean.
+  - Observe-only boundary preserved. No X.5c.3.
+
 ## Held / not started
 
 - **Stage K (VIL / VWFD live integration)** — placeholder UI only; held pending upstream `vil-expr` event names + schemas. See [`30-stage-k-vil-vwfd.md`](./30-stage-k-vil-vwfd.md).

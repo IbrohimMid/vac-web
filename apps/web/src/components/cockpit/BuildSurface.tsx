@@ -15,6 +15,7 @@ import { useShell } from '../../stores/shell';
 import { useApprovals } from '../../stores/approvals';
 import { useAssessment } from '../../stores/assessment';
 import { useReview } from '../../stores/review';
+import { useToolActivity } from '../../stores/toolActivity';
 import { useRuntime } from '../../stores/runtime';
 import { useHandoff } from '../../stores/handoff';
 import { useGates } from '../../stores/gates';
@@ -26,6 +27,9 @@ import { Icon } from './primitives';
 const ApprovalsTab = lazy(() =>
   import('../Approvals/ApprovalsTab').then((m) => ({ default: m.ApprovalsTab })),
 );
+const ToolActivityLane = lazy(() =>
+  import('../toolActivity/ToolActivityLane').then((m) => ({ default: m.ToolActivityLane })),
+);
 const ReviewTab = lazy(() =>
   import('../Review/ReviewTab').then((m) => ({ default: m.ReviewTab })),
 );
@@ -36,7 +40,7 @@ const HandoffTab = lazy(() =>
   import('../Handoff/HandoffTab').then((m) => ({ default: m.HandoffTab })),
 );
 
-type WBTabId = 'approvals' | 'review' | 'agents' | 'runtime' | 'plan' | 'vil' | 'vwfd' | 'memory';
+type WBTabId = 'approvals' | 'review' | 'activity' | 'agents' | 'runtime' | 'plan' | 'vil' | 'vwfd' | 'memory';
 
 interface WBTab {
   id: WBTabId;
@@ -46,6 +50,7 @@ interface WBTab {
 const WB_TABS: WBTab[] = [
   { id: 'approvals', label: 'Approvals' },
   { id: 'review', label: 'Review' },
+  { id: 'activity', label: 'Activity' },
   { id: 'agents', label: 'Agents' },
   { id: 'runtime', label: 'Runtime' },
   { id: 'plan', label: 'Plan' },
@@ -130,12 +135,14 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
     return n;
   });
   const packets = useHandoff((s) => s.order.length);
+  const toolActivityCount = useToolActivity((s) => s.activityOrder.length);
 
   const countFor = (id: WBTabId): number | null => {
     if (id === 'approvals') return pendingApprovals || null;
     if (id === 'review') return reviewFiles || null;
     if (id === 'runtime') return runningJobs || null;
     if (id === 'plan') return packets || null;
+    if (id === 'activity') return toolActivityCount || null;
     return null;
   };
 
@@ -171,6 +178,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
         <Suspense fallback={<TabFallback />}>
           {tab === 'approvals' && <ApprovalsTab transport={transport} />}
           {tab === 'review' && <ReviewTab transport={transport} />}
+          {tab === 'activity' && <ToolActivityLane />}
           {tab === 'agents' && <AgentsView />}
           {tab === 'runtime' && <RuntimeTab transport={transport} />}
           {tab === 'plan' && <PlanView transport={transport} />}

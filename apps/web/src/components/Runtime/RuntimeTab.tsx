@@ -1,7 +1,8 @@
-// Runtime tab: job list + selected-job log tail. Cancel in-flight jobs.
+// Runtime tab: job list + selected-job log tail + X.5c.2 ACP execute stream.
 
 import { useState } from 'react';
 import { useRuntime } from '../../stores/runtime';
+import { useToolActivity } from '../../stores/toolActivity';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
@@ -16,6 +17,17 @@ export function RuntimeTab({ transport }: Props) {
   const sessionId = useSession((s) => s.sessionId);
   const [selected, setSelected] = useState<string | null>(order[0] ?? null);
 
+  // X.5c.2 ACP execute log stream (observe-only)
+  const acpLogOrder = useToolActivity((s) => s.acpLogOrder);
+  const acpLogs = useToolActivity((s) => s.acpLogs);
+  const prefix = sessionId ? `${sessionId}\x00` : null;
+  const acpEntries = prefix
+    ? acpLogOrder
+        .filter((k) => k.startsWith(prefix))
+        .map((k) => acpLogs.get(k))
+        .filter((x) => x != null)
+    : [];
+
   const cancel = async (id: string) => {
     if (!transport || !sessionId) return;
     try {
@@ -25,71 +37,166 @@ export function RuntimeTab({ transport }: Props) {
     }
   };
 
-  if (order.length === 0) {
+  if (order.length === 0 && acpEntries.length === 0) {
     return <div style={{ padding: 16, color: 'var(--text-2)' }}>No jobs.</div>;
   }
 
-  const selectedLogs = selected ? logs.get(selected) ?? [] : [];
+  const selectedLogs = selected ? (logs.get(selected) ?? []) : [];
 
   return (
-    <div
-      role="region"
-      aria-label="Runtime jobs"
-      style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 8 }}
-    >
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-        {order.map((id) => {
-          const j = jobsMap.get(id);
-          if (!j) return null;
-          return (
-            <li
-              key={id}
-              onClick={() => setSelected(id)}
-              style={{
-                padding: 8,
-                borderBottom: '1px solid var(--border-1, #2a2a2a)',
-                background: selected === id ? 'var(--bg-2, #222)' : 'transparent',
-                cursor: 'pointer',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <strong>{j.label}</strong>
-                <span style={{ fontSize: 11 }}>{j.status}</span>
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{j.kind}</div>
-              {(j.status === 'running' || j.status === 'pending') && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void cancel(id);
+    <div>
+      {order.length > 0 && (
+        <div
+          role="region"
+          aria-label="Runtime jobs"
+          style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 8 }}
+        >
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {order.map((id) => {
+              const j = jobsMap.get(id);
+              if (!j) return null;
+              return (
+                <li
+                  key={id}
+                  onClick={() => setSelected(id)}
+                  style={{
+                    padding: 8,
+                    borderBottom: '1px solid var(--border-1, #2a2a2a)',
+                    background: selected === id ? 'var(--bg-2, #222)' : 'transparent',
+                    cursor: 'pointer',
                   }}
-                  style={{ marginTop: 4, fontSize: 11 }}
                 >
-                  Cancel
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      <pre
-        style={{
-          background: 'var(--bg-2, #111)',
-          padding: 8,
-          margin: 0,
-          overflow: 'auto',
-          maxHeight: 400,
-          fontSize: 12,
-        }}
-      >
-        {selectedLogs.length === 0
-          ? '(no logs yet)'
-          : selectedLogs.map((l, i) => (
-              <div key={i} style={{ color: l.stream === 'stderr' ? 'var(--sev-error)' : undefined }}>
-                {l.text}
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <strong>{j.label}</strong>
+                    <span style={{ fontSize: 11 }}>{j.status}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>{j.kind}</div>
+                  {(j.status === 'running' || j.status === 'pending') && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void cancel(id);
+                      }}
+                      style={{ marginTop: 4, fontSize: 11 }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          <pre
+            style={{
+              background: 'var(--bg-2, #111)',
+              padding: 8,
+              margin: 0,
+              overflow: 'auto',
+              maxHeight: 400,
+              fontSize: 12,
+            }}
+          >
+            {selectedLogs.length === 0
+              ? '(no logs yet)'
+              : selectedLogs.map((l, i) => (
+                  <div
+                    key={i}
+                    style={{ color: l.stream === 'stderr' ? 'var(--sev-error)' : undefined }}
+                  >
+                    {l.text}
+                  </div>
+                ))}
+          </pre>
+        </div>
+      )}
+
+      {acpEntries.length > 0 && (
+        <div
+          role="region"
+          aria-label="ACP execute log"
+          style={{ marginTop: order.length > 0 ? 16 : 0 }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--text-2)',
+              padding: '4px 8px',
+              borderBottom: '1px solid var(--border)',
+              background: 'var(--surface-1)',
+            }}
+          >
+            ACP execute log ({acpEntries.length})
+          </div>
+          {acpEntries.map((e) => (
+            <div
+              key={e!.tool_call_id}
+              style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: 12 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                {e!.command && (
+                  <code
+                    aria-label="Command"
+                    style={{
+                      background: 'var(--surface-2)',
+                      padding: '1px 6px',
+                      borderRadius: 3,
+                      fontSize: 11,
+                    }}
+                  >
+                    {e!.command}
+                  </code>
+                )}
+                <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{e!.status}</span>
+                {e!.approved_by_approval_id && (
+                  <span
+                    aria-label="Approved by you"
+                    style={{
+                      fontSize: 10,
+                      padding: '1px 5px',
+                      borderRadius: 3,
+                      background: 'var(--ok)',
+                      color: '#fff',
+                    }}
+                  >
+                    Approved by you
+                  </span>
+                )}
+                {e!.redacted && (
+                  <span aria-label="Output redacted" style={{ fontSize: 10, color: 'var(--warn)' }}>
+                    Output redacted
+                  </span>
+                )}
+                {e!.truncated && (
+                  <span aria-label="Output truncated" style={{ fontSize: 10, color: 'var(--text-2)' }}>
+                    Output truncated
+                  </span>
+                )}
               </div>
-            ))}
-      </pre>
+              {e!.output && (
+                <pre
+                  style={{
+                    margin: '6px 0 0',
+                    padding: '4px 6px',
+                    background: 'var(--surface-2)',
+                    borderRadius: 3,
+                    fontSize: 11,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    maxHeight: 200,
+                    overflow: 'auto',
+                  }}
+                >
+                  {e!.output}
+                </pre>
+              )}
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-2)' }}>
+                {new Date(e!.ts).toLocaleTimeString()}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
