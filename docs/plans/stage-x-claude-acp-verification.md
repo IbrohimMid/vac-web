@@ -382,12 +382,20 @@ request reached the harness. Sequence:
 5. `session/update :: agent_message_chunk` × 3.
 6. `session/update :: usage_update` interleaved.
 
-**Bridge implication.** For agents that read locally (which is the
-default for Claude), `fs/read_text_file` is *not* the surface to
-gate. Read enforcement happens by inspecting `tool_call_update`
-content — `kind:"read"`, `locations[].path`, `_meta.claudeCode.toolResponse.file`.
-The bridge can surface this through `review.changeset_updated` (or a
-read-only equivalent) without ever serving an `fs/*` request.
+**Bridge implication — corrected.** For agents that read locally
+(which is the default for Claude), `fs/read_text_file` is **not the
+preventive control surface**. The `tool_call_update` arrives **after
+or during** the agent-owned read, not before it. So the bridge can:
+
+- **observe** read activity (`kind:"read"`, `locations[].path`,
+  `_meta.claudeCode.toolResponse.file`) and route it to Activity /
+  Context / Audit;
+- **flag** policy violations after the fact and stop the next
+  prompt;
+
+…but it **cannot prevent** a forbidden read on Claude 0.31.0 from
+this surface alone. Preventive read policy needs a separate control
+plane — see §13.6 X.5c.3.
 
 ### 13.2 Write tool — `session/request_permission` confirmed
 
@@ -464,13 +472,16 @@ reached the harness. The flow looked identical to the Read flow:
 `tool_call` (pending) → `tool_call_update` (with rawInput) →
 `tool_call_update` (with rawOutput + status:"completed").
 
-**Bridge implication.** Terminal RPCs in `claude-agent-acp@0.31.0`
-are not part of the normal Bash path. They may surface for explicit
-interactive-terminal subcommands or other ACP agents — keep the
-client method handlers ready for X.5c, but **don't depend on them**
-for shell enforcement. Shell enforcement piggybacks on
-`tool_call_update` for `kind:"execute"` (or whatever `_meta.claudeCode.toolName`
-labels show up under), same shape as Read/Write.
+**Bridge implication — corrected.** Terminal RPCs in
+`claude-agent-acp@0.31.0` are not part of the normal Bash path. They
+may surface for explicit interactive-terminal subcommands or other
+ACP agents — keep the client method handlers ready for X.5c, but
+**don't depend on them for preventive shell enforcement on Claude
+today**. The `tool_call_update` for Bash arrives during/after the
+agent-run command, not before, so the same observe/flag-but-can't-
+prevent rule from §13.1 applies. Shell **observability** can hang
+off `tool_call_update`; preventive shell policy needs the same
+control plane work as read enforcement (§13.6 X.5c.3).
 
 ### 13.5 Session-level metadata captured at `session/new`
 
@@ -488,42 +499,104 @@ Real `session/new` response carries (besides `sessionId`):
 The bridge keeps these as `Value` for X.5b (already wired) and the
 web surface can render them when X.5c lands the picker.
 
-### 13.6 X.5c design implications
+### 13.6 X.5c design implications — split into three substages
 
-1. **Approval bridge target.** `session/request_permission` is the
-   X.5c hook. Translation:
-   - **Inbound** ACP request → bridge enqueues `approval.pending`
-     event with the `toolCall` payload and `options[]` translated to
-     bridge approval options (preserve `optionId` for round-trip
-     correctness).
-   - **Outbound** ACP response: `approval.approve` selects a
-     non-reject `optionId`; `approval.reject` selects the
-     `reject_once` (or `reject_always`) option; timeout selects
-     `cancelled`.
-2. **Preferred default option mapping.** Profile policy decides
-   which `kind` the bridge accepts. e.g. `executor.code` may auto-
-   approve `kind:"allow_once"` for paths inside `fs.scoped_paths`
-   and force user approval for `allow_always`.
-3. **Read tool surfacing.** Don't expect `fs/read_text_file` for
-   Claude — render `tool_call_update` with `kind:"read"` directly
-   into the Build "Read" lane and apply `profile_layer` deny-globs
-   against `locations[].path`.
-4. **Write tool surfacing.** `tool_call_update` with `kind:"edit"`
-   carries the diff in `content[]`. Map directly into
-   `review.changeset_updated` so the diff appears alongside the
-   approval prompt.
-5. **Bash surfacing.** Same shape as Read — render `tool_call_update`
-   into the Runtime lane. Apply `shell_allowlist` against the
-   command extracted from `rawInput`.
-6. **`fs/read_text_file` / `fs/write_text_file` / `terminal/*`
-   handlers stay in X.5c.** Even though Claude doesn't currently call
-   them, other ACP agents (and possibly future Claude versions for
-   IDE-mediated reads) will. The handlers should:
-   - Resolve path through `profile_layer::enforce_fs_read/write`
-     against the pinned project root.
-   - Surface every successful write through
-     `review.changeset_updated`.
-   - Reject denied paths with `RequestError(-32603, ...)`.
+The capture pass distinguishes what the bridge can *prevent* from
+what it can only *observe*. X.5c is therefore split:
+
+#### X.5c.1 — Approval bridge for `session/request_permission` (GO)
+
+Preventive control. The agent **waits** for the response before
+acting, so this is real bridge-side enforcement.
+
+- **Inbound** ACP `session/request_permission` → bridge holds the
+  JSON-RPC id open, emits VAC `approval.pending` event carrying the
+  `toolCall` payload and `options[]` (preserve every `optionId` and
+  `kind` so the response can round-trip).
+- **Outbound**:
+  - `approval.approve { approvalId, optionId }` →
+    `{ outcome: { outcome: "selected", optionId } }`.
+    Default `optionId` selection is the option whose `kind` matches
+    the bridge's policy preference (`allow_once` first, `allow_always`
+    only if profile policy allows persistent permission).
+  - `approval.reject { approvalId, optionId? }` →
+    `{ outcome: { outcome: "selected", optionId: <reject_once or
+    reject_always> } }`. Note rejection wire shape uses
+    `"selected"` — the *intent* is encoded in the chosen option's
+    `kind`. Bridge must preserve `optionId`; **don't infer from
+    outcome alone**.
+  - Timeout (default 5 min, configurable per agent in `agents.toml`'s
+    `permission_timeout_ms`) →
+    `{ outcome: { outcome: "cancelled" } }`.
+- Audit row: `toolCallId, kind, locations, args_hash, optionId,
+  outcome, actor, ts`.
+- `allow_always` is gated: profile policy decides whether persistent
+  permission is acceptable. For `executor.code`, prefer surfacing it
+  to the user as a separate UI choice rather than auto-applying.
+
+#### X.5c.2 — Tool activity observation mapping (GO)
+
+Observe-only. Maps the agent-emitted `tool_call` /
+`tool_call_update` notifications into existing VAC events. Provides
+audit trails and renders diff/log content in the surfaces, but does
+**not** claim preventive enforcement on its own.
+
+- `tool_call_update` `kind:"read"` →
+  Activity / Context / Audit (read activity stream).
+  Tag as `observed read`, not `enforced read`.
+- `tool_call_update` `kind:"edit"` →
+  `review.changeset_updated` with the diff from `content[].newText`/
+  `oldText` and the path from `locations[]`. When this arrives
+  alongside an in-flight approval (X.5c.1), correlate by
+  `toolCallId`.
+- `tool_call_update` `kind:"execute"` (or whatever Bash surfaces as
+  in `_meta.claudeCode.toolName`) →
+  Runtime job stream. `rawInput` carries the command, `rawOutput`
+  the result.
+- `usage_update` →
+  agents-lane token-usage telemetry (already wired in X.5b at debug;
+  promote to a real event).
+- `plan` →
+  `plan.updated`.
+
+Failure framing: when `tool_call_update.status:"failed"` carries
+`rawOutput:"User refused permission to run tool"` (the X.5c.1 reject
+path), surface as a *task-level* failure in Review/Runtime — not a
+session-level error. Prompt continues with `stopReason:"end_turn"`.
+
+#### X.5c.3 — Preventive read/shell enforcement (HOLD — design only)
+
+The capture pass shows Claude 0.31.0 doesn't ask the bridge before
+reading or running Bash. Preventive control needs one of:
+
+1. **Provider-mode hardening.** Drive Claude with a `mode` (from
+   §13.5 `modes.availableModes[]`) that forces permission prompts
+   on more tool kinds. `dontAsk` and `bypassPermissions` are the two
+   poles; `default` is what we observed today; `acceptEdits`
+   auto-approves edits without asking. None of the documented modes
+   explicitly forces *read* through `request_permission` — confirm
+   by capture before depending on it.
+2. **Sandbox / restricted project copy.** Spawn the agent in a
+   chroot, container, or shadow checkout the bridge controls.
+   Agent-internal reads/shell hit only the sandbox; bridge proxies
+   reads/writes back to the real repo through `fs/read_text_file`
+   and `fs/write_text_file` — which the agent **will** then use,
+   because the sandbox view is incomplete.
+3. **Force tool mediation.** If a future ACP version exposes a
+   capability flag forcing all tool I/O through Client RPCs,
+   advertise it. Not present in 0.20.x.
+4. **Profile-class restriction.** Reject Claude (`agent_kind=acp`)
+   from any profile that requires preventive read/shell control —
+   already partially in place via `allowed_agent_kinds`; X.5c.3
+   formalizes the *why* (assessor.* and executor.release stay
+   denied because read/shell preflight isn't possible).
+5. **Trusted local-Build mode.** Treat Claude inside `executor.code`
+   Build sessions as trusted-local-agent with audit-only
+   read/shell. Acceptable for dev; not for assessor/release/security.
+
+**Decision deferred** until a sandbox/sandbox-shim spike runs.
+X.5c.3 is the gate before Claude can back any profile beyond
+`executor.code` Build flows.
 
 ### 13.7 Captures status
 
@@ -546,8 +619,9 @@ web surface can render them when X.5c lands the picker.
     treat as future variant.
 ```
 
-§10 go/no-go checklist now reads **6/6 for X.5c**. X.5c
-implementation can begin on explicit go.
+§10 go/no-go checklist now reads **6/6 for X.5c.1 + X.5c.2**.
+X.5c.3 (preventive read/shell enforcement) stays **HOLD** pending
+the sandbox spike.
 
 ---
 
