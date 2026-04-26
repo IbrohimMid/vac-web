@@ -5,14 +5,14 @@
 **Audience**: anyone implementing Stage X.1+ or auditing the resulting
 implementation against the locked design
 
-> **Provisional flag posture**: this document treats Claude Code's `--acp`
-> CLI mode as **provisional and unverified locally**. Stage X.0 ships the
-> design; Stage X.3 ships the generic ACP driver. Stage X.3 must NOT start
-> until the project owner runs `claude --help && claude --version &&
-> claude --acp --help` (or equivalent) on a real machine and pins a
-> working version. If `--acp` is not stable, the blueprint allows
-> alternate paths (wrapper subprocess, version pin, alternate machine
-> protocol) without rewriting Stage X.
+> **Provisional flag posture**: this document treats Claude ACP as the
+> dedicated adapter package `@agentclientprotocol/claude-agent-acp`
+> (binary `claude-agent-acp`) rather than the global `claude` CLI's
+> `--acp` mode. Stage X.0 ships the design; Stage X.3 ships the generic
+> ACP driver. Claude smoke requires a real `ANTHROPIC_API_KEY`; Claude
+> OAuth login from `claude` is not used by the adapter. Keep the bridge
+> authority boundary intact and pin the adapter in a fixture or install
+> the package explicitly when running smoke locally.
 
 ---
 
@@ -986,11 +986,12 @@ pnpm --filter @vac-web/web test
 pnpm --filter @vac-web/web build
 ```
 
-Provider smoke (skip in CI unless binary present):
+Provider smoke (skip in CI unless adapter present):
 
 ```bash
+export ANTHROPIC_API_KEY=...
 VAC_WEB_ACP_DEBUG=1 \
-VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude.toml \
+VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude-agent-acp.toml \
 cargo test -p local-bridge claude_acp_smoke -- --ignored
 ```
 

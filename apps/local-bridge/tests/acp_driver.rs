@@ -28,7 +28,10 @@ use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
-const T: Duration = Duration::from_secs(5);
+const WS_T: Duration = Duration::from_secs(5);
+const REAL_PROVIDER_SESSION_T: Duration = Duration::from_secs(30);
+const REAL_PROVIDER_PROMPT_T: Duration = Duration::from_secs(60);
+const T: Duration = WS_T;
 
 fn target_root() -> PathBuf {
     let m = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -46,6 +49,47 @@ fn mock_acp_bin() -> PathBuf {
         }
     }
     panic!("mock-acp binary missing — run `cargo build -p mock-acp`")
+}
+
+fn resolve_smoke_agents_config_path() -> PathBuf {
+    let raw = std::env::var_os("VAC_WEB_AGENTS_CONFIG").unwrap_or_else(|| {
+        panic!("set VAC_WEB_AGENTS_CONFIG to the Claude/OpenCode adapter fixture")
+    });
+    let raw_path = PathBuf::from(raw);
+    if raw_path.is_absolute() {
+        if raw_path.exists() {
+            return raw_path;
+        }
+        panic!(
+            "VAC_WEB_AGENTS_CONFIG path does not exist: {}",
+            raw_path.display()
+        );
+    }
+    if raw_path.exists() {
+        return raw_path;
+    }
+    let repo_path = if raw_path.components().count() == 1 {
+        target_root().join("fixtures").join(&raw_path)
+    } else {
+        target_root().join(&raw_path)
+    };
+    if repo_path.exists() {
+        return repo_path;
+    }
+    panic!(
+        "VAC_WEB_AGENTS_CONFIG path not found from cwd ({}) or repo root ({})",
+        raw_path.display(),
+        repo_path.display()
+    );
+}
+
+fn load_smoke_registry() -> AgentRuntimeRegistry {
+    let path = resolve_smoke_agents_config_path();
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("load agent registry from {} failed: {}", path.display(), e));
+    let cfg = AgentsConfig::from_toml_str(&src, &path)
+        .unwrap_or_else(|e| panic!("parse agent registry from {} failed: {}", path.display(), e));
+    AgentRuntimeRegistry::from_config(cfg, ConfigSource::EnvFile(path))
 }
 
 fn build_acp_registry(extra_args: Vec<String>) -> AgentRuntimeRegistry {
@@ -154,6 +198,98 @@ async fn create_session(ws: &mut Ws, profile_id: &str) -> String {
     create_session_at(ws, profile_id, "/tmp/x").await
 }
 
+#[derive(Default)]
+struct SmokeTrace {
+    seen_event_types: Vec<String>,
+    last_event_type: Option<String>,
+    last_payload_preview: Option<String>,
+}
+
+impl SmokeTrace {
+    fn record(&mut self, event: &Value) {
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing>")
+            .to_string();
+        if std::env::var_os("VAC_WEB_ACP_DEBUG").is_some() {
+            eprintln!(
+                "[acp-smoke] event type={} payload={}",
+                event_type,
+                event_preview(event)
+            );
+        }
+        self.last_event_type = Some(event_type.clone());
+        self.last_payload_preview = Some(event_preview(event));
+        self.seen_event_types.push(event_type);
+        if self.seen_event_types.len() > 32 {
+            self.seen_event_types.remove(0);
+        }
+    }
+
+    fn panic_timeout(&self, phase: &str, expected: &str, timeout: Duration) -> ! {
+        panic!(
+            "ACP smoke timeout during {} waiting for {} after {:?}\nseen event types: [{}]\nlast event: {}",
+            phase,
+            expected,
+            timeout,
+            self.seen_event_types.join(", "),
+            self.last_event_summary()
+        );
+    }
+
+    fn last_event_summary(&self) -> String {
+        match (&self.last_event_type, &self.last_payload_preview) {
+            (Some(t), Some(preview)) => format!("type={} payload={}", t, preview),
+            (Some(t), None) => format!("type={} payload=<none>", t),
+            _ => "<none>".to_string(),
+        }
+    }
+}
+
+fn event_preview(event: &Value) -> String {
+    let payload = event.get("payload").unwrap_or(event);
+    let mut preview = serde_json::to_string(payload).unwrap_or_else(|_| "<unserializable>".into());
+    if preview.len() > 384 {
+        preview.truncate(384);
+        preview.push_str("...[truncated]");
+    }
+    preview
+}
+
+async fn next_text_frame_with_trace(
+    ws: &mut Ws,
+    phase: &str,
+    expected: &str,
+    timeout: Duration,
+    trace: &mut SmokeTrace,
+) -> Value {
+    loop {
+        let msg = match tokio::time::timeout(timeout, ws.next()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => trace.panic_timeout(phase, expected, timeout),
+            Err(_) => trace.panic_timeout(phase, expected, timeout),
+        };
+        let msg = msg.unwrap_or_else(|e| {
+            panic!(
+                "ACP smoke websocket error during {} waiting for {}: {}",
+                phase, expected, e
+            )
+        });
+        let Message::Text(txt) = msg else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap_or_else(|e| {
+            panic!(
+                "ACP smoke invalid JSON during {} waiting for {}: {}; raw={}",
+                phase, expected, e, txt
+            )
+        });
+        trace.record(&v);
+        return v;
+    }
+}
+
 async fn create_session_at(ws: &mut Ws, profile_id: &str, project_root: &str) -> String {
     let cmd = json!({
         "v": 1,
@@ -179,6 +315,35 @@ async fn create_session_at(ws: &mut Ws, profile_id: &str, project_root: &str) ->
             return v["session_id"].as_str().unwrap().to_string();
         }
         if v.get("type") == Some(&json!("server_ack")) && v.get("ok") == Some(&json!(false)) {
+            panic!("session.create ack failed: {v}");
+        }
+    }
+}
+
+async fn create_session_at_with_trace(
+    ws: &mut Ws,
+    profile_id: &str,
+    project_root: &str,
+    timeout: Duration,
+    trace: &mut SmokeTrace,
+) -> String {
+    let cmd = json!({
+        "v": 1,
+        "id": "c1",
+        "type": "session.create",
+        "session_id": "",
+        "payload": { "profile_id": profile_id, "project_root": project_root }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    loop {
+        let v =
+            next_text_frame_with_trace(ws, "session.create", "session.ready", timeout, trace).await;
+        if v.get("type") == Some(&json!("session.ready")) {
+            return v["session_id"].as_str().unwrap().to_string();
+        }
+        if v.get("ackOf") == Some(&json!("c1")) && v.get("ok") == Some(&json!(false)) {
             panic!("session.create ack failed: {v}");
         }
     }
@@ -269,9 +434,14 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
         Ok("1"),
         "run ACP smoke with VAC_WEB_ACP_DEBUG=1"
     );
+    if expected_agent_id == "claude-acp" {
+        assert!(
+            std::env::var_os("ANTHROPIC_API_KEY").is_some(),
+            "Claude ACP smoke requires ANTHROPIC_API_KEY; claude.ai OAuth login from `claude` is not used by the adapter"
+        );
+    }
 
-    let registry =
-        AgentRuntimeRegistry::load().expect("load agent registry from VAC_WEB_AGENTS_CONFIG");
+    let registry = load_smoke_registry();
     let default_agent = registry.default_agent();
     assert_eq!(
         default_agent.kind,
@@ -287,7 +457,15 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
     let mut ws = connect_hello(&url).await;
     let project_root = target_root();
     let project_root_str = project_root.display().to_string();
-    let session_id = create_session_at(&mut ws, "executor.code@1.0.0", &project_root_str).await;
+    let mut trace = SmokeTrace::default();
+    let session_id = create_session_at_with_trace(
+        &mut ws,
+        "executor.code@1.0.0",
+        &project_root_str,
+        REAL_PROVIDER_SESSION_T,
+        &mut trace,
+    )
+    .await;
 
     let submit = json!({
         "v": 1,
@@ -304,14 +482,25 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
     let mut saw_delta = false;
     let mut terminal_seen: Option<Value> = None;
     while !(saw_submit_ack && saw_prompt_debug && saw_delta) {
-        let Some(msg) = tokio::time::timeout(T, ws.next()).await.unwrap() else {
-            panic!("ws closed waiting for ACP smoke prompt flow");
+        let expected = match (saw_submit_ack, saw_prompt_debug, saw_delta) {
+            (false, _, _) => "ackOf cmd_msg",
+            (true, false, false) => "acp.debug_message session/prompt or transcript.delta",
+            (true, true, false) => "transcript.delta",
+            (true, false, true) => "acp.debug_message session/prompt",
+            _ => "prompt flow",
         };
-        let Message::Text(txt) = msg.unwrap() else {
-            continue;
-        };
-        let v: Value = serde_json::from_str(&txt).unwrap();
+        let v = next_text_frame_with_trace(
+            &mut ws,
+            "prompt",
+            expected,
+            REAL_PROVIDER_PROMPT_T,
+            &mut trace,
+        )
+        .await;
         if v.get("ackOf") == Some(&json!("cmd_msg")) {
+            if v.get("ok") == Some(&json!(false)) {
+                panic!("ACP smoke prompt submit failed: {v}");
+            }
             assert_eq!(v["ok"], json!(true));
             saw_submit_ack = true;
             continue;
@@ -353,7 +542,19 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
         .await
         .unwrap();
     if terminal_seen.is_some() {
-        let cancel_ack = await_ack(&mut ws, "cmd_cancel").await;
+        let cancel_ack = loop {
+            let v = next_text_frame_with_trace(
+                &mut ws,
+                "cancel",
+                "ackOf cmd_cancel",
+                REAL_PROVIDER_PROMPT_T,
+                &mut trace,
+            )
+            .await;
+            if v.get("ackOf") == Some(&json!("cmd_cancel")) {
+                break v;
+            }
+        };
         assert_eq!(cancel_ack["ok"], json!(true));
         return;
     }
@@ -361,14 +562,23 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
     let mut saw_cancel_ack = false;
     let mut terminal: Option<Value> = None;
     while !(saw_cancel_ack && terminal.is_some()) {
-        let Some(msg) = tokio::time::timeout(T, ws.next()).await.unwrap() else {
-            panic!("ws closed waiting for ACP smoke cancel flow");
+        let expected = if !saw_cancel_ack {
+            "ackOf cmd_cancel"
+        } else {
+            "transcript.completed or transcript.error"
         };
-        let Message::Text(txt) = msg.unwrap() else {
-            continue;
-        };
-        let v: Value = serde_json::from_str(&txt).unwrap();
+        let v = next_text_frame_with_trace(
+            &mut ws,
+            "cancel",
+            expected,
+            REAL_PROVIDER_PROMPT_T,
+            &mut trace,
+        )
+        .await;
         if v.get("ackOf") == Some(&json!("cmd_cancel")) {
+            if v.get("ok") == Some(&json!(false)) {
+                panic!("ACP smoke cancel submit failed: {v}");
+            }
             assert_eq!(v["ok"], json!(true));
             saw_cancel_ack = true;
             continue;
@@ -391,7 +601,7 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
 #[tokio::test]
 #[ignore]
 async fn claude_acp_smoke() {
-    run_acp_smoke("claude", "ACP smoke: respond with one short sentence.").await;
+    run_acp_smoke("claude-acp", "ACP smoke: respond with one short sentence.").await;
 }
 
 #[tokio::test]

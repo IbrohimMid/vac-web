@@ -6,8 +6,12 @@ round-trip without enabling filesystem or terminal capabilities.
 
 ## Prerequisites
 
-- The provider binary must be installed and available on `PATH`
-  (`claude` or `opencode`).
+- Claude smoke uses the ACP adapter package
+  `@agentclientprotocol/claude-agent-acp` via the bundled fixture, not
+  the global `claude --acp` CLI.
+- Claude smoke also requires a valid `ANTHROPIC_API_KEY`; claude.ai
+  OAuth login is not enough for the adapter.
+- OpenCode smoke still uses the `opencode` binary on `PATH`.
 - Set `VAC_WEB_ACP_DEBUG=1` so the bridge mirrors ACP wire traffic as
   `acp.debug_message`.
 - Point `VAC_WEB_AGENTS_CONFIG` at an ACP agent config for the
@@ -17,7 +21,7 @@ round-trip without enabling filesystem or terminal capabilities.
 
 Use the bundled fixtures:
 
-- [fixtures/agents.claude.toml](../fixtures/agents.claude.toml)
+- [fixtures/agents.claude-agent-acp.toml](../fixtures/agents.claude-agent-acp.toml)
 - [fixtures/agents.opencode.toml](../fixtures/agents.opencode.toml)
 
 ## Commands
@@ -25,8 +29,9 @@ Use the bundled fixtures:
 Claude smoke:
 
 ```bash
+export ANTHROPIC_API_KEY=...
 VAC_WEB_ACP_DEBUG=1 \
-VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude.toml \
+VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude-agent-acp.toml \
 cargo test -p local-bridge claude_acp_smoke -- --ignored
 ```
 

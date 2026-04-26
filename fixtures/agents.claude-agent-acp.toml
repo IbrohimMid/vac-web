@@ -1,4 +1,4 @@
-# Legacy alias kept for compatibility. Prefer agents.claude-agent-acp.toml.
+# Canonical Claude ACP adapter fixture for @agentclientprotocol/claude-agent-acp.
 default_agent = "claude-acp"
 
 [agents.claude-acp]
