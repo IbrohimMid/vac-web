@@ -14,7 +14,7 @@ pub struct AppState {
     pub started_at: Instant,
     pub sessions: SessionRegistry,
     pub auth: AuthState,
-    pub audit: AuditFacility,
+    pub audit: Arc<AuditFacility>,
     pub pairing: PairingStore,
     pub profile_root: std::path::PathBuf,
 }

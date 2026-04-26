@@ -2,9 +2,11 @@
 
 use super::handle::{SessionHandle, SessionHandleRef, SpawnOptions};
 use crate::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry};
+use crate::audit::AuditFacility;
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::info;
 
@@ -12,6 +14,11 @@ use tracing::info;
 pub struct SessionRegistry {
     inner: Arc<DashMap<String, SessionHandleRef>>,
     agents: Arc<AgentRuntimeRegistry>,
+    /// Optional audit sink. Set once via [`attach_audit`] after AppState
+    /// constructs the AuditFacility, so the X.5c.2 tool-activity path
+    /// can write `tool.observed` / `tool.updated` / `tool.failed` rows
+    /// without piping through the translator.
+    audit: Arc<OnceLock<Arc<AuditFacility>>>,
 }
 
 impl SessionRegistry {
@@ -31,9 +38,18 @@ impl SessionRegistry {
         let reg = Self {
             inner: Arc::new(DashMap::new()),
             agents,
+            audit: Arc::new(OnceLock::new()),
         };
         reg.spawn_reaper();
         reg
+    }
+
+    /// Stage X.5c.2 — attach the AppState's audit handle so spawned
+    /// sessions can write tool-activity audit rows. Idempotent: safe
+    /// to call multiple times with the same Arc; subsequent different
+    /// values are silently ignored (tests rely on first-wins).
+    pub fn attach_audit(&self, audit: Arc<AuditFacility>) {
+        let _ = self.audit.set(audit);
     }
 
     pub fn agents(&self) -> &AgentRuntimeRegistry {
@@ -78,6 +94,7 @@ impl SessionRegistry {
             profile_id,
             project_root,
             agent,
+            audit: self.audit.get().cloned(),
         };
         let handle = SessionHandle::spawn(opts).await?;
         self.inner.insert(session_id.clone(), Arc::clone(&handle));

@@ -66,6 +66,8 @@ pub struct AcpRuntime {
     /// X.5c.2 correlation: approval_tool_call_hash → resolved approval
     /// (fallback for when the agent rotates / omits toolCallId).
     pub(crate) approval_by_full_hash: dashmap::DashMap<String, ResolvedApprovalCacheEntry>,
+    /// X.5c.2 audit sink. None disables the tool.* audit rows.
+    pub(crate) audit: Option<Arc<crate::audit::AuditFacility>>,
 }
 
 const APPROVAL_CORRELATION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -138,6 +140,11 @@ pub struct SpawnOptions {
     pub profile_id: String,
     pub project_root: PathBuf,
     pub agent: AgentDefinition,
+    /// Optional audit sink. When present, the X.5c.2 tool-activity
+    /// path writes `tool.observed` / `tool.updated` / `tool.failed`
+    /// rows. None on legacy back-compat shims and on JSON-RPC
+    /// engines that don't emit ACP tool activity yet.
+    pub audit: Option<Arc<crate::audit::AuditFacility>>,
 }
 
 impl SessionHandle {
@@ -509,6 +516,7 @@ impl SessionHandle {
             permission_timeout_ms: opts.agent.permission_timeout_ms,
             approval_by_tool_call_id: dashmap::DashMap::new(),
             approval_by_full_hash: dashmap::DashMap::new(),
+            audit: opts.audit.clone(),
         });
 
         let handle = Arc::new(Self {
@@ -706,6 +714,30 @@ async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotificatio
         ts: ts.clone(),
     };
     emit_event(handle, event).await;
+
+    // X.5c.2 audit row. Severity: Info for observed/updated; Warn for
+    // failed (NEVER Error — task-level failure is not bridge crash).
+    if let Some(acp) = handle.acp.as_ref() {
+        if let Some(audit) = acp.audit.as_ref() {
+            let severity = match activity.status {
+                ToolStatus::Failed => bridge_core::AuditSeverity::Warn,
+                _ => bridge_core::AuditSeverity::Info,
+            };
+            let audit_fields = serde_json::json!({
+                "event": event_type,
+                "toolCallId": activity.tool_call_id,
+                "kind": payload.get("kind").cloned().unwrap_or(serde_json::Value::Null),
+                "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "locations": activity.locations,
+                "approval_tool_call_hash": activity.approval_tool_call_hash,
+                "raw_input_hash": activity.raw_input_hash,
+                "approved_by_approval_id": activity.approved_by_approval_id,
+                "agent_id": activity.agent_id,
+                "agent_kind": activity.agent_kind.as_str(),
+            });
+            audit.log(&handle.id, "tool", severity, audit_fields);
+        }
+    }
 
     // Edit-kind activity also drives Review.
     // Render only when we have either real locations or actual diff

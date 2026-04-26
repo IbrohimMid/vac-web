@@ -73,13 +73,47 @@ fn build_acp_registry_with_timeout(
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }
 
-async fn start_bridge_with(registry: AgentRuntimeRegistry) -> (String, Arc<AppState>) {
+/// Same as [`start_bridge_with`] but also returns the audit directory
+/// so tests can inspect the JSONL rows the AuditFacility writes.
+async fn start_bridge_with_audit_dir(
+    registry: AgentRuntimeRegistry,
+) -> (String, Arc<AppState>, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let audit = Arc::new(AuditFacility::new(dir.clone()));
+    let sessions = SessionRegistry::with_runtime(Arc::new(registry));
+    sessions.attach_audit(Arc::clone(&audit));
     let state = Arc::new(AppState {
         started_at: Instant::now(),
-        sessions: SessionRegistry::with_runtime(Arc::new(registry)),
+        sessions,
         auth: AuthState::new_dev(),
-        audit: AuditFacility::new(tmp.path().to_path_buf()),
+        audit,
+        pairing: PairingStore::new(),
+        profile_root: PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/protocol/v1/profiles"
+        )),
+    });
+    std::mem::forget(tmp);
+    let app = build_app(Arc::clone(&state));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("ws://{}/api/sessions/stream", addr), state, dir)
+}
+
+async fn start_bridge_with(registry: AgentRuntimeRegistry) -> (String, Arc<AppState>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let audit = Arc::new(AuditFacility::new(tmp.path().to_path_buf()));
+    let sessions = SessionRegistry::with_runtime(Arc::new(registry));
+    sessions.attach_audit(Arc::clone(&audit));
+    let state = Arc::new(AppState {
+        started_at: Instant::now(),
+        sessions,
+        auth: AuthState::new_dev(),
+        audit,
         pairing: PairingStore::new(),
         profile_root: PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1231,4 +1265,107 @@ async fn x5c2_raw_payload_is_redacted_or_bounded() {
     // Also assert the API_KEY-shaped field doesn't appear anywhere
     // in the WS payload.
     assert!(!runtime.to_string().contains("leaky-secret"));
+}
+
+#[tokio::test]
+async fn x5c2_tool_failed_audit_row_is_warn_not_error() {
+    // BLOCKER-3 closeout: tool.failed audit row severity must be Warn,
+    // never Error. Drives --emit-failed-tool, then waits briefly for the
+    // AuditFacility writer task to flush, then reads the per-session
+    // JSONL file and asserts:
+    //   - exactly one row with subsystem="tool" + fields.event="tool.failed"
+    //     + severity="warn"
+    //   - tool.observed / tool.updated rows (if any) are severity="Info"
+    let (url, _state, audit_dir) =
+        start_bridge_with_audit_dir(build_acp_registry(vec!["--emit-failed-tool".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "fail me" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    // Wait for the failed event end-to-end on the WS, then give the
+    // audit writer task a tick to flush the row to disk.
+    let _ = next_event_of_type(&mut ws, "tool.failed").await;
+    let _ = next_event_of_type(&mut ws, "transcript.completed").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let path = audit_dir.join(format!("{session_id}.jsonl"));
+    let body = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read audit file {path:?}: {e}"));
+    let rows: Vec<Value> = body
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+
+    let tool_rows: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r.get("subsystem").and_then(|s| s.as_str()) == Some("tool"))
+        .collect();
+    assert!(
+        !tool_rows.is_empty(),
+        "expected at least one tool subsystem row in {path:?}"
+    );
+
+    let failed_rows: Vec<&&Value> = tool_rows
+        .iter()
+        .filter(|r| {
+            r.get("fields")
+                .and_then(|f| f.get("event"))
+                .and_then(|e| e.as_str())
+                == Some("tool.failed")
+        })
+        .collect();
+    assert_eq!(
+        failed_rows.len(),
+        1,
+        "expected exactly one tool.failed audit row, got {}",
+        failed_rows.len()
+    );
+    assert_eq!(
+        failed_rows[0]
+            .get("severity")
+            .and_then(|s| s.as_str())
+            .unwrap_or(""),
+        "warn",
+        "tool.failed must be severity Warn, never Error: {failed_rows:#?}"
+    );
+
+    // Required-fields contract from the X.5c.2 design (§6 / §7).
+    let f = failed_rows[0].get("fields").unwrap();
+    for required in [
+        "toolCallId",
+        "kind",
+        "status",
+        "locations",
+        "agent_id",
+        "agent_kind",
+    ] {
+        assert!(
+            f.get(required).is_some(),
+            "missing required audit field {required} in {f:#?}"
+        );
+    }
+
+    // Sanity: any tool.observed / tool.updated rows are severity Info.
+    for row in tool_rows.iter().filter(|r| {
+        let ev = r
+            .get("fields")
+            .and_then(|f| f.get("event"))
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+        ev != "tool.failed"
+    }) {
+        assert_eq!(
+            row.get("severity").and_then(|s| s.as_str()).unwrap_or(""),
+            "info",
+            "non-failed tool row must be Info: {row:#?}"
+        );
+    }
 }

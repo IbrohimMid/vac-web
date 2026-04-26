@@ -103,11 +103,14 @@ fn multi_agent_registry() -> AgentRuntimeRegistry {
 
 async fn start_bridge(registry: AgentRuntimeRegistry) -> (String, Arc<AppState>) {
     let tmp = tempfile::tempdir().unwrap();
+    let audit = Arc::new(AuditFacility::new(tmp.path().to_path_buf()));
+    let sessions = SessionRegistry::with_runtime(Arc::new(registry));
+    sessions.attach_audit(Arc::clone(&audit));
     let state = Arc::new(AppState {
         started_at: Instant::now(),
-        sessions: SessionRegistry::with_runtime(Arc::new(registry)),
+        sessions,
         auth: AuthState::new_dev(),
-        audit: AuditFacility::new(tmp.path().to_path_buf()),
+        audit,
         pairing: PairingStore::new(),
         profile_root: PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),

@@ -51,11 +51,14 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| dirs_config_home().join("vac-web").join("audit"));
 
+    let audit = Arc::new(AuditFacility::new(audit_dir));
+    let sessions = SessionRegistry::with_runtime(agents);
+    sessions.attach_audit(Arc::clone(&audit));
     let state = Arc::new(AppState {
         started_at: Instant::now(),
-        sessions: SessionRegistry::with_runtime(agents),
+        sessions,
         auth: AuthState::new_dev(),
-        audit: AuditFacility::new(audit_dir),
+        audit,
         pairing: PairingStore::new(),
         profile_root,
     });
