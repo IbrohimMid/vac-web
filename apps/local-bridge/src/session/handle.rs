@@ -20,7 +20,7 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{info, warn};
 
 use super::assessment_validation::{
-    validate_candidate, AssessmentValidationTracker, CandidateRejection, ValidatedCandidate,
+    validate_candidate, AssessmentValidationTracker, CandidateFinding, CandidateRejection,
 };
 
 pub type SessionHandleRef = Arc<SessionHandle>;
@@ -688,9 +688,9 @@ async fn emit_validated_candidate(
     run_id: &str,
     source_event_type: &str,
     candidate_hash: &str,
-    validated: ValidatedCandidate,
+    validated: CandidateFinding,
 ) {
-    let ValidatedCandidate {
+    let CandidateFinding {
         title,
         summary,
         finding_event,

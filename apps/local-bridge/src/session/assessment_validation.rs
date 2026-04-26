@@ -40,7 +40,7 @@ pub struct CandidateRejection {
 }
 
 #[derive(Debug, Clone)]
-pub struct ValidatedCandidate {
+pub struct CandidateFinding {
     pub title: String,
     pub summary: String,
     pub finding_event: Value,
@@ -53,7 +53,7 @@ pub fn validate_candidate(
     run_id: &str,
     candidate: &Value,
     source_event_type: &str,
-) -> Result<ValidatedCandidate, CandidateRejection> {
+) -> Result<CandidateFinding, CandidateRejection> {
     let candidate_hash = sha256_hex_canonical(candidate);
 
     let title = required_string(candidate, &["title"])?;
@@ -205,7 +205,7 @@ pub fn validate_candidate(
         "emitted_by": emitted_by,
     });
 
-    Ok(ValidatedCandidate {
+    Ok(CandidateFinding {
         title,
         summary,
         finding_event,
