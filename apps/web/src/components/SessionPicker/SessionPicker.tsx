@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { authMethodSummary, normalizeAuthMethods } from '../../domain/sessions/auth';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 
@@ -17,15 +18,22 @@ const BUILD_WORKFLOWS = [
 const DEFAULT_WORKFLOW_ID = 'build.observe-tools';
 
 interface ReadyPayload {
-  session_id: string;
-  profile_id?: string;
-  workflow_id?: string;
-  workflow_name?: string;
+    session_id: string;
+    profile_id?: string;
+    agent_id?: string;
+    agent_kind?: string;
+    workflow_id?: string;
+    workflow_name?: string;
+    auth_methods?: unknown;
 }
 
 export function SessionPicker({ transport }: { transport: TransportHandle }) {
   const active = useSession((s) => s.sessionId);
   const workflowName = useSession((s) => s.workflowName);
+  const profileId = useSession((s) => s.profileId);
+  const agentId = useSession((s) => s.agentId);
+  const agentKind = useSession((s) => s.agentKind);
+  const authMethods = useSession((s) => s.authMethods);
   const [profile, setProfile] = useState('executor.code@1.0.0');
   const [projectRoot, setProjectRoot] = useState('/tmp/demo-project');
   const [workflowId, setWorkflowId] = useState(DEFAULT_WORKFLOW_ID);
@@ -40,7 +48,9 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
     const off = transport.on('session.ready', (ev) => {
       const p = ev.payload as ReadyPayload | null;
       if (!p?.session_id) return;
-      useSession.getState().setSession(p.session_id, profile, projectRoot);
+      useSession.getState().setSession(p.session_id, p.profile_id ?? profile, projectRoot);
+      useSession.getState().setAgentInfo(p.agent_id ?? null, p.agent_kind ?? null);
+      useSession.getState().setAuthMethods(normalizeAuthMethods(p.auth_methods));
       off();
     });
 
@@ -65,8 +75,35 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
   if (active) {
     const displayName = workflowName ?? workflowId;
     return (
-      <div style={{ padding: 8, fontSize: 14, background: '#f7f7f7' }}>
-        <strong>session:</strong> {active} · <em>{profile}</em> · workflow: {displayName}
+      <div
+        style={{
+          padding: 8,
+          fontSize: 14,
+          background: '#f7f7f7',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <strong>session:</strong> {active} · <em>{profileId ?? profile}</em> · workflow:{' '}
+        {displayName}
+        {agentId && (
+          <span className="badge accent" style={{ padding: '1px 6px', fontSize: 10.5 }}>
+            agent: {agentId}
+          </span>
+        )}
+        {agentKind === 'acp' && (
+          <span
+            className="badge warn"
+            style={{ padding: '1px 6px', fontSize: 10.5 }}
+            title={
+              authMethods.map((m) => `${m.name} (${m.type})`).join(' · ') || 'ACP auth'
+            }
+          >
+            ACP auth: {authMethodSummary(authMethods)}
+          </span>
+        )}
       </div>
     );
   }

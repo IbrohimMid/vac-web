@@ -13,6 +13,9 @@ implementation against the locked design
 > OAuth login from `claude` is not used by the adapter. Keep the bridge
 > authority boundary intact and pin the adapter in a fixture or install
 > the package explicitly when running smoke locally.
+> The next slice is to surface ACP `auth_methods` into `session.ready`
+> and add a bridge-owned reauth affordance; terminal auth stays gated
+> until `auth.terminal` is explicitly enabled.
 
 ---
 

@@ -289,14 +289,22 @@ pub async fn dispatch_command(
                         // Stage X.4 — emit agent_id + agent_kind so
                         // web clients can render which runtime is
                         // backing the session and lock UI affordances
-                        // accordingly. Pre-X.4 fields preserved.
+                        // accordingly. Pre-X.4 fields preserved. ACP
+                        // sessions also include initialize.authMethods
+                        // for the reauth UX surface.
                         payload: json!({
+                            "id": handle.id,
                             "session_id": handle.id,
                             "profile_id": handle.profile_id,
                             "agent_id": handle.agent_id,
                             "agent_kind": handle.agent_kind.as_str(),
                             "workflow_id": handle.workflow_spec_id,
                             "workflow_name": handle.workflow_spec_name,
+                            "auth_methods": handle
+                                .acp
+                                .as_ref()
+                                .map(|a| a.auth_methods.clone())
+                                .unwrap_or_else(|| json!([])),
                         }),
                         v: 1,
                         ts: now.clone(),

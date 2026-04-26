@@ -8,6 +8,7 @@ The earlier plan tree (Phase 0–8 + Cockpit A–J) has been retired now that th
 
 1. [`00-shipped.md`](./00-shipped.md) — what's already in `main` (state of the world).
 2. [`10-stage-x-agent-runtime.md`](./10-stage-x-agent-runtime.md) — wire ACP / multi-runtime picker into bridge + web. Design lock at [`../agent-runtime.md`](../agent-runtime.md). Companion notes: [`stage-x-claude-acp-verification.md`](./stage-x-claude-acp-verification.md) (real-binary captures + wire-method names + X.5c.1 lock), [`stage-x5a-acp-client-design.md`](./stage-x5a-acp-client-design.md) (Rust vs Node spike + decision), and [`stage-x5c2-tool-activity-observation.md`](./stage-x5c2-tool-activity-observation.md) (X.5c.2 — observe-only tool activity mapping; **implemented**, lock candidate `681340b`).
+   - [`stage-x5d-acp-reauth-flow.md`](./stage-x5d-acp-reauth-flow.md) — ACP auth metadata surfacing + Zed-style reauth design.
 3. Surface plans — each declares its own Stage X dependency:
    - [`20-assess.md`](./20-assess.md) — driven by [`../product-specs/assess.md`](../product-specs/assess.md); depends on X.5 + X.7.
    - [`21-handoff.md`](./21-handoff.md) — driven by [`../product-specs/handoff.md`](../product-specs/handoff.md); depends on X.5 + X.6.

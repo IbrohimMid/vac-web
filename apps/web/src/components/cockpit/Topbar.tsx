@@ -3,6 +3,7 @@
 // docs/gates.md. ⌘K and tweaks button are handled by parent (callbacks).
 
 import { useCockpit } from '../../stores/cockpit';
+import { authMethodSummary } from '../../domain/sessions/auth';
 import { GATE_ORDER, useGates, type GateState } from '../../stores/gates';
 import { useSession } from '../../stores/session';
 import { Avatar, Icon } from './primitives';
@@ -22,6 +23,8 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
   const theme = useCockpit((s) => s.theme);
   const setTheme = useCockpit((s) => s.setTheme);
   const project = useSession((s) => s.projectRoot ?? 'no project');
+  const agentKind = useSession((s) => s.agentKind);
+  const authMethods = useSession((s) => s.authMethods);
 
   return (
     <header className="topbar">
@@ -30,6 +33,15 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
         <span className="brand-name">VAC</span>
         <span className="brand-sep">/</span>
         <span className="brand-project">{project}</span>
+        {agentKind === 'acp' && (
+          <span
+            className="badge warn"
+            style={{ padding: '1px 6px', fontSize: 10.5, marginLeft: 4 }}
+            title={authMethods.map((m) => `${m.name} (${m.type})`).join(' · ') || 'ACP auth'}
+          >
+            ACP auth: {authMethodSummary(authMethods)}
+          </span>
+        )}
         <Icon
           name="chevron-d"
           size={13}

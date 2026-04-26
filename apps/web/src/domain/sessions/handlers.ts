@@ -2,6 +2,7 @@
 
 import { useSessions, type SessionRow, type SessionStatus } from '../../stores/sessions';
 import { useSession } from '../../stores/session';
+import { normalizeAuthMethods } from './auth';
 import type { TransportHandle } from '../../transport';
 
 function asStatus(raw: string | undefined): SessionStatus {
@@ -29,11 +30,14 @@ interface SessionListPayload {
 interface SessionChangedPayload {
   id: string;
   profile_id?: string;
+  agent_id?: string;
+  agent_kind?: string;
   project_root?: string;
   status?: string;
   model?: string;
   created_at?: string;
   attached_clients?: number;
+  auth_methods?: unknown;
 }
 
 function coerceRow(p: SessionChangedPayload): SessionRow | null {
@@ -65,9 +69,17 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
 
   offs.push(
     transport.on('session.ready', (ev) => {
-      const p = ev.payload as (SessionChangedPayload & { workflow_id?: string; workflow_name?: string }) | null;
+      const p = ev.payload as
+        | (SessionChangedPayload & { workflow_id?: string; workflow_name?: string })
+        | null;
       const row = coerceRow(p as SessionChangedPayload);
       if (row) useSessions.getState().upsert(row);
+      if (p?.agent_id || p?.agent_kind) {
+        useSession.getState().setAgentInfo(p.agent_id ?? null, p.agent_kind ?? null);
+      }
+      if (p?.auth_methods !== undefined) {
+        useSession.getState().setAuthMethods(normalizeAuthMethods(p.auth_methods));
+      }
       if (p?.workflow_id) {
         useSession.getState().setWorkflowMeta(p.workflow_id, p.workflow_name ?? null);
       }

@@ -62,6 +62,9 @@ pub struct AcpRuntime {
     /// Distinct from VAC's `SessionHandle::id` — the bridge needs both
     /// to route prompts and cancellations.
     pub acp_session_id: String,
+    /// Auth methods advertised by initialize. Surfaced to the web so
+    /// the cockpit can show a Zed-style reauth affordance.
+    pub(crate) auth_methods: serde_json::Value,
     /// In-flight `session/request_permission` requests keyed by the
     /// VAC approval id (ULID generated on inbound). X.5c.1.
     pub pending_approvals: dashmap::DashMap<String, PendingApproval>,
@@ -933,7 +936,7 @@ impl SessionHandle {
                 terminal: false,
             },
         };
-        let _init = client.initialize(init_req).await?;
+        let init = client.initialize(init_req).await?;
 
         // Open ACP session bound to the project root.
         let new_req = NewSessionRequest {
@@ -957,6 +960,7 @@ impl SessionHandle {
         let acp_runtime = Arc::new(AcpRuntime {
             client,
             acp_session_id: acp_session_id.clone(),
+            auth_methods: init.auth_methods.clone(),
             pending_approvals: dashmap::DashMap::new(),
             permission_timeout_ms: opts.agent.permission_timeout_ms,
             approval_by_tool_call_id: dashmap::DashMap::new(),

@@ -9,6 +9,7 @@ import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
 import { useNotify } from '../../stores/notify';
 import { useReview } from '../../stores/review';
 import { useSession } from '../../stores/session';
+import { authMethodSummary, authMethodTypeLabel } from '../../domain/sessions/auth';
 import { Icon, type IconName } from './primitives';
 
 const TABS: RailTab[] = ['Activity', 'Notify', 'Context', 'Memory'];
@@ -233,6 +234,7 @@ function connectorIcon(provider: string): IconName {
 
 function RailMemory() {
   const session = useSession();
+  const authMethods = session.authMethods;
   return (
     <>
       <div
@@ -278,6 +280,66 @@ function RailMemory() {
           Profile: <code>{session.profileId ?? '(none)'}</code>
         </div>
       </div>
+      <div className="notif-item" style={{ padding: '8px 12px' }}>
+        <div className="row" style={{ gap: 6 }}>
+          <span
+            className="badge accent"
+            style={{ padding: '1px 6px', fontSize: 10.5 }}
+          >
+            Pinned
+          </span>
+        </div>
+        <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.45 }}>
+          Agent: <code>{session.agentId ?? '(none)'}</code>
+          {' · '}
+          Kind: <code>{session.agentKind ?? '(none)'}</code>
+        </div>
+      </div>
+      {session.agentKind === 'acp' && (
+        <div className="notif-item" style={{ padding: '8px 12px' }}>
+          <div className="row" style={{ gap: 6, marginBottom: 4 }}>
+            <span className="badge warn" style={{ padding: '1px 6px', fontSize: 10.5 }}>
+              ACP auth
+            </span>
+            <span className="muted" style={{ fontSize: 11.5 }}>
+              {authMethodSummary(authMethods)}
+            </span>
+          </div>
+          {authMethods.length === 0 ? (
+            <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45 }}>
+              No auth methods were advertised by the adapter. If the provider later
+              reports an auth requirement, the bridge can surface a reauth affordance
+              from the same session metadata.
+            </div>
+          ) : (
+            authMethods.map((method) => (
+              <div key={method.id} className="evidence-card" style={{ marginTop: 6 }}>
+                <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+                  <strong style={{ fontSize: 12.5 }}>{method.name}</strong>
+                  <span className="badge accent" style={{ padding: '1px 6px', fontSize: 10.5 }}>
+                    {authMethodTypeLabel(method)}
+                  </span>
+                </div>
+                {method.description && (
+                  <div className="muted" style={{ fontSize: 12, lineHeight: 1.45, marginTop: 4 }}>
+                    {method.description}
+                  </div>
+                )}
+                {method.link && (
+                  <div className="src" style={{ marginTop: 4 }}>
+                    {method.link}
+                  </div>
+                )}
+                {method.vars?.length ? (
+                  <div className="src" style={{ marginTop: 4 }}>
+                    vars: {method.vars.map((v) => v.label ?? v.name).join(', ')}
+                  </div>
+                ) : null}
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </>
   );
 }
