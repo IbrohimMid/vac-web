@@ -122,11 +122,16 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
         }
     });
 
+    // Track which sessions this WS client is subscribed to so we can
+    // auto-subscribe on first command referencing a session (handles
+    // reconnect without explicit session.create).
+    let mut subscribed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     // Main loop: read + dispatch.
     while let Some(msg) = rx.next().await {
         match msg {
             Ok(Message::Text(t)) => {
-                handle_incoming(t.to_string(), &state, &out_tx, &client_id).await;
+                handle_incoming(t.to_string(), &state, &out_tx, &client_id, &mut subscribed).await;
             }
             Ok(Message::Binary(_)) => { /* phase 3 (shell) */ }
             Ok(Message::Close(_)) | Err(_) => break,
@@ -150,6 +155,7 @@ async fn handle_incoming(
     state: &AppStateHandle,
     out_tx: &tokio::sync::mpsc::Sender<String>,
     client_id: &str,
+    subscribed: &mut std::collections::HashSet<String>,
 ) {
     // Try replay first (has distinct field pattern).
     if let Ok(r) = serde_json::from_str::<ReplayRequest>(&line) {
@@ -177,6 +183,18 @@ async fn handle_incoming(
         }
     };
 
+    // Lazy-subscribe: if this client references a session it hasn't
+    // subscribed to yet (e.g. after WS reconnect), subscribe now so
+    // streaming events (transcript.delta etc.) reach it.
+    let sid = &cmd.session_id;
+    if !sid.is_empty() && !subscribed.contains(sid) {
+        if state.sessions.get(sid).is_some() {
+            subscribe_to_session(sid, state.clone(), out_tx.clone());
+            subscribed.insert(sid.clone());
+            debug!(%client_id, session_id = %sid, "auto-subscribed on first command");
+        }
+    }
+
     debug!(%client_id, cmd_id = %cmd.id, cmd_type = %cmd.cmd_type, "dispatch");
     let cmd_type = cmd.cmd_type.clone();
     let (ack, events) = dispatch_command(cmd, state.clone()).await;
@@ -185,7 +203,9 @@ async fn handle_incoming(
         // When session.create returns session.ready, spawn a subscriber task so
         // subsequent broadcast events from the engine reach this client live.
         if ev.event_type == "session.ready" {
-            subscribe_to_session(&ev.session_id, state.clone(), out_tx.clone());
+            if subscribed.insert(ev.session_id.clone()) {
+                subscribe_to_session(&ev.session_id, state.clone(), out_tx.clone());
+            }
         }
         let _ = out_tx.send(serde_event(ev)).await;
     }

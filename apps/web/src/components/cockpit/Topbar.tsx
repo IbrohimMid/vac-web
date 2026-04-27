@@ -25,6 +25,7 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
   const project = useSession((s) => s.projectRoot ?? 'no project');
   const agentKind = useSession((s) => s.agentKind);
   const authMethods = useSession((s) => s.authMethods);
+  const authLabel = authMethodSummary(authMethods).replaceAll(' · ', ' - ');
 
   return (
     <header className="topbar">
@@ -39,7 +40,7 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
             style={{ padding: '1px 6px', fontSize: 10.5, marginLeft: 4 }}
             title={authMethods.map((m) => `${m.name} (${m.type})`).join(' · ') || 'ACP auth'}
           >
-            ACP auth: {authMethodSummary(authMethods)}
+            ACP auth: {authLabel}
           </span>
         )}
         <Icon

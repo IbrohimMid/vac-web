@@ -1,6 +1,6 @@
 // Single WebSocket per tab; multiplex sessions via session_id.
 
-import { getAccessToken } from './auth';
+import { clearAccessToken, getAccessToken } from './auth';
 
 // ---- Discriminated frame types ----
 
@@ -116,6 +116,24 @@ export class BridgeWs {
         try {
           const parsed: unknown = JSON.parse(evt.data as string);
           if (typeof parsed === 'object' && parsed !== null) {
+            // Detect bridge auth rejection (stale token from previous bridge
+            // session). Clear the dead token and hard-reload so the app resets
+            // to the pairing prompt — a soft close isn't enough because Vite
+            // HMR preserves React state across bridge restarts.
+            const f = parsed as Record<string, unknown>;
+            if (
+              'ackOf' in f &&
+              f.ok === false &&
+              typeof f.error === 'object' &&
+              f.error !== null &&
+              (f.error as Record<string, unknown>).code === 'auth.invalid_token'
+            ) {
+              clearAccessToken();
+              this.closed = true; // prevent reconnect before reload
+              ws.close();
+              window.location.reload();
+              return;
+            }
             this.opts.onMessage?.(parsed as InboundFrame);
           }
         } catch (e) {

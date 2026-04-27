@@ -7,12 +7,86 @@ use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
 use crate::session::{AuthenticateError, SessionHandleRef};
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
-use bridge_core::AuditSeverity;
+use bridge_core::{AuditSeverity, ReplayResult};
 use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
 use serde_json::json;
 use std::sync::Arc;
 use tracing::warn;
 use ulid::Ulid;
+
+fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
+    json!({
+        "id": handle.id,
+        "session_id": handle.id,
+        "profile_id": handle.profile_id,
+        "project_root": handle.project_root,
+        "agent_id": handle.agent_id,
+        "agent_kind": handle.agent_kind.as_str(),
+        "workflow_id": handle.workflow_spec_id,
+        "workflow_name": handle.workflow_spec_name,
+        "auth_methods": handle
+            .acp
+            .as_ref()
+            .map(|a| a.auth_methods.clone())
+            .unwrap_or_else(|| json!([])),
+    })
+}
+
+fn session_ready_event(handle: &SessionHandleRef, ts: String) -> ServerEvent {
+    ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: "session.ready".into(),
+        payload: session_ready_payload(handle),
+        v: 1,
+        ts,
+    }
+}
+
+fn session_bootstrap_events(
+    handle: &SessionHandleRef,
+    ts: String,
+    verb: &'static str,
+) -> Vec<ServerEvent> {
+    use crate::notify::{activity_event, notify_event, system_pulse_event, Lane, Severity};
+
+    let label = match verb {
+        "resumed" => "Session resumed",
+        _ => "Session ready",
+    };
+    vec![
+        session_ready_event(handle, ts.clone()),
+        ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "system.capabilities".into(),
+            payload: crate::capabilities::capabilities_payload(),
+            v: 1,
+            ts: ts.clone(),
+        },
+        notify_event(
+            handle.id.clone(),
+            Lane::Transient,
+            Severity::Ok,
+            "session",
+            label,
+            &format!("Profile: {}", handle.profile_id),
+        ),
+        system_pulse_event(
+            handle.id.clone(),
+            vec![
+                ("profile", handle.profile_id.as_str(), "ok"),
+                ("session_count", "1 active", "ok"),
+            ],
+        ),
+        activity_event(
+            handle.id.clone(),
+            "session",
+            Severity::Info,
+            &format!("Session {verb} with {}", handle.profile_id),
+        ),
+    ]
+}
 
 pub async fn dispatch_command(
     cmd: ClientCommand,
@@ -279,77 +353,14 @@ pub async fn dispatch_command(
                         }),
                     );
                     let now = chrono::Utc::now().to_rfc3339();
-                    use crate::notify::{
-                        activity_event, notify_event, system_pulse_event, Lane, Severity,
-                    };
-                    let session_events = vec![ServerEvent {
-                        seq: 0,
-                        session_id: handle.id.clone(),
-                        event_type: "session.ready".into(),
-                        // Stage X.4 — emit agent_id + agent_kind so
-                        // web clients can render which runtime is
-                        // backing the session and lock UI affordances
-                        // accordingly. Pre-X.4 fields preserved. ACP
-                        // sessions also include initialize.authMethods
-                        // for the reauth UX surface.
-                        payload: json!({
-                            "id": handle.id,
-                            "session_id": handle.id,
-                            "profile_id": handle.profile_id,
-                            "agent_id": handle.agent_id,
-                            "agent_kind": handle.agent_kind.as_str(),
-                            "workflow_id": handle.workflow_spec_id,
-                            "workflow_name": handle.workflow_spec_name,
-                            "auth_methods": handle
-                                .acp
-                                .as_ref()
-                                .map(|a| a.auth_methods.clone())
-                                .unwrap_or_else(|| json!([])),
-                        }),
-                        v: 1,
-                        ts: now.clone(),
-                    }];
+                    let session_events = session_bootstrap_events(&handle, now.clone(), "created");
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
                             ok: true,
                             error: None,
                         },
-                        {
-                            let mut out = session_events;
-                            out.extend(vec![
-                                ServerEvent {
-                                    seq: 0,
-                                    session_id: handle.id.clone(),
-                                    event_type: "system.capabilities".into(),
-                                    payload: crate::capabilities::capabilities_payload(),
-                                    v: 1,
-                                    ts: now.clone(),
-                                },
-                                notify_event(
-                                    handle.id.clone(),
-                                    Lane::Transient,
-                                    Severity::Ok,
-                                    "session",
-                                    "Session ready",
-                                    &format!("Profile: {}", handle.profile_id),
-                                ),
-                                system_pulse_event(
-                                    handle.id.clone(),
-                                    vec![
-                                        ("profile", handle.profile_id.as_str(), "ok"),
-                                        ("session_count", "1 active", "ok"),
-                                    ],
-                                ),
-                                activity_event(
-                                    handle.id.clone(),
-                                    "session",
-                                    Severity::Info,
-                                    &format!("Session created with {}", handle.profile_id),
-                                ),
-                            ]);
-                            out
-                        },
+                        session_events,
                     )
                 }
                 Err(e) => {
@@ -391,6 +402,59 @@ pub async fn dispatch_command(
                     error: None,
                 },
                 events,
+            )
+        }
+        "session.resume" => {
+            let Some(handle) = state.sessions.get(&cmd.session_id) else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            };
+
+            state.audit.log(
+                &cmd.session_id,
+                "session",
+                AuditSeverity::Info,
+                json!({ "event": "resumed" }),
+            );
+            handle.state.transition(bridge_core::SessionState::Active).ok();
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut out = session_bootstrap_events(&handle, now.clone(), "resumed");
+            let ring = handle.ring.read().await;
+            match ring.replay_after(0) {
+                ReplayResult::Stream(evs) => {
+                    out.extend(evs.into_iter().map(|(seq, mut ev)| {
+                        ev.seq = seq;
+                        ev
+                    }));
+                }
+                ReplayResult::OutOfRange { oldest, requested } => {
+                    warn!(
+                        session_id = %handle.id,
+                        oldest,
+                        requested,
+                        "session.resume replay requested older than retained ring"
+                    );
+                }
+                ReplayResult::UpToDate => {}
+            }
+
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                out,
             )
         }
         "session.close" => {

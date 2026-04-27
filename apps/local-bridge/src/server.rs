@@ -30,7 +30,9 @@ impl AppState {
 pub fn build_app(state: AppStateHandle) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/api/health", get(health))
         .route("/version", get(version))
+        .route("/api/version", get(version))
         .route("/api/pair/mint", post(crate::auth::mint_pair))
         .route("/api/pair/exchange", post(crate::auth::exchange_pair))
         .route("/api/sessions/stream", get(crate::ws::ws_handler))

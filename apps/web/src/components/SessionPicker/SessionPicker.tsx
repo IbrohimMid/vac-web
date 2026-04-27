@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { authMethodSummary, normalizeAuthMethods } from '../../domain/sessions/auth';
+import { authMethodSummary } from '../../domain/sessions/auth';
+import { activateSessionFromReady } from '../../domain/sessions/activation';
 import { useSession } from '../../stores/session';
 import { ReauthAction } from '../cockpit/ReauthAction';
 import type { TransportHandle } from '../../transport';
@@ -17,16 +18,8 @@ const BUILD_WORKFLOWS = [
 ] as const;
 
 const DEFAULT_WORKFLOW_ID = 'build.observe-tools';
-
-interface ReadyPayload {
-    session_id: string;
-    profile_id?: string;
-    agent_id?: string;
-    agent_kind?: string;
-    workflow_id?: string;
-    workflow_name?: string;
-    auth_methods?: unknown;
-}
+const DEFAULT_PROJECT_ROOT =
+  import.meta.env.VITE_VAC_WEB_DEFAULT_PROJECT_ROOT ?? '/tmp/demo-project';
 
 export function SessionPicker({ transport }: { transport: TransportHandle }) {
   const active = useSession((s) => s.sessionId);
@@ -36,7 +29,7 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
   const agentKind = useSession((s) => s.agentKind);
   const authMethods = useSession((s) => s.authMethods);
   const [profile, setProfile] = useState('executor.code@1.0.0');
-  const [projectRoot, setProjectRoot] = useState('/tmp/demo-project');
+  const [projectRoot, setProjectRoot] = useState(DEFAULT_PROJECT_ROOT);
   const [workflowId, setWorkflowId] = useState(DEFAULT_WORKFLOW_ID);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,11 +40,9 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
 
     // Register listener BEFORE sending so we don't miss a fast session.ready.
     const off = transport.on('session.ready', (ev) => {
-      const p = ev.payload as ReadyPayload | null;
-      if (!p?.session_id) return;
-      useSession.getState().setSession(p.session_id, p.profile_id ?? profile, projectRoot);
-      useSession.getState().setAgentInfo(p.agent_id ?? null, p.agent_kind ?? null);
-      useSession.getState().setAuthMethods(normalizeAuthMethods(p.auth_methods));
+      if (!activateSessionFromReady(ev.payload, { profileId: profile, projectRoot })) {
+        return;
+      }
       off();
     });
 

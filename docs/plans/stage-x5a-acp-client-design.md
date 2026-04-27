@@ -138,7 +138,7 @@ inside the bridge.
 | ---- | ------------------ | ---------- |
 | ACP schema drift in a new SDK release | manual chase | use the SDK's `schema/schema.json` as the source; ship a small `vac-acp-types` crate generated from it (one-shot `typify` or hand-keep ~30 messages) |
 | Vendor `_meta` extensions (e.g. `claudeCode.promptQueueing`) | unknown shapes appear over time | preserve `serde_json::Value` for `_meta` fields rather than typed structs |
-| Auth flow (`Run \`claude /login\` in the terminal`) | bridge can't trigger this; user must | surface `authMethods` to web, point to the CLI; out-of-band auth |
+| Auth flow (Claude Code OAuth login, surfaced as `claude-login`) | bridge can't open the browser login itself; user must complete it through the adapter | surface `authMethods` to web and keep the login lifecycle bridge-visible, not API-key based |
 | `notification` mid-correlation | mpsc/oneshot pattern handles this fine in spike | keep the spike's pump-while-waiting loop |
 | Cross-platform stdio quirks | none observed on Linux | replicate the spike on macOS/Windows once supervisor lands |
 
@@ -228,9 +228,9 @@ need this envelope: the Agent only sends `session/request_permission`
 when a tool call wants to mutate state, which X.5b's read-only prompt
 flow doesn't trigger.
 
-When X.5c starts, run `claude /login`, then drive a prompt that
-forces a tool call and capture the request + the four standard
-outcomes (`{outcome:{outcome:"selected",optionId:"<id>"}}`,
+When X.5c starts, complete the adapter's Claude Code OAuth login once,
+then drive a prompt that forces a tool call and capture the request +
+the four standard outcomes (`{outcome:{outcome:"selected",optionId:"<id>"}}`,
 `{outcome:{outcome:"cancelled"}}`, etc).
 
 ### 8.3 ACP type strategy — DECISION

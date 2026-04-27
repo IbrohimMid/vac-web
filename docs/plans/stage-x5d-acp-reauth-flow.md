@@ -21,9 +21,9 @@ flow that mirrors Zed's adapter-managed login experience.
 
 Zed already treats auth as an adapter concern: the adapter advertises
 auth methods, the client renders the login affordance, and the user
-reauthenticates inside the IDE. VAC Web currently captures the
-initialize response but does not expose the auth metadata to the user
-or a follow-up flow.
+reauthenticates through the adapter's Claude Code OAuth login flow
+inside the IDE. VAC Web currently captures the initialize response but
+does not expose the auth metadata to the user or a follow-up flow.
 
 That leaves two gaps:
 
@@ -41,8 +41,9 @@ rest of the runtime:
 - bridge forwards auth metadata through `session.ready`;
 - web surfaces a compact auth badge and detail panel;
 - reauth requests stay bridge-owned, not provider-owned;
-- terminal auth remains out of scope until the terminal ACP capability
-  is explicitly enabled.
+- terminal ACP capability stays off; bridge-owned launcher metadata
+  can still open the host Claude Code login flow without enabling
+  `terminal/*`.
 
 ## 3. Proposed shape
 
@@ -97,14 +98,24 @@ Behaviour matrix (implemented in `SessionHandle::authenticate_via_acp`):
 | Non-ACP session | ack + event `auth.not_supported` |
 | Missing `auth_method_id` | ack + event `auth.invalid_payload` |
 | Method not in advertised list | ack + event `auth.method_not_advertised` |
-| `terminal` method | ack + event `auth.terminal_capability_disabled` (HOLD) |
+| `terminal` method | if `_meta.terminal-auth` is absent: ack + event `auth.terminal_capability_disabled` (HOLD); if present: bridge launches the local login command and proxies its status |
 | `env_var` method | ack + event `auth.env_var_recreate_required` carrying `vars` (soft path) |
 | `agent` method | direct ACP `authenticate({ methodId })` passthrough; bridge proxies status |
 | Adapter JSON-RPC failure | ack + event with classified bridge code (default `agent.protocol_error`) |
 
-`agent`-type passthrough is the OAuth Claude Pro/Max path: the
-adapter handles the browser-less device-code or Claude `/login`
-handshake itself; the bridge only surfaces the lifecycle.
+`agent`-type passthrough is the OAuth Claude Pro/Max path: the adapter
+handles the browser OAuth / Claude Code login handshake itself; the
+bridge only surfaces the lifecycle.
+
+`terminal`-type auth is the adapter-advertised launcher path used when
+the adapter provides `_meta.terminal-auth`. The bridge runs the
+command locally, keeps `terminal/*` ACP off, and surfaces the result as
+`session.auth_updated` / `session.auth_failed`.
+
+For local dogfood on this repo, the bridge will also auto-fill
+`CLAUDE_CODE_EXECUTABLE` with the host `claude` binary when the env var
+is absent. That avoids the native SDK crash path we saw on this host
+without changing the adapter contract.
 
 `env_var` soft path tells the cockpit which env vars to recreate the
 session with, but does not restart the adapter live. Live
@@ -127,6 +138,8 @@ ReauthAction component renders them.
 - Do not move policy authority into the adapter.
 - Do not permit mid-session agent switches.
 - Do not reopen Stage K.
+- Do not treat `ANTHROPIC_API_KEY` as the Claude ACP auth source for
+  this flow; OAuth login through Claude Code is the source of truth.
 
 ## 5. Exit criteria
 

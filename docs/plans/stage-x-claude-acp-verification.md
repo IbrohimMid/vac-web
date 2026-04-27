@@ -363,7 +363,7 @@ recorded in §13.6.
 ## 13. X.5c capture pass — authenticated permission + tool flow (2026-04-26)
 
 Captured locally against `@agentclientprotocol/claude-agent-acp@0.31.0`
-with the host already authenticated via `claude /login`. Harness
+with the host already authenticated in Claude Code OAuth. Harness
 implemented Client side using `@agentclientprotocol/sdk@0.20.0` and
 logged every Client method call. Sandbox: `/tmp/acp-cap/sandbox`.
 
@@ -948,17 +948,18 @@ variant) and is the X.5 wire target — bridge's existing
 
 ### 12.4 Authentication
 
-The Agent advertises one auth method id `"claude-login"` whose
-description is `"Run \`claude /login\` in the terminal"`. The
-Anthropic Claude Code CLI is the underlying transport; auth state is
-shared with whatever credentials `claude` already has on disk. For
-VAC's purposes this means:
+The legacy adapter capture advertised one auth method id
+`"claude-login"` whose description was `"Run \`claude /login\` in the
+terminal"`. Treat that string as a historical label for the host-side
+Claude Code OAuth/login flow, not an Anthropic API key. On this repo we
+now treat the host `claude` binary as the actionable login launcher
+when the adapter needs one. For VAC's purposes this means:
 
-- If the operator has run `claude /login` on the host, the ACP Agent
-  will Just Work for prompts.
+- If the operator has already authenticated Claude Code on the host,
+  the ACP Agent will Just Work for prompts.
 - If not, `prompt` will fail with an `authenticate` requirement; the
   bridge surfaces it as a notify-event and points the user at the
-  CLI.
+  adapter login flow.
 
 ### 12.5 Decision (post-research)
 

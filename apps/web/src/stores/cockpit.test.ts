@@ -9,7 +9,7 @@ import { ACCENT_PRESETS, useCockpit } from './cockpit';
 
 function reset() {
   useCockpit.setState({
-    theme: 'dark',
+    theme: 'light',
     density: 'regular',
     accent: '#0fb6a8',
     sidebarCollapsed: false,
@@ -25,7 +25,7 @@ describe('cockpit store', () => {
 
   it('defaults', () => {
     const s = useCockpit.getState();
-    expect(s.theme).toBe('dark');
+    expect(s.theme).toBe('light');
     expect(s.density).toBe('regular');
     expect(s.route).toBe('build');
     expect(s.railTab).toBe('Activity');

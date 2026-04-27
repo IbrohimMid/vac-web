@@ -20,7 +20,7 @@ pub use tool_activity::{
     DEFAULT_RAW_OUTPUT_CAP_BYTES, SECRET_REDACTION, TRUNCATION_MARKER,
 };
 pub use types::{
-    AuthenticateRequest, AuthenticateResponse, CancelNotification, ClientCapabilities,
-    ContentBlock, FsClientCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, PromptResponse, SessionNotification,
+    AuthClientCapabilities, AuthenticateRequest, AuthenticateResponse, CancelNotification,
+    ClientCapabilities, ContentBlock, FsClientCapabilities, InitializeRequest, InitializeResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionNotification,
 };

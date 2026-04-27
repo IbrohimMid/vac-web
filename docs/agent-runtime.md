@@ -9,13 +9,17 @@ implementation against the locked design
 > dedicated adapter package `@agentclientprotocol/claude-agent-acp`
 > (binary `claude-agent-acp`) rather than the global `claude` CLI's
 > `--acp` mode. Stage X.0 ships the design; Stage X.3 ships the generic
-> ACP driver. Claude smoke requires a real `ANTHROPIC_API_KEY`; Claude
-> OAuth login from `claude` is not used by the adapter. Keep the bridge
-> authority boundary intact and pin the adapter in a fixture or install
-> the package explicitly when running smoke locally.
+> ACP driver. Claude smoke uses the host's Claude Code OAuth session
+> that backs `claude-agent-acp`; it does not gate on
+> `ANTHROPIC_API_KEY`. Keep the bridge authority boundary intact and
+> pin the adapter in a fixture or install the package explicitly when
+> running smoke locally. If the host `claude` CLI is on `PATH`, the
+> local bridge/test harness can fall back to it via
+> `CLAUDE_CODE_EXECUTABLE` when the env var is unset.
 > The next slice is to surface ACP `auth_methods` into `session.ready`
-> and add a bridge-owned reauth affordance; terminal auth stays gated
-> until `auth.terminal` is explicitly enabled.
+> and add a bridge-owned reauth affordance; terminal ACP capability
+> stays gated, but adapter-provided launcher metadata can still open
+> the Claude Code login flow without enabling `terminal/*`.
 
 ---
 
@@ -989,10 +993,10 @@ pnpm --filter @vac-web/web test
 pnpm --filter @vac-web/web build
 ```
 
-Provider smoke (skip in CI unless adapter present):
+Provider smoke (skip in CI unless adapter present and Claude Code is
+already signed in on the host):
 
 ```bash
-export ANTHROPIC_API_KEY=...
 VAC_WEB_ACP_DEBUG=1 \
 VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude-agent-acp.toml \
 cargo test -p local-bridge claude_acp_smoke -- --ignored

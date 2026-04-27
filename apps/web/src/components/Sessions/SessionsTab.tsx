@@ -1,8 +1,9 @@
 // Sessions tab: list rows with status/profile/duration, resume/rename/close.
 
 import { useEffect } from 'react';
+import { activateSessionFromReady } from '../../domain/sessions/activation';
 import { useSession } from '../../stores/session';
-import { useSessions } from '../../stores/sessions';
+import { useSessions, type SessionRow } from '../../stores/sessions';
 import type { TransportHandle } from '../../transport';
 
 interface Props {
@@ -20,11 +21,26 @@ export function SessionsTab({ transport }: Props) {
     });
   }, [transport]);
 
-  const resume = async (id: string) => {
+  const resume = async (row: SessionRow) => {
     if (!transport) return;
+    const fallback = {
+      profileId: row.profile_id,
+      ...(row.project_root !== undefined ? { projectRoot: row.project_root } : {}),
+    };
+    const off = transport.on('session.ready', (ev) => {
+      if (ev.session_id !== row.id) return;
+      if (!activateSessionFromReady(ev.payload, fallback)) {
+        return;
+      }
+      off();
+    });
     try {
-      await transport.send(id, 'session.resume', {});
+      const ack = await transport.send(row.id, 'session.resume', {});
+      if (!ack.ok) {
+        off();
+      }
     } catch {
+      off();
       /* notify handles failure */
     }
   };
@@ -78,7 +94,7 @@ export function SessionsTab({ transport }: Props) {
             <td style={td}>{r.attached_clients}</td>
             <td style={td}>{r.created_at}</td>
             <td style={td}>
-              <button onClick={() => resume(r.id)} disabled={!transport || r.id === current}>
+              <button onClick={() => resume(r)} disabled={!transport || r.id === current}>
                 Resume
               </button>{' '}
               <button onClick={() => rename(r.id)} disabled={!transport}>

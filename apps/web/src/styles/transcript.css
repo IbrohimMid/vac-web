@@ -1,0 +1,200 @@
+/* IDE-style Flat Chat Layout */
+
+.transcript-container {
+  height: 60vh;
+  overflow-y: auto;
+  position: relative;
+  background: var(--surface-1); /* Clean solid background */
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.transcript-virtual-list {
+  padding: 0 1rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* Base Wrapper for Message */
+.message-wrapper {
+  display: flex;
+  width: 100%;
+  margin-bottom: 2rem;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+/* Avatar Column */
+.message-avatar-col {
+  flex-shrink: 0;
+  width: 36px;
+  display: flex;
+  justify-content: center;
+}
+
+/* User Avatar overrides if Avatar uses .topbar-avatar */
+.message-avatar-col .topbar-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* Bot Avatar Styling */
+.avatar-bot-bg {
+  width: 36px;
+  height: 36px;
+  background: #00cca3; /* Vibrant teal/green for bot */
+  color: #fff;
+  border-radius: 6px; /* Soft square or circle? Screenshot shows soft square/circle */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Content Column */
+.message-content-col {
+  flex: 1;
+  min-width: 0; /* prevent flex overflow */
+}
+
+/* Header Text */
+.message-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  line-height: 1;
+}
+
+.message-author {
+  font-weight: 600;
+  color: var(--text-1);
+  font-size: 0.95rem;
+}
+
+.message-time {
+  color: var(--text-2);
+  font-size: 0.8rem;
+}
+
+.message-status {
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
+.message-status.streaming {
+  color: var(--sev-info);
+  animation: pulse-stream 1.5s infinite ease-in-out;
+}
+
+.message-status.status-error {
+  color: var(--sev-error);
+}
+
+/* Body / Content */
+.message-body {
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--text-1);
+}
+
+.raw-content {
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
+.placeholder {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.streaming-cursor {
+  opacity: 0.7;
+  animation: blink-cursor 1s step-end infinite;
+  margin-left: 2px;
+  color: var(--text-1);
+}
+
+/* Animations */
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes pulse-stream {
+  0% { opacity: 0.5; }
+  50% { opacity: 1; }
+  100% { opacity: 0.5; }
+}
+
+/* Modern Scrollbar */
+.transcript-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.transcript-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.transcript-container::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 20px;
+}
+
+/* Markdown Specific Overrides for Clean Look */
+.markdown-body pre {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.markdown-body code {
+  background: var(--surface-2);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
+/* Enhancing the tool-call styling if present */
+.tool-call {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.tool-call-hd {
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 0.85rem;
+}
+.tool-call-hd:hover {
+  background: var(--surface-3);
+}
+.tool-call-body {
+  padding: 1rem;
+  background: var(--surface-1);
+  font-family: monospace;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}

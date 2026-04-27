@@ -9,8 +9,13 @@ round-trip without enabling filesystem or terminal capabilities.
 - Claude smoke uses the ACP adapter package
   `@agentclientprotocol/claude-agent-acp` via the bundled fixture, not
   the global `claude --acp` CLI.
-- Claude smoke also requires a valid `ANTHROPIC_API_KEY`; claude.ai
-  OAuth login is not enough for the adapter.
+- Claude smoke uses the host's Claude Code OAuth session that backs
+  the adapter; it does not gate on `ANTHROPIC_API_KEY`.
+- On this machine, the bridge/test harness auto-resolves a host
+  `claude` CLI into `CLAUDE_CODE_EXECUTABLE` when that env var is
+  unset, so local smoke can avoid the native SDK binary path if needed.
+- If the adapter advertises a Claude login method, complete that login
+  flow once on the host before rerunning the smoke.
 - OpenCode smoke still uses the `opencode` binary on `PATH`.
 - Set `VAC_WEB_ACP_DEBUG=1` so the bridge mirrors ACP wire traffic as
   `acp.debug_message`.
@@ -29,7 +34,6 @@ Use the bundled fixtures:
 Claude smoke:
 
 ```bash
-export ANTHROPIC_API_KEY=...
 VAC_WEB_ACP_DEBUG=1 \
 VAC_WEB_AGENTS_CONFIG=./fixtures/agents.claude-agent-acp.toml \
 cargo test -p local-bridge claude_acp_smoke -- --ignored

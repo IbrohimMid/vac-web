@@ -27,7 +27,7 @@ interface Persisted {
 }
 
 const DEFAULTS: Persisted = {
-  theme: 'dark',
+  theme: 'light',
   density: 'regular',
   accent: '#0fb6a8',
   sidebarCollapsed: false,
@@ -41,7 +41,7 @@ function loadPersisted(): Persisted {
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<Persisted>;
     return {
-      theme: parsed.theme === 'light' ? 'light' : 'dark',
+      theme: parsed.theme === 'light' || parsed.theme === 'dark' ? parsed.theme : DEFAULTS.theme,
       density:
         parsed.density === 'compact' || parsed.density === 'comfy'
           ? parsed.density

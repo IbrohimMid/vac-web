@@ -2,10 +2,10 @@
 
 use crate::agent_runtime::acp::{
     classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical,
-    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AuthenticateRequest,
-    AuthenticateResponse, ClientCapabilities, ContentBlock, FsClientCapabilities,
-    InitializeRequest, JsonRpcError, NewSessionRequest, PermissionRequest, PromptRequest,
-    SessionNotification, ToolKind, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES,
+    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AuthClientCapabilities,
+    AuthenticateRequest, AuthenticateResponse, ClientCapabilities, ContentBlock,
+    FsClientCapabilities, InitializeRequest, JsonRpcError, NewSessionRequest, PermissionRequest,
+    PromptRequest, SessionNotification, ToolKind, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES,
     TOOL_CALL_HASH_DROP_FIELDS,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
@@ -524,7 +524,7 @@ impl SessionHandle {
                     .to_string();
                 let req = PromptRequest {
                     session_id: acp.acp_session_id.clone(),
-                    prompt: vec![ContentBlock::Text { text }],
+                    prompt: vec![ContentBlock::Text { text: text.clone() }],
                 };
                 // Fire prompt; response handler (spawned at session
                 // creation) emits transcript.completed when this future
@@ -535,9 +535,20 @@ impl SessionHandle {
                 let handle_id = self.id.clone();
                 let bcast = self.broadcast.clone();
                 let ring = Arc::clone(&self.ring);
+                info!(
+                    session_id = %handle_id,
+                    acp_session_id = %acp.acp_session_id,
+                    text_len = text.len(),
+                    "ACP session/prompt dispatching"
+                );
                 tokio::spawn(async move {
                     match acp.client.prompt(req).await {
                         Ok(resp) => {
+                            info!(
+                                session_id = %handle_id,
+                                stop_reason = ?resp.stop_reason,
+                                "ACP session/prompt completed"
+                            );
                             let event = ServerEvent {
                                 seq: 0,
                                 session_id: handle_id.clone(),
@@ -552,7 +563,7 @@ impl SessionHandle {
                             emit_to(&ring, &bcast, event).await;
                         }
                         Err(e) => {
-                            warn!(error=%e, "ACP session/prompt failed");
+                            warn!(session_id = %handle_id, error=%e, "ACP session/prompt failed");
                             // If the underlying error is a JsonRpcError
                             // from the agent, classify it into a stable
                             // bridge code so web clients can react
@@ -619,12 +630,81 @@ impl SessionHandle {
             .unwrap_or("agent")
             .to_string();
 
-        // Guardrail: terminal auth requires the terminal ACP capability
-        // which is intentionally HELD off in this milestone. Surface a
-        // typed error so the FE can render an explicit "deferred" hint.
+        // Guardrail: terminal auth is only supported when the adapter
+        // advertises terminal-auth command metadata. That lets the
+        // bridge launch the login flow itself without enabling
+        // terminal/* ACP tool capability.
         if method_type == "terminal" {
-            return Err(AuthenticateError::TerminalCapabilityDisabled {
+            let terminal_auth = method
+                .get("_meta")
+                .and_then(|m| m.get("terminal-auth"))
+                .and_then(|v| v.as_object())
+                .cloned();
+            let Some(terminal_auth) = terminal_auth else {
+                return Err(AuthenticateError::TerminalCapabilityDisabled {
+                    method_id: method_id.to_string(),
+                });
+            };
+            let command = terminal_auth
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type: method_type.clone(),
+                    code: "auth.command_invalid",
+                    message: "terminal auth metadata is missing command".into(),
+                })?;
+            let args = terminal_auth
+                .get("args")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type: method_type.clone(),
+                    code: "auth.command_invalid",
+                    message: "terminal auth metadata is missing args".into(),
+                })?
+                .iter()
+                .map(|arg| arg.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>();
+
+            let mut auth_cmd = tokio::process::Command::new(command);
+            auth_cmd
+                .args(&args)
+                .current_dir(&self.project_root)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
+            if std::env::var_os("CLAUDE_CODE_EXECUTABLE").is_none() {
+                if let Some(exec) = resolve_claude_cli_executable() {
+                    auth_cmd.env("CLAUDE_CODE_EXECUTABLE", exec);
+                }
+            }
+            let status = auth_cmd
+                .status()
+                .await
+                .map_err(|e| AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type: method_type.clone(),
+                    code: "auth.command_failed",
+                    message: e.to_string(),
+                })?;
+
+            if !status.success() {
+                return Err(AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type,
+                    code: "auth.command_failed",
+                    message: format!("terminal auth command exited unsuccessfully: {}", status),
+                });
+            }
+
+            return Ok(AuthenticateOutcome {
                 method_id: method_id.to_string(),
+                method_type,
+                response: AuthenticateResponse {
+                    status: serde_json::json!({ "ok": true }),
+                    meta: serde_json::Value::Null,
+                },
             });
         }
 
@@ -698,6 +778,17 @@ fn acp_debug_enabled() -> bool {
         std::env::var("VAC_WEB_ACP_DEBUG").ok().as_deref(),
         Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
     )
+}
+
+fn resolve_claude_cli_executable() -> Option<String> {
+    let paths = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&paths) {
+        let candidate = dir.join("claude");
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
 
 /// JSON-RPC notification line processor — used for Mock + VacNative
@@ -1100,10 +1191,16 @@ impl SessionHandle {
     /// `session/new.params.cwd`.
     async fn spawn_acp(opts: SpawnOptions) -> anyhow::Result<SessionHandleRef> {
         let debug = AcpDebugLog::new(acp_debug_enabled());
+        let mut env = Vec::new();
+        if opts.agent.id == "claude-acp" && std::env::var_os("CLAUDE_CODE_EXECUTABLE").is_none() {
+            if let Some(exec) = resolve_claude_cli_executable() {
+                env.push(("CLAUDE_CODE_EXECUTABLE".to_string(), exec));
+            }
+        }
         let (client, mut child) = AcpClient::spawn(
             &opts.agent.command,
             &opts.agent.args,
-            &[],
+            &env,
             Some(Arc::clone(&debug)),
         )?;
 
@@ -1118,6 +1215,8 @@ impl SessionHandle {
                     write_text_file: false,
                 },
                 terminal: false,
+                auth: Some(AuthClientCapabilities { terminal: true }),
+                meta: Some(serde_json::json!({ "terminal-auth": true })),
             },
         };
         let init = client.initialize(init_req).await?;
@@ -1310,8 +1409,10 @@ impl SessionHandle {
 /// plan, and usage_update into review/runtime/agents lanes.
 async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
     let Some(disc) = notif.discriminator() else {
+        info!(session = %handle.id, "ACP session/update with no discriminator, raw: {}", serde_json::to_string(&notif.update).unwrap_or_default());
         return;
     };
+    info!(session = %handle.id, disc = %disc, "ACP session/update received");
     let ts = chrono::Utc::now().to_rfc3339();
     match disc {
         "agent_message_chunk" => {

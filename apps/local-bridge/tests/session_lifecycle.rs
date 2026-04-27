@@ -88,6 +88,15 @@ async fn recv(ws: &mut Ws) -> Value {
     }
 }
 
+async fn drain_pending(ws: &mut Ws) {
+    loop {
+        match tokio::time::timeout(Duration::from_millis(100), ws.next()).await {
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+        }
+    }
+}
+
 /// Create a session via WS and return its id.
 async fn create_session(ws: &mut Ws, profile: &str) -> String {
     send(
@@ -268,6 +277,55 @@ async fn session_create_with_valid_workflow_id_in_session_ready() {
     assert_eq!(
         ready_payload["payload"]["workflow_name"], "Basic Build Workflow",
         "session.ready must include the workflow display name"
+    );
+}
+
+#[tokio::test]
+async fn session_resume_replays_history_and_switches_session() {
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_hello(&url).await;
+    let sid = create_session(&mut ws, "executor.code@1.0.0").await;
+    drain_pending(&mut ws).await;
+
+    send(
+        &mut ws,
+        json!({
+            "id": "cmd_resume",
+            "session_id": sid.clone(),
+            "type": "session.resume",
+            "payload": {},
+            "v": 1
+        }),
+    )
+    .await;
+
+    let mut saw_ack = false;
+    let mut saw_ready = false;
+    let mut saw_capabilities = false;
+    for _ in 0..20 {
+        let v = recv(&mut ws).await;
+        if v.get("ackOf") == Some(&json!("cmd_resume")) {
+            assert_eq!(v["ok"], true);
+            saw_ack = true;
+            continue;
+        }
+        if v["type"] == "session.ready" && v["session_id"] == sid {
+            saw_ready = true;
+            continue;
+        }
+        if v["type"] == "system.capabilities" {
+            saw_capabilities = true;
+        }
+        if saw_ack && saw_ready && saw_capabilities {
+            break;
+        }
+    }
+
+    assert!(saw_ack, "resume must ack ok=true");
+    assert!(saw_ready, "resume must emit session.ready for the target session");
+    assert!(
+        saw_capabilities,
+        "resume should replay prior session history, not just ack"
     );
 }
 

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { attachHighlightObserver } from '../../highlight/visibility';
 import { useTranscript } from '../../stores/transcript';
 import { MessageRow } from './MessageRow';
+import '../../styles/transcript.css';
 
 const ESTIMATED_ROW = 140;
 
@@ -25,19 +26,14 @@ export function Transcript() {
   return (
     <section
       ref={parentRef}
-      className="transcript"
+      className="transcript-container"
       role="log"
       aria-label="Assistant transcript"
       aria-live="polite"
       aria-relevant="additions text"
-      style={{
-        height: '60vh',
-        overflowY: 'auto',
-        position: 'relative',
-        border: '1px solid #eee',
-      }}
     >
       <div
+        className="transcript-virtual-list"
         style={{
           height: virt.getTotalSize(),
           width: '100%',

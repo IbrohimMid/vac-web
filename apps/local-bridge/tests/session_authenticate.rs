@@ -8,8 +8,9 @@
 //!   2. non-ACP session                  → `auth.not_supported`
 //!   3. unknown method id (advertised)   → `auth.method_not_advertised`
 //!   4. terminal method type             → `auth.terminal_capability_disabled`
-//!   5. env_var method type              → `auth.env_var_recreate_required` (+ vars)
-//!   6. stale session id                 → `session.not_found` (ack false, no event)
+//!   5. terminal method + terminal-auth  → `session.auth_updated`
+//!   6. env_var method type              → `auth.env_var_recreate_required` (+ vars)
+//!   7. stale session id                 → `session.not_found` (ack false, no event)
 //!
 //! Case 6 is the FE-side gap surfaced by the reviewer audit of
 //! `bde5a90`: the translator short-circuits before the auth lifecycle
@@ -190,6 +191,37 @@ async fn create_session(ws: &mut Ws, profile_id: &str) -> String {
     }
 }
 
+async fn create_session_with_root(ws: &mut Ws, profile_id: &str, project_root: &str) -> String {
+    let cmd = json!({
+        "v": 1,
+        "id": "c1",
+        "type": "session.create",
+        "session_id": "",
+        "payload": { "profile_id": profile_id, "project_root": project_root }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+    loop {
+        let Some(msg) = tokio::time::timeout(Duration::from_secs(15), ws.next())
+            .await
+            .unwrap()
+        else {
+            panic!("ws closed before session.ready");
+        };
+        let Message::Text(txt) = msg.unwrap() else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        if v.get("type") == Some(&json!("session.ready")) {
+            return v["session_id"].as_str().unwrap().to_string();
+        }
+        if v.get("ackOf") == Some(&json!("c1")) && v.get("ok") == Some(&json!(false)) {
+            panic!("session.create ack failed: {v}");
+        }
+    }
+}
+
 /// Drain frames after sending a `session.authenticate` cmd until we
 /// have both the ack and (optionally) the auth-lifecycle events. The
 /// translator emits ack + events back-to-back from one dispatch call,
@@ -278,7 +310,9 @@ async fn x5d_authenticate_missing_method_id_returns_invalid_payload() {
     ]))
     .await;
     let mut ws = connect_hello(&url).await;
-    let sid = create_session(&mut ws, "executor.code@1.0.0").await;
+    let project_root = tempfile::tempdir().unwrap();
+    let project_root_str = project_root.path().display().to_string();
+    let sid = create_session_with_root(&mut ws, "executor.code@1.0.0", &project_root_str).await;
 
     // Empty string is treated as missing per the translator (filter !is_empty).
     send_authenticate(&mut ws, "a1", &sid, json!({ "auth_method_id": "" })).await;
@@ -401,7 +435,68 @@ async fn x5d_authenticate_terminal_method_returns_capability_disabled() {
 }
 
 // -----------------------------------------------------------------
-// Test 5: env_var method type → ack false
+// Test 5: terminal method with `terminal-auth` metadata → launcher
+//         runs and surfaces `session.auth_updated`.
+// -----------------------------------------------------------------
+#[tokio::test]
+async fn x5d_authenticate_terminal_method_with_terminal_auth_metadata_returns_ok() {
+    let launcher_root = tempfile::tempdir().unwrap();
+    let ts_out = launcher_root.path().join("ts");
+    let rs_out = launcher_root.path().join("rs");
+    std::fs::create_dir_all(&ts_out).unwrap();
+    std::fs::create_dir_all(&rs_out).unwrap();
+    let launcher_command = target_root().join("target/debug/vac-codegen");
+    let launcher_args = vec![
+        "--schemas".to_string(),
+        target_root()
+            .join("packages/protocol/v1")
+            .display()
+            .to_string(),
+        "--ts-out".to_string(),
+        ts_out.display().to_string(),
+        "--rs-out".to_string(),
+        rs_out.display().to_string(),
+    ];
+    let (url, _state) = start_bridge_acp(json!([
+        {
+            "id": "claude-login",
+            "type": "terminal",
+            "name": "Log in with Claude Code",
+            "_meta": {
+                "terminal-auth": {
+                    "command": launcher_command.display().to_string(),
+                    "args": launcher_args
+                }
+            }
+        }
+    ]))
+    .await;
+    let mut ws = connect_hello(&url).await;
+    let project_root = tempfile::tempdir().unwrap();
+    let project_root_str = project_root.path().display().to_string();
+    let sid = create_session_with_root(&mut ws, "executor.code@1.0.0", &project_root_str).await;
+
+    send_authenticate(
+        &mut ws,
+        "a4b",
+        &sid,
+        json!({ "auth_method_id": "claude-login" }),
+    )
+    .await;
+    let (ack, events) = collect_auth_outcome(&mut ws, "a4b", true).await;
+
+    assert_eq!(ack["ok"], json!(true));
+    let updated = events
+        .iter()
+        .find(|e| e.get("type") == Some(&json!("session.auth_updated")))
+        .expect("session.auth_updated missing");
+    assert_eq!(updated["payload"]["auth_method_id"], json!("claude-login"));
+    assert_eq!(updated["payload"]["auth_method_type"], json!("terminal"));
+    assert_eq!(updated["payload"]["status"]["ok"], json!(true));
+}
+
+// -----------------------------------------------------------------
+// Test 6: env_var method type → ack false
 //                              `auth.env_var_recreate_required`
 //                              + payload includes `vars`.
 // -----------------------------------------------------------------
@@ -453,7 +548,7 @@ async fn x5d_authenticate_env_var_method_returns_env_var_recreate_required() {
 }
 
 // -----------------------------------------------------------------
-// Test 6: stale session id → ack false `session.not_found`,
+// Test 7: stale session id → ack false `session.not_found`,
 //                            NO lifecycle event (FE must fail-closed).
 // -----------------------------------------------------------------
 #[tokio::test]

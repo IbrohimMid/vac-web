@@ -30,6 +30,15 @@ pub struct InitializeRequest {
 pub struct ClientCapabilities {
     pub fs: FsClientCapabilities,
     pub terminal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthClientCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthClientCapabilities {
+    pub terminal: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

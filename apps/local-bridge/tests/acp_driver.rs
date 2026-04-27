@@ -92,6 +92,23 @@ fn load_smoke_registry() -> AgentRuntimeRegistry {
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::EnvFile(path))
 }
 
+fn resolve_claude_code_executable() -> Option<String> {
+    if let Some(explicit) = std::env::var_os("CLAUDE_CODE_EXECUTABLE") {
+        let value = explicit.to_string_lossy().trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    let paths = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&paths) {
+        let candidate = dir.join("claude");
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 fn build_acp_registry(extra_args: Vec<String>) -> AgentRuntimeRegistry {
     build_acp_registry_with_timeout(extra_args, DEFAULT_PERMISSION_TIMEOUT_MS)
 }
@@ -434,11 +451,11 @@ async fn run_acp_smoke(expected_agent_id: &str, prompt: &str) {
         Ok("1"),
         "run ACP smoke with VAC_WEB_ACP_DEBUG=1"
     );
-    if expected_agent_id == "claude-acp" {
-        assert!(
-            std::env::var_os("ANTHROPIC_API_KEY").is_some(),
-            "Claude ACP smoke requires ANTHROPIC_API_KEY; claude.ai OAuth login from `claude` is not used by the adapter"
-        );
+    if expected_agent_id == "claude-acp" && std::env::var_os("CLAUDE_CODE_EXECUTABLE").is_none() {
+        let executable = resolve_claude_code_executable().unwrap_or_else(|| {
+            panic!("Claude ACP smoke needs CLAUDE_CODE_EXECUTABLE or a `claude` CLI on PATH")
+        });
+        std::env::set_var("CLAUDE_CODE_EXECUTABLE", executable);
     }
 
     let registry = load_smoke_registry();

@@ -1,14 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { exchangePairCode, getAccessToken, mintPairCode } from '../transport/auth';
+
+const DEFAULT_PROJECT_ROOT =
+  import.meta.env.VITE_VAC_WEB_DEFAULT_PROJECT_ROOT ?? '/tmp/demo-project';
 
 export function PairingPrompt({ onPaired }: { onPaired: () => void }) {
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<string>('');
-  const [projectRoot, setProjectRoot] = useState('/tmp/demo-project');
+  const [projectRoot, setProjectRoot] = useState(DEFAULT_PROJECT_ROOT);
+  const paired = !!getAccessToken();
 
-  if (getAccessToken()) {
-    // Already paired; skip.
-    onPaired();
+  useEffect(() => {
+    if (paired) onPaired();
+  }, [paired, onPaired]);
+
+  if (paired) {
     return null;
   }
 
