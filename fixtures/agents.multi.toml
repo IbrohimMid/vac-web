@@ -1,0 +1,42 @@
+# Multi-provider fixture: Claude (default, working OAuth flow via Anthropic
+# adapter) plus Gemini CLI ACP as opt-in. Use this when you want the
+# cockpit to expose a provider picker rather than locking the bridge to
+# a single agent.
+#
+# Usage:
+#   VAC_WEB_AGENTS_CONFIG=/path/to/agents.multi.toml \
+#     cargo run -p local-bridge
+#
+# The bridge advertises every enabled agent in the welcome frame's
+# `available_agents` list. The cockpit's Start session form picks the
+# default unless the user explicitly chooses another. Per-session
+# `agent_id` overrides the default without affecting other sessions.
+default_agent = "claude-acp"
+
+[agents.claude-acp]
+kind = "acp"
+label = "Claude Agent ACP"
+command = "npx"
+args = ["-y", "@agentclientprotocol/claude-agent-acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["ANTHROPIC_*", "CLAUDE_*", "CLAUDE_CODE_EXECUTABLE"]
+cwd_mode = "project-root"
+
+[agents.gemini-acp]
+kind = "acp"
+label = "Gemini CLI ACP"
+command = "gemini"
+args = ["--acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "GEMINI_*",
+  "GOOGLE_*",
+  "GOOGLE_CLOUD_*",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "CLOUDSDK_*",
+]
+cwd_mode = "project-root"

@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { authMethodSummary } from '../../domain/sessions/auth';
 import { activateSessionFromReady } from '../../domain/sessions/activation';
 import { useSession } from '../../stores/session';
 import { ReauthAction } from '../cockpit/ReauthAction';
-import type { TransportHandle } from '../../transport';
+import type { AvailableAgent, TransportHandle } from '../../transport';
 
 /// Session-less commands (like session.create) are routed with a placeholder
 /// session_id that bridge ignores; the real session_id arrives via
@@ -31,6 +31,17 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
   const [profile, setProfile] = useState('executor.code@1.0.0');
   const [projectRoot, setProjectRoot] = useState(DEFAULT_PROJECT_ROOT);
   const [workflowId, setWorkflowId] = useState(DEFAULT_WORKFLOW_ID);
+  // Snapshot of agents the bridge advertised in its welcome frame. We
+  // resolve once per render via useMemo so a bridge restart that flips
+  // the default propagates the next time SessionPicker mounts (the
+  // transport itself refreshes the snapshot on every reconnect).
+  const advertisedAgents: AvailableAgent[] = useMemo(
+    () => transport.availableAgents?.() ?? [],
+    [transport],
+  );
+  const defaultAgentId =
+    advertisedAgents.find((a) => a.default)?.id ?? advertisedAgents[0]?.id ?? '';
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(defaultAgentId);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,11 +58,23 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
     });
 
     try {
-      const ack = await transport.send(SESSION_CREATE_PLACEHOLDER, 'session.create', {
+      // Only forward `agent_id` when the user explicitly picked one. An
+      // empty string means "the bridge didn't advertise any agents" — in
+      // that case we let the bridge resolve its implicit default to stay
+      // backward-compatible with single-binary-shim builds.
+      const payload: Record<string, unknown> = {
         profile_id: profile,
         project_root: projectRoot,
         workflow_id: workflowId,
-      });
+      };
+      if (selectedAgentId) {
+        payload.agent_id = selectedAgentId;
+      }
+      const ack = await transport.send(
+        SESSION_CREATE_PLACEHOLDER,
+        'session.create',
+        payload,
+      );
       if (!ack.ok) {
         off();
         setError(ack.error?.message ?? 'session.create failed');
@@ -133,6 +156,24 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
           ))}
         </select>
       </label>
+      {advertisedAgents.length > 0 && (
+        <label style={{display: 'block', marginBottom: 8}}>
+          Agent:
+          <select
+            aria-label="Agent"
+            value={selectedAgentId}
+            onChange={(e) => setSelectedAgentId(e.target.value)}
+            style={{marginLeft: 8}}
+          >
+            {advertisedAgents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+                {a.default ? ' (default)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label style={{ display: 'block', marginBottom: 8 }}>
         Project root:
         <input

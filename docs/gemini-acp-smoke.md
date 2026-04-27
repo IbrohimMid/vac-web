@@ -90,3 +90,53 @@ Open http://localhost:5173 and:
   `auth.env_var_recreate_required`).
 - It does not assume an interactive TTY for Gemini login. If your
   install requires a TTY, run the bridge from a real terminal.
+
+## Multi-provider fixture (recommended)
+
+The single-agent fixture (`fixtures/agents.gemini-acp.toml`) makes
+Gemini the only choice the bridge advertises. That "clobbers" Claude
+for the duration of the session — every `session.create` is routed
+to Gemini, even sessions that the cockpit was using productively
+before the fixture swap.
+
+Use `fixtures/agents.multi.toml` instead when you want to keep
+Claude as the working default and opt into Gemini per session:
+
+```
+VAC_WEB_AGENTS_CONFIG=$(pwd)/fixtures/agents.multi.toml \
+  cargo run -p local-bridge
+```
+
+The bridge's welcome frame now includes an `available_agents` array.
+The cockpit's **Start session** form renders a provider dropdown
+from that list, defaults to the fixture's `default_agent` (here
+`claude-acp`), and forwards the chosen `agent_id` in the
+`session.create` payload. Claude keeps working as before; Gemini is
+activated only when the user explicitly picks it.
+
+## Gotcha: `ack timeout` on first Gemini session
+
+If you create a Gemini session before logging in (or before a stale
+Google credential is refreshed), the bridge's ACP `initialize` /
+`session/new` round-trip can take longer than the cockpit's 30s ack
+timeout. The user-visible symptom is:
+
+```
+Error: ack timeout: cmd_…
+```
+
+The session is still created server-side and shows up in the
+Sessions tab. Workarounds, in order of preference:
+
+1. Pick **Claude Agent ACP** in the new provider dropdown for
+   day-to-day work, and only switch to Gemini when you intend to
+   reauth.
+2. Run `gemini auth login` in a separate terminal first, then
+   create the session. With cached credentials Gemini's ACP
+   `initialize` returns well under the 30s budget.
+3. If the row is left orphaned, `session.close` it from the
+   Sessions tab and try again.
+
+This is a deliberate non-goal of this milestone: bumping the
+cockpit ack timeout would mask other slow failures, and increasing
+the bridge's ACP `REQUEST_TIMEOUT` (30s) is tracked separately.

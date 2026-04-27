@@ -379,4 +379,28 @@ command = "x"
         assert_eq!(agent.args, vec!["--acp".to_string()]);
         assert!(agent.enabled);
     }
+
+    #[test]
+    fn multi_provider_fixture_loads() {
+        // Stage X.5e: shipped multi-provider fixture must keep Claude as
+        // the default and surface Gemini as an opt-in. Both agents must
+        // be enabled so the welcome frame advertises them to the
+        // cockpit.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixtures/agents.multi.toml");
+        let src = std::fs::read_to_string(&path).expect("read multi fixture");
+        let cfg = AgentsConfig::from_toml_str(&src, &path).expect("parse multi fixture");
+        assert_eq!(cfg.default_agent_id, "claude-acp");
+        let ids: Vec<&str> = cfg.agents.iter().map(|a| a.id.as_str()).collect();
+        assert!(ids.contains(&"claude-acp"), "claude-acp present: {ids:?}");
+        assert!(ids.contains(&"gemini-acp"), "gemini-acp present: {ids:?}");
+        for a in &cfg.agents {
+            assert!(matches!(a.kind, AgentKind::Acp), "{} is acp", a.id);
+            assert!(a.enabled, "{} enabled", a.id);
+        }
+    }
 }

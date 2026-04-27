@@ -98,6 +98,23 @@ async fn handshake_welcome() {
     let welcome = recv_text(&mut ws).await;
     assert_eq!(welcome["type"], "welcome");
     assert_eq!(welcome["protocol_version"], 1);
+    // Stage X.5e: welcome must advertise the live agent runtime
+    // registry so the cockpit can render a provider picker without a
+    // separate HTTP roundtrip. The mock test bridge synthesizes a
+    // single legacy agent, so we only assert shape + default flag.
+    let agents = welcome["available_agents"]
+        .as_array()
+        .expect("available_agents present");
+    assert!(!agents.is_empty(), "at least one agent advertised");
+    let defaults: Vec<&serde_json::Value> =
+        agents.iter().filter(|a| a["default"] == true).collect();
+    assert_eq!(defaults.len(), 1, "exactly one default agent");
+    for a in agents {
+        assert!(a["id"].is_string());
+        assert!(a["label"].is_string());
+        assert!(a["kind"].is_string());
+        assert!(a["default"].is_boolean());
+    }
 }
 
 #[tokio::test]

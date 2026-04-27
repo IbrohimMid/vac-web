@@ -27,11 +27,25 @@ export interface AckFrame {
   error?: { code: string; message: string };
 }
 
+/// Lightweight per-agent advertisement, mirrors `AvailableAgent` in
+/// `apps/local-bridge/src/ws/envelope.rs`. Only enabled agents are
+/// surfaced; exactly one entry has `default: true` (matching the
+/// fixture's `default_agent`).
+export interface AvailableAgent {
+  id: string;
+  label: string;
+  kind: string;
+  default: boolean;
+}
+
 export interface WelcomeFrame {
   type: 'welcome';
   protocol_version: number;
   bridge_version: string;
   capabilities: string[];
+  /// Optional. Older bridges (single-binary shim) omit this list; the
+  /// cockpit then falls back to the legacy implicit-default behavior.
+  available_agents?: AvailableAgent[];
 }
 
 export interface PingFrame {

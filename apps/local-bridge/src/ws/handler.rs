@@ -91,8 +91,12 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
         serde_json::json!({ "event": "connected", "device": device_id, "client": client_id }),
     );
 
-    // 3. Send welcome.
-    let welcome = serde_json::to_string(&WelcomeFrame::new()).expect("serialize WelcomeFrame");
+    // 3. Send welcome. Advertise the live agent runtime registry so the
+    // cockpit can render a provider picker and route `session.create`
+    // with an explicit `agent_id` (avoiding the legacy default-agent clobber
+    // when multiple ACP fixtures are loaded).
+    let welcome = serde_json::to_string(&WelcomeFrame::with_registry(state.sessions.agents()))
+        .expect("serialize WelcomeFrame");
     if tx.send(Message::Text(welcome.into())).await.is_err() {
         return;
     }
