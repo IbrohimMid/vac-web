@@ -187,12 +187,10 @@ async fn handle_incoming(
     // subscribed to yet (e.g. after WS reconnect), subscribe now so
     // streaming events (transcript.delta etc.) reach it.
     let sid = &cmd.session_id;
-    if !sid.is_empty() && !subscribed.contains(sid) {
-        if state.sessions.get(sid).is_some() {
-            subscribe_to_session(sid, state.clone(), out_tx.clone());
-            subscribed.insert(sid.clone());
-            debug!(%client_id, session_id = %sid, "auto-subscribed on first command");
-        }
+    if !sid.is_empty() && !subscribed.contains(sid) && state.sessions.get(sid).is_some() {
+        subscribe_to_session(sid, state.clone(), out_tx.clone());
+        subscribed.insert(sid.clone());
+        debug!(%client_id, session_id = %sid, "auto-subscribed on first command");
     }
 
     debug!(%client_id, cmd_id = %cmd.id, cmd_type = %cmd.cmd_type, "dispatch");
@@ -202,10 +200,8 @@ async fn handle_incoming(
     for ev in events {
         // When session.create returns session.ready, spawn a subscriber task so
         // subsequent broadcast events from the engine reach this client live.
-        if ev.event_type == "session.ready" {
-            if subscribed.insert(ev.session_id.clone()) {
-                subscribe_to_session(&ev.session_id, state.clone(), out_tx.clone());
-            }
+        if ev.event_type == "session.ready" && subscribed.insert(ev.session_id.clone()) {
+            subscribe_to_session(&ev.session_id, state.clone(), out_tx.clone());
         }
         let _ = out_tx.send(serde_event(ev)).await;
     }

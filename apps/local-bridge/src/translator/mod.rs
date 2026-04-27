@@ -425,7 +425,10 @@ pub async fn dispatch_command(
                 AuditSeverity::Info,
                 json!({ "event": "resumed" }),
             );
-            handle.state.transition(bridge_core::SessionState::Active).ok();
+            handle
+                .state
+                .transition(bridge_core::SessionState::Active)
+                .ok();
 
             let now = chrono::Utc::now().to_rfc3339();
             let mut out = session_bootstrap_events(&handle, now.clone(), "resumed");

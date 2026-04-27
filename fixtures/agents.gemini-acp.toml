@@ -1,0 +1,32 @@
+# Canonical Gemini CLI ACP adapter fixture.
+#
+# Pairs with `gemini --acp` (Gemini CLI 0.36+). The deprecated
+# `--experimental-acp` flag still works but `--acp` is preferred.
+#
+# Auth: Gemini CLI does not advertise an OAuth-style ACP authMethod the
+# way claude-agent-acp does. The bridge synthesizes a Zed-style
+# `spawn-gemini-cli` terminal-auth method from this fixture's
+# command/args (with the ACP runtime flags stripped) so the cockpit can
+# launch `gemini` interactively for `gemini /auth`.
+#
+# Hardening: only `gemini-acp` is in the bridge's terminal-auth
+# allowlist. Adapters that aren't on the allowlist cannot run terminal
+# auth at all, even if they advertise `_meta.terminal-auth` themselves.
+default_agent = "gemini-acp"
+
+[agents.gemini-acp]
+kind = "acp"
+label = "Gemini CLI ACP"
+command = "gemini"
+args = ["--acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "GEMINI_*",
+  "GOOGLE_*",
+  "GOOGLE_CLOUD_*",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "CLOUDSDK_*",
+]
+cwd_mode = "project-root"

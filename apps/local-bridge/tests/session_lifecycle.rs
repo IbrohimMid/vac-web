@@ -89,11 +89,9 @@ async fn recv(ws: &mut Ws) -> Value {
 }
 
 async fn drain_pending(ws: &mut Ws) {
-    loop {
-        match tokio::time::timeout(Duration::from_millis(100), ws.next()).await {
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
-        }
+    while let Ok(Some(Ok(_))) = tokio::time::timeout(Duration::from_millis(100), ws.next()).await {
+        // Discard whatever was buffered so the next assertion starts
+        // from a quiet WS.
     }
 }
 
@@ -322,7 +320,10 @@ async fn session_resume_replays_history_and_switches_session() {
     }
 
     assert!(saw_ack, "resume must ack ok=true");
-    assert!(saw_ready, "resume must emit session.ready for the target session");
+    assert!(
+        saw_ready,
+        "resume must emit session.ready for the target session"
+    );
     assert!(
         saw_capabilities,
         "resume should replay prior session history, not just ack"

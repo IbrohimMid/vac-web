@@ -352,4 +352,31 @@ command = "x"
         let cfg = AgentsConfig::from_toml_str(src, Path::new("test")).unwrap();
         assert_eq!(cfg.default_agent_id, "a");
     }
+
+    #[test]
+    fn gemini_acp_fixture_loads() {
+        // The shipped fixture must round-trip through the parser. The
+        // bridge silently ignores unknown TOML keys (dialect, env_allow,
+        // cwd_mode) — they’re informational at the current schema.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixtures/agents.gemini-acp.toml");
+        let src = std::fs::read_to_string(&path).expect("read gemini fixture");
+        let cfg = AgentsConfig::from_toml_str(&src, &path).expect("parse gemini fixture");
+        assert_eq!(cfg.default_agent_id, "gemini-acp");
+        let agent = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "gemini-acp")
+            .expect("gemini-acp present");
+        assert!(matches!(agent.kind, AgentKind::Acp));
+        // Canonical flag must be `--acp`, not the deprecated
+        // `--experimental-acp`. Gemini CLI 0.36+ accepts both but we
+        // ship the modern form.
+        assert_eq!(agent.args, vec!["--acp".to_string()]);
+        assert!(agent.enabled);
+    }
 }
