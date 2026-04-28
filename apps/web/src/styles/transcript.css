@@ -198,3 +198,141 @@
   border-top: 1px solid var(--border);
   color: var(--text-2);
 }
+
+/* X.5f.2 — Rich ACP agent thread */
+.agent-thread {
+  margin: 0 auto 1.25rem;
+  max-width: 900px;
+  padding: 0 1rem;
+}
+.agent-thread-header {
+  color: var(--text-2, var(--ink-3));
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  margin: 0.25rem 0 0.75rem;
+  text-transform: uppercase;
+}
+.agent-message {
+  background: var(--surface-1, var(--panel));
+  border: 1px solid var(--border, var(--line));
+  border-radius: 10px;
+  color: var(--text-1, var(--ink));
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+  padding: 0.8rem 0.9rem;
+  white-space: pre-wrap;
+}
+.agent-card {
+  background: var(--surface-1, var(--panel));
+  border: 1px solid var(--border, var(--line));
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm, none);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+.agent-card.nested {
+  background: var(--surface-2, var(--bg-sunken));
+  margin: 0.65rem 0 0;
+}
+.agent-card.thinking {
+  background: var(--surface-2, var(--bg-sunken));
+}
+.agent-card.thinking summary {
+  cursor: pointer;
+  font-weight: 650;
+  padding: 0.7rem 0.85rem;
+}
+.agent-card-body {
+  border-top: 1px solid var(--border, var(--line));
+  color: var(--text-2, var(--ink-2));
+  line-height: 1.5;
+  padding: 0.8rem 0.9rem;
+  white-space: pre-wrap;
+}
+.agent-card-title {
+  align-items: center;
+  border-bottom: 1px solid var(--border, var(--line));
+  display: flex;
+  font-weight: 650;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0.65rem 0.85rem;
+}
+.agent-tool-main {
+  align-items: baseline;
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.75rem 0.85rem 0.35rem;
+}
+.agent-tool-main span,
+.agent-card-meta {
+  color: var(--text-2, var(--ink-3));
+  font-size: 0.78rem;
+}
+.agent-status {
+  border-radius: 999px;
+  font-size: 0.72rem;
+  padding: 0.12rem 0.45rem;
+}
+.agent-status.ok { background: var(--ok-soft); color: var(--ok); }
+.agent-status.error { background: var(--crit-soft); color: var(--crit); }
+.agent-status.running { background: var(--info-soft); color: var(--info); }
+.agent-status.pending { background: var(--bg-sunken); color: var(--text-2, var(--ink-3)); }
+.agent-path {
+  color: var(--text-2, var(--ink-3));
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  padding: 0 0.85rem 0.55rem;
+}
+.agent-diff-preview .agent-path {
+  padding-top: 0.65rem;
+}
+.agent-diff-line {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  padding: 0.18rem 0.85rem;
+  white-space: pre-wrap;
+}
+.agent-diff-line.added { background: var(--ok-soft); color: var(--ok); }
+.agent-diff-line.removed { background: var(--crit-soft); color: var(--crit); }
+.agent-terminal-output {
+  background: var(--bg-sunken, var(--surface-2));
+  border: 0;
+  color: var(--text-1, var(--ink));
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  margin: 0;
+  overflow: auto;
+  padding: 0.75rem 0.85rem;
+  white-space: pre-wrap;
+}
+.agent-card-meta {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.4rem 0.85rem 0.65rem;
+}
+.agent-plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.65rem 0.85rem 0.75rem;
+}
+.agent-plan-list li {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  min-height: 1.6rem;
+}
+.agent-plan-dot {
+  border-radius: 50%;
+  display: inline-block;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+.agent-plan-dot.completed { background: var(--ok); }
+.agent-plan-dot.in_progress { background: var(--info); }
+.agent-plan-dot.failed { background: var(--crit); }
+.agent-plan-dot.pending,
+.agent-plan-dot.unknown,
+.agent-plan-dot.cancelled { background: var(--ink-5); }

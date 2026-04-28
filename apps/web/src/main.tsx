@@ -41,6 +41,7 @@ const ArchiveTab = lazy(() =>
 );
 
 import { registerApprovalHandlers } from './domain/approvals/handlers';
+import { registerAgentSessionHandlers } from './domain/agentSession/handlers';
 import { registerToolActivityHandlers } from './domain/toolActivity/handlers';
 import { registerWorkflowHandlers } from './domain/workflow/handlers';
 import { registerAssessmentHandlers } from './domain/assessment/handlers';
@@ -121,6 +122,7 @@ function App() {
           t = await createTransport(wsUrl);
         }
         offs.push(registerTranscriptHandlers(t));
+        offs.push(registerAgentSessionHandlers(t));
         offs.push(registerCapabilitiesHandlers(t));
         offs.push(registerNotifyHandlers(t));
         offs.push(registerApprovalHandlers(t));

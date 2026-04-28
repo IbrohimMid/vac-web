@@ -10,6 +10,7 @@
 
 import { lazy, Suspense, useState } from 'react';
 import { Composer } from '../Composer/Composer';
+import { AgentThread } from '../AgentThread/AgentThread';
 import { Transcript } from '../Transcript/Transcript';
 import { useShell } from '../../stores/shell';
 import { useApprovals } from '../../stores/approvals';
@@ -114,6 +115,7 @@ function TranscriptPane({ transport }: { transport: TransportHandle }) {
       </div>
       <div className="transcript-scroll">
         <div className="transcript-inner">
+          <AgentThread sessionId={sessionId} />
           <Transcript />
         </div>
       </div>
