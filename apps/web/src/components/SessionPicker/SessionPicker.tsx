@@ -42,10 +42,16 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
   const defaultAgentId =
     advertisedAgents.find((a) => a.default)?.id ?? advertisedAgents[0]?.id ?? '';
   const [selectedAgentId, setSelectedAgentId] = useState<string>(defaultAgentId);
+  const agentRegistryAvailable = advertisedAgents.length > 0;
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const create = async () => {
+    if (!agentRegistryAvailable) {
+      setError('No agents advertised by bridge. Restart bridge with fixtures/agents.multi.toml.');
+      return;
+    }
+
     setCreating(true);
     setError(null);
 
@@ -58,18 +64,12 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
     });
 
     try {
-      // Only forward `agent_id` when the user explicitly picked one. An
-      // empty string means "the bridge didn't advertise any agents" — in
-      // that case we let the bridge resolve its implicit default to stay
-      // backward-compatible with single-binary-shim builds.
       const payload: Record<string, unknown> = {
         profile_id: profile,
         project_root: projectRoot,
         workflow_id: workflowId,
+        agent_id: selectedAgentId,
       };
-      if (selectedAgentId) {
-        payload.agent_id = selectedAgentId;
-      }
       const ack = await transport.send(
         SESSION_CREATE_PLACEHOLDER,
         'session.create',
@@ -156,7 +156,7 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
           ))}
         </select>
       </label>
-      {advertisedAgents.length > 0 && (
+      {agentRegistryAvailable ? (
         <label style={{display: 'block', marginBottom: 8}}>
           Agent:
           <select
@@ -173,7 +173,14 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
             ))}
           </select>
         </label>
+      ) : (
+        <div role="alert" style={{color: 'crimson', marginBottom: 8}}>
+          No agents advertised by bridge. Restart bridge with fixtures/agents.multi.toml.
+        </div>
       )}
+      <p style={{fontSize: 12, color: '#666', margin: '-2px 0 8px'}}>
+        Agent registry: {agentRegistryAvailable ? `${advertisedAgents.length} available` : 'unavailable'}
+      </p>
       <label style={{ display: 'block', marginBottom: 8 }}>
         Project root:
         <input
@@ -183,7 +190,7 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
           style={{ marginLeft: 8, width: '60%' }}
         />
       </label>
-      <button onClick={create} disabled={creating}>
+      <button onClick={create} disabled={creating || !agentRegistryAvailable}>
         {creating ? 'creating…' : 'Create session'}
       </button>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}

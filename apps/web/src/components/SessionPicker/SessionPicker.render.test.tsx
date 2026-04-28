@@ -57,9 +57,14 @@ describe('SessionPicker provider picker', () => {
   beforeEach(resetSession);
   afterEach(cleanup);
 
-  it('omits the agent dropdown when the bridge advertises no agents (legacy single-binary shim)', () => {
+  it('renders bridge agent warning when no available_agents advertised', () => {
     render(<SessionPicker transport={makeTransport([])} />);
     expect(screen.queryByLabelText('Agent')).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No agents advertised by bridge. Restart bridge with fixtures/agents.multi.toml.',
+    );
+    expect(screen.getByText('Agent registry: unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create session/ })).toBeDisabled();
   });
 
   it('renders an option per advertised agent and marks the default', () => {
@@ -107,22 +112,12 @@ describe('SessionPicker provider picker', () => {
     });
   });
 
-  it('omits agent_id when the bridge advertised no agents (back-compat with single-binary shim)', async () => {
+  it('does not create a session when the bridge advertised no agents', () => {
     const send = vi.fn(async () => ({ ackOf: 'cmd_x', ok: true }));
     render(<SessionPicker transport={makeTransport([], send)} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Create session/ }));
-    await Promise.resolve();
-    await Promise.resolve();
 
-    expect(send).toHaveBeenCalledTimes(1);
-    const call = send.mock.calls[0] as unknown as [
-      string,
-      string,
-      Record<string, unknown>,
-    ];
-    // The bridge resolves its implicit default in this case; sending an
-    // empty agent_id would short-circuit to `agent.not_registered`.
-    expect(call[2]).not.toHaveProperty('agent_id');
+    expect(send).not.toHaveBeenCalled();
   });
 });
