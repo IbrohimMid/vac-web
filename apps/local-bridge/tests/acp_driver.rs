@@ -1220,6 +1220,109 @@ async fn x5c2_read_tool_update_emits_activity_event() {
 }
 
 #[tokio::test]
+async fn x5f1_thought_chunk_emits_rich_thought_delta_and_legacy_delta() {
+    let (url, _state) = start_bridge_with(build_acp_registry(vec!["--emit-thought".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "think" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let thought = next_event_of_type(&mut ws, "transcript.thought_delta").await;
+    assert_eq!(
+        thought["payload"]["delta"],
+        json!("I should inspect the mocked context first.")
+    );
+
+    let legacy = next_event_matching(&mut ws, |v| {
+        v.get("type") == Some(&json!("transcript.delta"))
+            && v["payload"].get("kind") == Some(&json!("thought"))
+    })
+    .await;
+    assert_eq!(legacy["payload"]["delta"], thought["payload"]["delta"]);
+}
+
+#[tokio::test]
+async fn x5f1_plan_update_emits_rich_plan_event() {
+    let (url, _state) = start_bridge_with(build_acp_registry(vec!["--emit-plan".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "plan" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let plan = next_event_of_type(&mut ws, "plan.updated").await;
+    let entries = plan["payload"]["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["title"], json!("Inspect context"));
+    assert_eq!(entries[1]["status"], json!("in_progress"));
+}
+
+#[tokio::test]
+async fn x5f1_tool_updates_emit_rich_tool_and_diff_events() {
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--emit-edit-tool".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "edit rich" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let created = next_event_of_type(&mut ws, "tool.call.created").await;
+    assert_eq!(created["payload"]["tool_call_id"], json!("tc_script"));
+    assert_eq!(created["payload"]["status"], json!("pending"));
+
+    let updated = next_event_of_type(&mut ws, "tool.call.updated").await;
+    assert_eq!(updated["payload"]["kind"], json!("edit"));
+    assert_eq!(updated["payload"]["status"], json!("in_progress"));
+
+    let diff = next_event_of_type(&mut ws, "tool.diff.updated").await;
+    assert_eq!(diff["payload"]["tool_call_id"], json!("tc_script"));
+    assert_eq!(diff["payload"]["diffs"][0]["path"], json!("/repo/hello.md"));
+}
+
+#[tokio::test]
+async fn x5f1_execute_tool_emits_rich_terminal_event() {
+    let (url, _state) =
+        start_bridge_with(build_acp_registry(vec!["--emit-execute-tool".into()])).await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "terminal rich" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let terminal = next_event_of_type(&mut ws, "tool.terminal.updated").await;
+    assert_eq!(terminal["payload"]["tool_call_id"], json!("tc_script"));
+    assert_eq!(terminal["payload"]["status"], json!("completed"));
+    let serialized = terminal.to_string();
+    assert!(
+        !serialized.contains("leaky-secret"),
+        "secret leaked into rich terminal event: {serialized}"
+    );
+    assert!(serialized.contains("REDACTED-SECRET"));
+}
+
+#[tokio::test]
 async fn x5c2_edit_tool_update_emits_review_candidate() {
     let (url, _state) =
         start_bridge_with(build_acp_registry(vec!["--emit-edit-tool".into()])).await;

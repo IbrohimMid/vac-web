@@ -2,11 +2,11 @@
 
 use crate::agent_runtime::acp::{
     classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical,
-    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AuthClientCapabilities,
-    AuthenticateRequest, AuthenticateResponse, ClientCapabilities, ContentBlock,
-    FsClientCapabilities, InitializeRequest, JsonRpcError, NewSessionRequest, PermissionRequest,
-    PromptRequest, SessionNotification, ToolKind, ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES,
-    TOOL_CALL_HASH_DROP_FIELDS,
+    sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AcpSessionUpdate,
+    AuthClientCapabilities, AuthenticateRequest, AuthenticateResponse, ClientCapabilities,
+    ContentBlock, FsClientCapabilities, InitializeRequest, JsonRpcError, NewSessionRequest,
+    PermissionRequest, PromptRequest, SessionNotification, ToolKind, ToolStatus,
+    DEFAULT_RAW_OUTPUT_CAP_BYTES, TOOL_CALL_HASH_DROP_FIELDS,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::notify::{activity_event, Severity as NotifySeverity};
@@ -1569,53 +1569,124 @@ impl SessionHandle {
 }
 
 /// Map an ACP `session/update` notification onto the VAC event surface.
-/// Stage X.5b handles the chunk variants only:
 ///
-/// - `agent_message_chunk` → `transcript.delta` `{ delta }`
-/// - `agent_thought_chunk` → `transcript.delta` `{ delta, kind: "thought" }`
+/// X.5f.1 keeps the legacy events alive while adding a richer, Zed-like
+/// normalized event lane for the web cockpit:
 ///
-/// Every other variant is logged at debug — X.5c hooks tool_call,
-/// plan, and usage_update into review/runtime/agents lanes.
+/// - `agent_message_chunk` → `transcript.delta`
+/// - `agent_thought_chunk` → `transcript.thought_delta` (+ legacy thought delta)
+/// - `tool_call` → `tool.call.created` (+ legacy tool.* lane)
+/// - `tool_call_update` → `tool.call.updated` (+ diff/terminal side-channel events)
+/// - `plan` / `plan_update` → `plan.updated`
+/// - provider controls → `session.*.updated` events
+///
+/// Unknown/vendor-specific updates remain lossless in debug logs and on
+/// the original `SessionNotification::update` payload.
 async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
-    let Some(disc) = notif.discriminator() else {
-        info!(session = %handle.id, "ACP session/update with no discriminator, raw: {}", serde_json::to_string(&notif.update).unwrap_or_default());
-        return;
-    };
+    let disc = notif.discriminator().unwrap_or("unknown").to_string();
     info!(session = %handle.id, disc = %disc, "ACP session/update received");
     let ts = chrono::Utc::now().to_rfc3339();
-    match disc {
-        "agent_message_chunk" => {
-            let delta = notif.message_chunk_text().unwrap_or_default();
+    match notif.parsed_update() {
+        AcpSessionUpdate::AgentMessageChunk { text } => {
             let event = ServerEvent {
                 seq: 0,
                 session_id: handle.id.clone(),
                 event_type: "transcript.delta".into(),
-                payload: serde_json::json!({ "delta": delta }),
+                payload: serde_json::json!({ "delta": text }),
                 v: 1,
                 ts,
             };
             emit_event(handle, event).await;
         }
-        "agent_thought_chunk" => {
-            let delta = notif.message_chunk_text().unwrap_or_default();
-            let event = ServerEvent {
+        AcpSessionUpdate::AgentThoughtChunk { text } => {
+            let thought_event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "transcript.thought_delta".into(),
+                payload: serde_json::json!({ "delta": text }),
+                v: 1,
+                ts: ts.clone(),
+            };
+            emit_event(handle, thought_event).await;
+
+            // Backward compatibility for the pre-rich transcript surface.
+            let legacy_event = ServerEvent {
                 seq: 0,
                 session_id: handle.id.clone(),
                 event_type: "transcript.delta".into(),
-                payload: serde_json::json!({ "delta": delta, "kind": "thought" }),
+                payload: serde_json::json!({ "delta": text, "kind": "thought" }),
                 v: 1,
                 ts,
             };
-            emit_event(handle, event).await;
+            emit_event(handle, legacy_event).await;
         }
-        "tool_call" | "tool_call_update" => {
-            map_tool_activity(handle, &notif).await;
-        }
-        other => {
+        AcpSessionUpdate::ToolCall { tool_call } => {
             tracing::debug!(
                 session = %handle.id,
-                variant = %other,
-                "ACP session/update variant ignored at X.5c.2 scope"
+                tool_call = %serde_json::to_string(&tool_call.raw).unwrap_or_default(),
+                "ACP tool_call normalized"
+            );
+            map_tool_activity(handle, &notif).await;
+        }
+        AcpSessionUpdate::ToolCallUpdate { update } => {
+            tracing::debug!(
+                session = %handle.id,
+                tool_call_update = %serde_json::to_string(&update.raw).unwrap_or_default(),
+                "ACP tool_call_update normalized"
+            );
+            map_tool_activity(handle, &notif).await;
+        }
+        AcpSessionUpdate::Plan { entries } => {
+            let entries: Vec<_> = entries.into_iter().map(|entry| entry.raw).collect();
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "plan.updated".into(),
+                payload: serde_json::json!({ "entries": entries }),
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+        AcpSessionUpdate::AvailableCommandsUpdate { commands } => {
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "session.available_commands.updated".into(),
+                payload: serde_json::json!({ "commands": commands }),
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+        AcpSessionUpdate::CurrentModeUpdate { mode_id } => {
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "session.mode.updated".into(),
+                payload: serde_json::json!({ "mode_id": mode_id }),
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+        AcpSessionUpdate::ConfigOptionsUpdate { options } => {
+            let event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "session.config_options.updated".into(),
+                payload: serde_json::json!({ "options": options }),
+                v: 1,
+                ts,
+            };
+            emit_event(handle, event).await;
+        }
+        AcpSessionUpdate::Unknown { discriminator, raw } => {
+            tracing::debug!(
+                session = %handle.id,
+                variant = %discriminator,
+                raw = %serde_json::to_string(&raw).unwrap_or_default(),
+                "ACP session/update variant ignored at X.5f.1 scope"
             );
         }
     }
@@ -1669,6 +1740,62 @@ async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotificatio
         ts: ts.clone(),
     };
     emit_event(handle, event).await;
+
+    let rich_event_type = match notif.discriminator() {
+        Some("tool_call") => "tool.call.created",
+        Some("tool_call_update") => "tool.call.updated",
+        _ => "tool.call.updated",
+    };
+    let rich_event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: rich_event_type.into(),
+        payload: payload.clone(),
+        v: 1,
+        ts: ts.clone(),
+    };
+    emit_event(handle, rich_event).await;
+
+    if !activity.diffs.is_empty() {
+        let diff_event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "tool.diff.updated".into(),
+            payload: serde_json::json!({
+                "tool_call_id": activity.tool_call_id,
+                "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "diffs": activity.diffs.clone(),
+                "locations": activity.locations.clone(),
+                "approved_by_approval_id": activity.approved_by_approval_id.clone(),
+                "agent_id": activity.agent_id,
+                "agent_kind": activity.agent_kind.as_str(),
+            }),
+            v: 1,
+            ts: ts.clone(),
+        };
+        emit_event(handle, diff_event).await;
+    }
+
+    if matches!(activity.kind, ToolKind::Execute) && !matches!(activity.status, ToolStatus::Pending)
+    {
+        let terminal_event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "tool.terminal.updated".into(),
+            payload: serde_json::json!({
+                "tool_call_id": activity.tool_call_id,
+                "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "raw_input_redacted": activity.raw_input_redacted.clone(),
+                "raw_output_redacted": activity.raw_output_redacted.clone(),
+                "approved_by_approval_id": activity.approved_by_approval_id.clone(),
+                "agent_id": activity.agent_id,
+                "agent_kind": activity.agent_kind.as_str(),
+            }),
+            v: 1,
+            ts: ts.clone(),
+        };
+        emit_event(handle, terminal_event).await;
+    }
 
     // X.5c.2 audit row. Severity: Info for observed/updated; Warn for
     // failed (NEVER Error — task-level failure is not bridge crash).
@@ -1737,8 +1864,8 @@ async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotificatio
             "tool_call_id": activity.tool_call_id,
             "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
             "command": cmd,
-            "output": activity.raw_output_redacted,
-            "approved_by_approval_id": activity.approved_by_approval_id,
+            "output": activity.raw_output_redacted.clone(),
+            "approved_by_approval_id": activity.approved_by_approval_id.clone(),
             "agent_id": activity.agent_id,
             "agent_kind": activity.agent_kind.as_str(),
         });

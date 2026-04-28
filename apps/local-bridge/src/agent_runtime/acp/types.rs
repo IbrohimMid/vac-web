@@ -139,6 +139,34 @@ pub struct CancelNotification {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct AcpToolCall {
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct AcpToolCallUpdate {
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AcpPlanEntry {
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone)]
+pub enum AcpSessionUpdate {
+    AgentMessageChunk { text: String },
+    AgentThoughtChunk { text: String },
+    ToolCall { tool_call: AcpToolCall },
+    ToolCallUpdate { update: AcpToolCallUpdate },
+    Plan { entries: Vec<AcpPlanEntry> },
+    AvailableCommandsUpdate { commands: Vec<Value> },
+    CurrentModeUpdate { mode_id: String },
+    ConfigOptionsUpdate { options: Vec<Value> },
+    Unknown { discriminator: String, raw: Value },
+}
+
 // --- session/update (notification, agent → client) ---
 
 #[derive(Debug, Clone, Deserialize)]
@@ -156,6 +184,65 @@ impl SessionNotification {
         self.update.get("sessionUpdate").and_then(|v| v.as_str())
     }
 
+    /// Parse the ACP `session/update` discriminator into the bridge's
+    /// typed-but-lossless update enum. Every known variant keeps the raw
+    /// vendor payload reachable either through the original
+    /// [`SessionNotification::update`] field or a wrapper, and unknown
+    /// variants are preserved verbatim.
+    pub fn parsed_update(&self) -> AcpSessionUpdate {
+        let discriminator = self.discriminator().unwrap_or("unknown").to_string();
+        match discriminator.as_str() {
+            "agent_message_chunk" => AcpSessionUpdate::AgentMessageChunk {
+                text: self.message_chunk_text().unwrap_or_default(),
+            },
+            "agent_thought_chunk" => AcpSessionUpdate::AgentThoughtChunk {
+                text: self.message_chunk_text().unwrap_or_default(),
+            },
+            "tool_call" => AcpSessionUpdate::ToolCall {
+                tool_call: AcpToolCall {
+                    raw: self.update.clone(),
+                },
+            },
+            "tool_call_update" => AcpSessionUpdate::ToolCallUpdate {
+                update: AcpToolCallUpdate {
+                    raw: self.update.clone(),
+                },
+            },
+            "plan" | "plan_update" => AcpSessionUpdate::Plan {
+                entries: self.plan_entries(),
+            },
+            "available_commands_update" => AcpSessionUpdate::AvailableCommandsUpdate {
+                commands: self
+                    .update
+                    .get("commands")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+            },
+            "current_mode_update" => AcpSessionUpdate::CurrentModeUpdate {
+                mode_id: self
+                    .update
+                    .get("modeId")
+                    .or_else(|| self.update.get("mode_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            },
+            "config_options_update" => AcpSessionUpdate::ConfigOptionsUpdate {
+                options: self
+                    .update
+                    .get("options")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default(),
+            },
+            _ => AcpSessionUpdate::Unknown {
+                discriminator,
+                raw: self.update.clone(),
+            },
+        }
+    }
+
     /// For `agent_message_chunk` and `agent_thought_chunk`, extract the
     /// text content as a single concatenated string. Returns `None` if
     /// the variant doesn't carry chunk content.
@@ -168,5 +255,20 @@ impl SessionNotification {
         }
         // Fallback: serialize whatever's there so we don't drop data.
         Some(content.to_string())
+    }
+
+    fn plan_entries(&self) -> Vec<AcpPlanEntry> {
+        let entries = self
+            .update
+            .get("entries")
+            .or_else(|| self.update.get("plan").and_then(|p| p.get("entries")))
+            .or_else(|| self.update.get("todos"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        entries
+            .into_iter()
+            .map(|raw| AcpPlanEntry { raw })
+            .collect()
     }
 }

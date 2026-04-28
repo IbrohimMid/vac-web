@@ -43,6 +43,8 @@ struct Args {
     /// `session/prompt` first emits a scripted tool_call /
     /// tool_call_update sequence and then completes the prompt.
     /// At most one of these should be set per run.
+    emit_thought: bool,
+    emit_plan: bool,
     emit_read_tool: bool,
     emit_edit_tool: bool,
     emit_execute_tool: bool,
@@ -82,6 +84,8 @@ fn parse_args() -> Args {
             "--crash-after" => a.crash_after = argv.next().and_then(|v| v.parse().ok()),
             "--bad-session-prompt" => a.bad_session_prompt = true,
             "--permission-prompt" => a.permission_prompt = true,
+            "--emit-thought" => a.emit_thought = true,
+            "--emit-plan" => a.emit_plan = true,
             "--emit-read-tool" => a.emit_read_tool = true,
             "--emit-edit-tool" => a.emit_edit_tool = true,
             "--emit-execute-tool" => a.emit_execute_tool = true,
@@ -341,6 +345,14 @@ async fn main() -> Result<()> {
                         }
                     }
 
+                    if args_clone.emit_plan {
+                        emit_plan_update(&stdout_emit, &session_id).await;
+                    }
+
+                    if args_clone.emit_thought {
+                        emit_thought_chunk(&stdout_emit, &session_id).await;
+                    }
+
                     // X.5c.2 — scripted tool_call sequences. Optional;
                     // emitted before the regular agent_message_chunk
                     // stream so tests can assert on the
@@ -447,6 +459,39 @@ async fn request_permission_round_trip(
     writeln_json(stdout, &req).await?;
     let outcome = tokio::time::timeout(Duration::from_secs(30), rx).await??;
     Ok(outcome)
+}
+
+async fn emit_thought_chunk(stdout: &Arc<Mutex<tokio::io::Stdout>>, session_id: &str) {
+    let notif = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_thought_chunk",
+                "content": { "type": "text", "text": "I should inspect the mocked context first." }
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &notif).await;
+}
+
+async fn emit_plan_update(stdout: &Arc<Mutex<tokio::io::Stdout>>, session_id: &str) {
+    let notif = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "plan",
+                "entries": [
+                    { "id": "plan-1", "title": "Inspect context", "status": "completed" },
+                    { "id": "plan-2", "title": "Apply edit", "status": "in_progress" }
+                ]
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &notif).await;
 }
 
 /// X.5c.2 scripted tool emit. Called once per `session/prompt` if any
