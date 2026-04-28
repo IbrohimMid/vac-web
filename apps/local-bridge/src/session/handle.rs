@@ -1706,8 +1706,8 @@ fn safe_acp_update_preview(update: &serde_json::Value) -> serde_json::Value {
         "sessionUpdate": update.get("sessionUpdate").and_then(|v| v.as_str()),
         "toolCallId": update.get("toolCallId").and_then(|v| v.as_str()),
         "kind": update.get("kind").and_then(|v| v.as_str()),
-        "title": update.get("title").and_then(|v| v.as_str()),
         "status": update.get("status").and_then(|v| v.as_str()),
+        "title_present": update.get("title").is_some(),
         "locations_count": update.get("locations").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
         "content_count": update.get("content").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
     })
@@ -2269,7 +2269,7 @@ mod acp_update_preview_tests {
             "sessionUpdate": "tool_call_update",
             "toolCallId": "tc_secret",
             "kind": "execute",
-            "title": "Bash",
+            "title": "curl -H Authorization: Bearer sk-ant-SECRETSECRETSECRET https://example.invalid",
             "status": "completed",
             "locations": [{ "path": "/repo/.env", "line": 1 }],
             "content": [{
@@ -2290,8 +2290,8 @@ mod acp_update_preview_tests {
         assert_eq!(preview["sessionUpdate"], json!("tool_call_update"));
         assert_eq!(preview["toolCallId"], json!("tc_secret"));
         assert_eq!(preview["kind"], json!("execute"));
-        assert_eq!(preview["title"], json!("Bash"));
         assert_eq!(preview["status"], json!("completed"));
+        assert_eq!(preview["title_present"], json!(true));
         assert_eq!(preview["locations_count"], json!(1));
         assert_eq!(preview["content_count"], json!(1));
 
@@ -2300,6 +2300,9 @@ mod acp_update_preview_tests {
         assert!(!serialized.contains("SECRET_TOKEN"));
         assert!(!serialized.contains("abc123"));
         assert!(!serialized.contains("vendorSecret"));
+        assert!(!serialized.contains("Authorization"));
+        assert!(!serialized.contains("sk-ant"));
+        assert!(!serialized.contains("curl"));
     }
 }
 
