@@ -1621,17 +1621,19 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
             emit_event(handle, legacy_event).await;
         }
         AcpSessionUpdate::ToolCall { tool_call } => {
+            let preview = safe_acp_update_preview(&tool_call.raw);
             tracing::debug!(
                 session = %handle.id,
-                tool_call = %serde_json::to_string(&tool_call.raw).unwrap_or_default(),
+                update_preview = ?preview,
                 "ACP tool_call normalized"
             );
             map_tool_activity(handle, &notif).await;
         }
         AcpSessionUpdate::ToolCallUpdate { update } => {
+            let preview = safe_acp_update_preview(&update.raw);
             tracing::debug!(
                 session = %handle.id,
-                tool_call_update = %serde_json::to_string(&update.raw).unwrap_or_default(),
+                update_preview = ?preview,
                 "ACP tool_call_update normalized"
             );
             map_tool_activity(handle, &notif).await;
@@ -1682,14 +1684,33 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
             emit_event(handle, event).await;
         }
         AcpSessionUpdate::Unknown { discriminator, raw } => {
+            let raw_keys = raw
+                .as_object()
+                .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
             tracing::debug!(
                 session = %handle.id,
                 variant = %discriminator,
-                raw = %serde_json::to_string(&raw).unwrap_or_default(),
+                raw_keys = ?raw_keys,
                 "ACP session/update variant ignored at X.5f.1 scope"
             );
         }
     }
+}
+
+/// Redaction-safe preview for ACP `session/update` tracing. This helper
+/// intentionally keeps only structural metadata needed to diagnose event
+/// routing and excludes rawInput/rawOutput/content text/vendor payloads.
+fn safe_acp_update_preview(update: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "sessionUpdate": update.get("sessionUpdate").and_then(|v| v.as_str()),
+        "toolCallId": update.get("toolCallId").and_then(|v| v.as_str()),
+        "kind": update.get("kind").and_then(|v| v.as_str()),
+        "title": update.get("title").and_then(|v| v.as_str()),
+        "status": update.get("status").and_then(|v| v.as_str()),
+        "locations_count": update.get("locations").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+        "content_count": update.get("content").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+    })
 }
 
 /// X.5c.2 — normalize a `tool_call` / `tool_call_update`
@@ -2235,6 +2256,51 @@ fn pick_reject_option_id(options: &[serde_json::Value]) -> anyhow::Result<String
         .and_then(|o| o.get("optionId").and_then(|v| v.as_str()))
         .map(String::from)
         .ok_or_else(|| anyhow::anyhow!("no reject-eligible option in {options:?}"))
+}
+
+#[cfg(test)]
+mod acp_update_preview_tests {
+    use super::safe_acp_update_preview;
+    use serde_json::json;
+
+    #[test]
+    fn safe_preview_excludes_raw_input_and_output_secrets() {
+        let update = json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "tc_secret",
+            "kind": "execute",
+            "title": "Bash",
+            "status": "completed",
+            "locations": [{ "path": "/repo/.env", "line": 1 }],
+            "content": [{
+                "type": "content",
+                "content": { "type": "text", "text": "SECRET_TOKEN=abc123" }
+            }],
+            "rawInput": {
+                "command": "printenv SECRET_TOKEN",
+                "SECRET_TOKEN": "abc123"
+            },
+            "rawOutput": "SECRET_TOKEN=abc123",
+            "_meta": { "vendorSecret": "abc123" }
+        });
+
+        let preview = safe_acp_update_preview(&update);
+        let serialized = preview.to_string();
+
+        assert_eq!(preview["sessionUpdate"], json!("tool_call_update"));
+        assert_eq!(preview["toolCallId"], json!("tc_secret"));
+        assert_eq!(preview["kind"], json!("execute"));
+        assert_eq!(preview["title"], json!("Bash"));
+        assert_eq!(preview["status"], json!("completed"));
+        assert_eq!(preview["locations_count"], json!(1));
+        assert_eq!(preview["content_count"], json!(1));
+
+        assert!(!serialized.contains("rawInput"));
+        assert!(!serialized.contains("rawOutput"));
+        assert!(!serialized.contains("SECRET_TOKEN"));
+        assert!(!serialized.contains("abc123"));
+        assert!(!serialized.contains("vendorSecret"));
+    }
 }
 
 #[cfg(test)]
