@@ -5,6 +5,7 @@ import { useApprovals, type ApprovalRequest } from '../../stores/approvals';
 import { useCockpit } from '../../stores/cockpit';
 import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
+import { agentTextKey, useAgentSession } from '../../stores/agentSession';
 import { useTranscript } from '../../stores/transcript';
 
 describe('session activation helper', () => {
@@ -49,6 +50,8 @@ describe('session activation helper', () => {
       lastAuthMethodId: 'old-method',
     });
     useShell.setState({ open: true, shellId: 'shell_old' });
+    useAgentSession.getState().clear();
+    useAgentSession.getState().appendAssistantDelta('sess_old', 'old rich text');
     useTranscript.setState({
       messages: new Map([
         [
@@ -98,6 +101,7 @@ describe('session activation helper', () => {
     expect(useCockpit.getState().route).toBe('build');
     expect(useActivity.getState().entries).toHaveLength(0);
     expect(useApprovals.getState().pendingOrder).toHaveLength(0);
+    expect(useAgentSession.getState().assistants.get(agentTextKey('sess_old', 'assistant'))).toBeUndefined();
     expect(useTranscript.getState().order).toHaveLength(0);
     expect(useShell.getState().open).toBe(false);
     expect(useShell.getState().shellId).toBeNull();

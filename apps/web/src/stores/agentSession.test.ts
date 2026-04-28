@@ -103,4 +103,15 @@ describe('agentSession store', () => {
     expect(selectAgentThreadItems('sess1')).toHaveLength(0);
     expect(selectAgentThreadItems('sess2')).toHaveLength(1);
   });
+
+  it('starts a new assistant block after completion', () => {
+    const s = useAgentSession.getState();
+    s.appendAssistantDelta('sess1', 'first');
+    s.completeTextBlocks('sess1');
+    s.appendAssistantDelta('sess1', 'second');
+
+    expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 1))?.content).toBe('first');
+    expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 2))?.content).toBe('second');
+    expect(selectAgentThreadItems('sess1').map((item) => item.kind)).toEqual(['assistant', 'assistant']);
+  });
 });

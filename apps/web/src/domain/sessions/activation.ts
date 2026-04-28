@@ -14,6 +14,7 @@ import { useReview } from '../../stores/review';
 import { useRuntime } from '../../stores/runtime';
 import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
+import { useAgentSession } from '../../stores/agentSession';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useTranscript } from '../../stores/transcript';
 import { useOverlays } from '../../stores/overlays';
@@ -66,6 +67,7 @@ function clearSessionBoundStores(): void {
   useRelease.getState().clear();
   useReview.getState().clear();
   useRuntime.getState().clear();
+  useAgentSession.getState().clear();
   useToolActivity.getState().clear();
   useTranscript.getState().clear();
   useContinuous.getState().clear();

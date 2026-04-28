@@ -58,6 +58,19 @@ describe('agentSession handlers', () => {
     off();
   });
 
+  it('splits assistant blocks across completed events during replay', () => {
+    const { t, emit } = mockTransport();
+    const off = registerAgentSessionHandlers(t);
+
+    emit('transcript.delta', { delta: 'first' });
+    emit('transcript.completed', {});
+    emit('transcript.delta', { delta: 'second' });
+
+    expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 1))?.content).toBe('first');
+    expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 2))?.content).toBe('second');
+    off();
+  });
+
   it('upserts tool cards from created and updated events', () => {
     const { t, emit } = mockTransport();
     const off = registerAgentSessionHandlers(t);

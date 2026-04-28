@@ -86,6 +86,8 @@ export interface AgentThreadItem {
 interface AgentSessionSlice {
   assistants: Map<string, AgentTextBlock>;
   thoughts: Map<string, AgentTextBlock>;
+  activeTextIds: Map<string, string>;
+  textCounters: Map<string, number>;
   tools: Map<string, AgentToolCall>;
   diffs: Map<string, AgentDiffUpdate>;
   terminals: Map<string, AgentTerminalUpdate>;
@@ -95,6 +97,7 @@ interface AgentSessionSlice {
 
   appendAssistantDelta(sessionId: string, delta: string, at?: string): void;
   appendThoughtDelta(sessionId: string, delta: string, at?: string): void;
+  completeTextBlocks(sessionId: string): void;
   upsertToolCall(tool: Omit<AgentToolCall, 'id'>): void;
   upsertDiff(diff: Omit<AgentDiffUpdate, 'id'>): void;
   upsertTerminal(terminal: Omit<AgentTerminalUpdate, 'id'>): void;
@@ -105,8 +108,32 @@ interface AgentSessionSlice {
 
 const CAP = 500;
 
-export function agentTextKey(sessionId: string, kind: 'assistant' | 'thought'): string {
+export function agentTextKey(sessionId: string, kind: 'assistant' | 'thought', index = 1): string {
+  return `${sessionId}\x00${kind}\x00${index}`;
+}
+
+function agentTextBaseKey(sessionId: string, kind: 'assistant' | 'thought'): string {
   return `${sessionId}\x00${kind}`;
+}
+
+function nextTextId(
+  sessionId: string,
+  kind: 'assistant' | 'thought',
+  activeTextIds: Map<string, string>,
+  textCounters: Map<string, number>,
+): { id: string; activeTextIds: Map<string, string>; textCounters: Map<string, number> } {
+  const base = agentTextBaseKey(sessionId, kind);
+  const active = activeTextIds.get(base);
+  if (active) return { id: active, activeTextIds, textCounters };
+
+  const nextCounters = new Map(textCounters);
+  const index = (nextCounters.get(base) ?? 0) + 1;
+  nextCounters.set(base, index);
+
+  const id = agentTextKey(sessionId, kind, index);
+  const nextActive = new Map(activeTextIds);
+  nextActive.set(base, id);
+  return { id, activeTextIds: nextActive, textCounters: nextCounters };
 }
 
 export function agentToolKey(sessionId: string, toolCallId: string): string {
@@ -147,6 +174,8 @@ function appendOrder(
 export const useAgentSession = create<AgentSessionSlice>((set) => ({
   assistants: new Map(),
   thoughts: new Map(),
+  activeTextIds: new Map(),
+  textCounters: new Map(),
   tools: new Map(),
   diffs: new Map(),
   terminals: new Map(),
@@ -157,7 +186,8 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
   appendAssistantDelta(sessionId, delta, at = new Date().toISOString()) {
     if (!delta) return;
     set((s) => {
-      const id = agentTextKey(sessionId, 'assistant');
+      const text = nextTextId(sessionId, 'assistant', s.activeTextIds, s.textCounters);
+      const id = text.id;
       const prev = s.assistants.get(id);
       const block: AgentTextBlock = {
         id,
@@ -175,14 +205,21 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         refId: id,
         createdAt: block.createdAt,
       });
-      return { assistants, items: itemResult.items, order: itemResult.order };
+      return {
+        assistants,
+        activeTextIds: text.activeTextIds,
+        textCounters: text.textCounters,
+        items: itemResult.items,
+        order: itemResult.order,
+      };
     });
   },
 
   appendThoughtDelta(sessionId, delta, at = new Date().toISOString()) {
     if (!delta) return;
     set((s) => {
-      const id = agentTextKey(sessionId, 'thought');
+      const text = nextTextId(sessionId, 'thought', s.activeTextIds, s.textCounters);
+      const id = text.id;
       const prev = s.thoughts.get(id);
       const block: AgentTextBlock = {
         id,
@@ -200,7 +237,22 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         refId: id,
         createdAt: block.createdAt,
       });
-      return { thoughts, items: itemResult.items, order: itemResult.order };
+      return {
+        thoughts,
+        activeTextIds: text.activeTextIds,
+        textCounters: text.textCounters,
+        items: itemResult.items,
+        order: itemResult.order,
+      };
+    });
+  },
+
+  completeTextBlocks(sessionId) {
+    set((s) => {
+      const activeTextIds = new Map(s.activeTextIds);
+      activeTextIds.delete(agentTextBaseKey(sessionId, 'assistant'));
+      activeTextIds.delete(agentTextBaseKey(sessionId, 'thought'));
+      return { activeTextIds };
     });
   },
 
@@ -260,6 +312,8 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       const prefix = `${sessionId}\x00`;
       const assistants = new Map(s.assistants);
       const thoughts = new Map(s.thoughts);
+      const activeTextIds = new Map(s.activeTextIds);
+      const textCounters = new Map(s.textCounters);
       const tools = new Map(s.tools);
       const diffs = new Map(s.diffs);
       const terminals = new Map(s.terminals);
@@ -268,9 +322,13 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       for (const map of [assistants, thoughts, tools, diffs, terminals, plans, items]) {
         for (const key of map.keys()) if (key.startsWith(prefix)) map.delete(key);
       }
+      for (const key of activeTextIds.keys()) if (key.startsWith(prefix)) activeTextIds.delete(key);
+      for (const key of textCounters.keys()) if (key.startsWith(prefix)) textCounters.delete(key);
       return {
         assistants,
         thoughts,
+        activeTextIds,
+        textCounters,
         tools,
         diffs,
         terminals,
@@ -285,6 +343,8 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
     set({
       assistants: new Map(),
       thoughts: new Map(),
+      activeTextIds: new Map(),
+      textCounters: new Map(),
       tools: new Map(),
       diffs: new Map(),
       terminals: new Map(),

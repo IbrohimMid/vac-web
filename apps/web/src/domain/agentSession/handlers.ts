@@ -98,6 +98,12 @@ export function registerAgentSessionHandlers(transport: TransportHandle): () => 
     }),
   );
 
+  offs.push(
+    transport.on('transcript.completed', (ev) => {
+      store().completeTextBlocks(ev.session_id);
+    }),
+  );
+
   function handleToolCall(eventType: 'tool.call.created' | 'tool.call.updated') {
     return transport.on(eventType, (ev) => {
       const p = asRecord(ev.payload);
