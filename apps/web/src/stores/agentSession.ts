@@ -4,6 +4,8 @@ export type AgentToolKind = 'read' | 'edit' | 'execute' | 'other';
 export type AgentToolStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 export type PlanStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled' | 'unknown';
 export type AgentThreadItemKind = 'assistant' | 'thought' | 'tool' | 'plan';
+export type AgentTurnStatus = 'idle' | 'queued' | 'working' | 'streaming' | 'waiting_permission' | 'completed' | 'failed';
+export type RichEventKind = 'message' | 'thought' | 'tool' | 'diff' | 'terminal' | 'plan' | 'debug';
 
 export interface AgentLocation {
   path: string;
@@ -83,6 +85,44 @@ export interface AgentThreadItem {
   createdAt: string;
 }
 
+export interface AgentTurn {
+  id: string;
+  sessionId: string;
+  userText: string | null;
+  provider: string | null;
+  status: AgentTurnStatus;
+  assistantBlockIds: string[];
+  thinkingBlockIds: string[];
+  toolCallIds: string[];
+  planId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentDebugMessage {
+  id: string;
+  sessionId: string;
+  direction: string | null;
+  messageType: string | null;
+  method: string | null;
+  discriminator: string | null;
+  paramsPreview: string | null;
+  paramsHash: string | null;
+  ts: string;
+}
+
+export interface AgentTelemetry {
+  sessionId: string;
+  providerId: string | null;
+  eventCounts: Record<RichEventKind, number>;
+  discriminators: Record<string, number>;
+  lastUpdateAt: string | null;
+  promptStatus: AgentTurnStatus;
+  debugMessages: AgentDebugMessage[];
+}
+
 interface AgentSessionSlice {
   assistants: Map<string, AgentTextBlock>;
   thoughts: Map<string, AgentTextBlock>;
@@ -94,19 +134,39 @@ interface AgentSessionSlice {
   plans: Map<string, AgentPlan>;
   items: Map<string, AgentThreadItem>;
   order: string[];
+  turns: Map<string, AgentTurn>;
+  turnOrder: string[];
+  activeTurnIds: Map<string, string>;
+  turnCounters: Map<string, number>;
+  telemetry: Map<string, AgentTelemetry>;
 
+  beginTurn(args: { sessionId: string; userText: string; provider?: string | null; at?: string }): void;
+  failActiveTurn(sessionId: string, at?: string): void;
   appendAssistantDelta(sessionId: string, delta: string, at?: string): void;
   appendThoughtDelta(sessionId: string, delta: string, at?: string): void;
-  completeTextBlocks(sessionId: string): void;
+  completeTextBlocks(sessionId: string, at?: string): void;
   upsertToolCall(tool: Omit<AgentToolCall, 'id'>): void;
   upsertDiff(diff: Omit<AgentDiffUpdate, 'id'>): void;
   upsertTerminal(terminal: Omit<AgentTerminalUpdate, 'id'>): void;
   updatePlan(plan: Omit<AgentPlan, 'id'>): void;
+  recordDebugMessage(message: Omit<AgentDebugMessage, 'id'>): void;
+  setProvider(sessionId: string, providerId: string | null): void;
   clearSession(sessionId: string): void;
   clear(): void;
 }
 
 const CAP = 500;
+const DEBUG_CAP = 80;
+
+const emptyCounts = (): Record<RichEventKind, number> => ({
+  message: 0,
+  thought: 0,
+  tool: 0,
+  diff: 0,
+  terminal: 0,
+  plan: 0,
+  debug: 0,
+});
 
 export function agentTextKey(sessionId: string, kind: 'assistant' | 'thought', index = 1): string {
   return `${sessionId}\x00${kind}\x00${index}`;
@@ -114,6 +174,49 @@ export function agentTextKey(sessionId: string, kind: 'assistant' | 'thought', i
 
 function agentTextBaseKey(sessionId: string, kind: 'assistant' | 'thought'): string {
   return `${sessionId}\x00${kind}`;
+}
+
+export function agentToolKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}\x00tool\x00${toolCallId}`;
+}
+
+export function agentDiffKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}\x00diff\x00${toolCallId}`;
+}
+
+export function agentTerminalKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}\x00terminal\x00${toolCallId}`;
+}
+
+export function agentPlanKey(sessionId: string): string {
+  return `${sessionId}\x00plan`;
+}
+
+export function agentTurnKey(sessionId: string, index = 1): string {
+  return `${sessionId}\x00turn\x00${index}`;
+}
+
+function appendUnique<T>(items: T[], item: T): T[] {
+  return items.includes(item) ? items : [...items, item];
+}
+
+function appendOrder(
+  items: Map<string, AgentThreadItem>,
+  order: string[],
+  item: AgentThreadItem,
+): { items: Map<string, AgentThreadItem>; order: string[] } {
+  const nextItems = new Map(items);
+  const nextOrder = nextItems.has(item.id) ? order : [...order, item.id];
+  nextItems.set(item.id, item);
+  if (nextOrder.length <= CAP) return { items: nextItems, order: nextOrder };
+
+  const cappedOrder = nextOrder.slice(nextOrder.length - CAP);
+  const cappedItems = new Map<string, AgentThreadItem>();
+  for (const id of cappedOrder) {
+    const existing = nextItems.get(id);
+    if (existing) cappedItems.set(id, existing);
+  }
+  return { items: cappedItems, order: cappedOrder };
 }
 
 function nextTextId(
@@ -136,39 +239,99 @@ function nextTextId(
   return { id, activeTextIds: nextActive, textCounters: nextCounters };
 }
 
-export function agentToolKey(sessionId: string, toolCallId: string): string {
-  return `${sessionId}\x00tool\x00${toolCallId}`;
+function telemetryWith(
+  telemetry: Map<string, AgentTelemetry>,
+  sessionId: string,
+  at: string,
+  update: {
+    providerId?: string | null;
+    event?: RichEventKind;
+    status?: AgentTurnStatus;
+    discriminator?: string | null;
+    debugMessage?: AgentDebugMessage;
+  },
+): Map<string, AgentTelemetry> {
+  const next = new Map(telemetry);
+  const prev = next.get(sessionId) ?? {
+    sessionId,
+    providerId: null,
+    eventCounts: emptyCounts(),
+    discriminators: {},
+    lastUpdateAt: null,
+    promptStatus: 'idle' as AgentTurnStatus,
+    debugMessages: [],
+  };
+  const counts = { ...prev.eventCounts };
+  if (update.event) counts[update.event] += 1;
+  const discriminators = { ...prev.discriminators };
+  if (update.discriminator) discriminators[update.discriminator] = (discriminators[update.discriminator] ?? 0) + 1;
+  const debugMessages = update.debugMessage
+    ? [...prev.debugMessages, update.debugMessage].slice(-DEBUG_CAP)
+    : prev.debugMessages;
+  next.set(sessionId, {
+    ...prev,
+    providerId: update.providerId !== undefined ? update.providerId : prev.providerId,
+    eventCounts: counts,
+    discriminators,
+    promptStatus: update.status ?? prev.promptStatus,
+    lastUpdateAt: at,
+    debugMessages,
+  });
+  return next;
 }
 
-export function agentDiffKey(sessionId: string, toolCallId: string): string {
-  return `${sessionId}\x00diff\x00${toolCallId}`;
-}
-
-export function agentTerminalKey(sessionId: string, toolCallId: string): string {
-  return `${sessionId}\x00terminal\x00${toolCallId}`;
-}
-
-export function agentPlanKey(sessionId: string): string {
-  return `${sessionId}\x00plan`;
-}
-
-function appendOrder(
-  items: Map<string, AgentThreadItem>,
-  order: string[],
-  item: AgentThreadItem,
-): { items: Map<string, AgentThreadItem>; order: string[] } {
-  const nextItems = new Map(items);
-  const nextOrder = nextItems.has(item.id) ? order : [...order, item.id];
-  nextItems.set(item.id, item);
-  if (nextOrder.length <= CAP) return { items: nextItems, order: nextOrder };
-
-  const cappedOrder = nextOrder.slice(nextOrder.length - CAP);
-  const cappedItems = new Map<string, AgentThreadItem>();
-  for (const id of cappedOrder) {
-    const existing = nextItems.get(id);
-    if (existing) cappedItems.set(id, existing);
+function ensureActiveTurn(
+  s: AgentSessionSlice,
+  sessionId: string,
+  at: string,
+  provider: string | null = null,
+  status: AgentTurnStatus = 'streaming',
+): {
+  turn: AgentTurn;
+  turns: Map<string, AgentTurn>;
+  turnOrder: string[];
+  activeTurnIds: Map<string, string>;
+  turnCounters: Map<string, number>;
+} {
+  const activeId = s.activeTurnIds.get(sessionId);
+  const active = activeId ? s.turns.get(activeId) : undefined;
+  if (active && active.status !== 'completed' && active.status !== 'failed') {
+    const turns = new Map(s.turns);
+    const turn = {
+      ...active,
+      provider: active.provider ?? provider,
+      status: active.status === 'working' && status === 'streaming' ? 'streaming' : active.status,
+      updatedAt: at,
+    };
+    turns.set(turn.id, turn);
+    return { turn, turns, turnOrder: s.turnOrder, activeTurnIds: s.activeTurnIds, turnCounters: s.turnCounters };
   }
-  return { items: cappedItems, order: cappedOrder };
+
+  const turnCounters = new Map(s.turnCounters);
+  const index = (turnCounters.get(sessionId) ?? 0) + 1;
+  turnCounters.set(sessionId, index);
+  const id = agentTurnKey(sessionId, index);
+  const turn: AgentTurn = {
+    id,
+    sessionId,
+    userText: null,
+    provider,
+    status,
+    assistantBlockIds: [],
+    thinkingBlockIds: [],
+    toolCallIds: [],
+    planId: null,
+    startedAt: at,
+    completedAt: null,
+    createdAt: at,
+    updatedAt: at,
+  };
+  const turns = new Map(s.turns);
+  turns.set(id, turn);
+  const activeTurnIds = new Map(s.activeTurnIds);
+  activeTurnIds.set(sessionId, id);
+  const turnOrder = [...s.turnOrder, id].slice(-CAP);
+  return { turn, turns, turnOrder, activeTurnIds, turnCounters };
 }
 
 export const useAgentSession = create<AgentSessionSlice>((set) => ({
@@ -182,6 +345,80 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
   plans: new Map(),
   items: new Map(),
   order: [],
+  turns: new Map(),
+  turnOrder: [],
+  activeTurnIds: new Map(),
+  turnCounters: new Map(),
+  telemetry: new Map(),
+
+  beginTurn({ sessionId, userText, provider = null, at = new Date().toISOString() }) {
+    set((s) => {
+      const existingId = s.activeTurnIds.get(sessionId);
+      const existing = existingId ? s.turns.get(existingId) : undefined;
+      let turnResult = ensureActiveTurn(s, sessionId, at, provider, 'working');
+      let turn = turnResult.turn;
+      const turns = new Map(turnResult.turns);
+      if (existing && !existing.userText && existing.status !== 'completed' && existing.status !== 'failed') {
+        turn = { ...existing, userText, provider: existing.provider ?? provider, status: 'working', updatedAt: at };
+      } else if (!existing || existing.status === 'completed' || existing.status === 'failed') {
+        turn = { ...turn, userText, provider, status: 'working', updatedAt: at };
+      } else {
+        const turnCounters = new Map(s.turnCounters);
+        const index = (turnCounters.get(sessionId) ?? 0) + 1;
+        turnCounters.set(sessionId, index);
+        const id = agentTurnKey(sessionId, index);
+        turn = {
+          id,
+          sessionId,
+          userText,
+          provider,
+          status: 'working',
+          assistantBlockIds: [],
+          thinkingBlockIds: [],
+          toolCallIds: [],
+          planId: null,
+          startedAt: at,
+          completedAt: null,
+          createdAt: at,
+          updatedAt: at,
+        };
+        turnResult = {
+          turn,
+          turns,
+          turnOrder: [...s.turnOrder, id].slice(-CAP),
+          activeTurnIds: new Map(s.activeTurnIds),
+          turnCounters,
+        };
+        turnResult.activeTurnIds.set(sessionId, id);
+      }
+      turns.set(turn.id, turn);
+      const activeTextIds = new Map(s.activeTextIds);
+      activeTextIds.delete(agentTextBaseKey(sessionId, 'assistant'));
+      activeTextIds.delete(agentTextBaseKey(sessionId, 'thought'));
+      return {
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        activeTextIds,
+        telemetry: telemetryWith(s.telemetry, sessionId, at, { providerId: provider, status: 'working' }),
+      };
+    });
+  },
+
+  failActiveTurn(sessionId, at = new Date().toISOString()) {
+    set((s) => {
+      const activeId = s.activeTurnIds.get(sessionId);
+      if (!activeId) return { telemetry: telemetryWith(s.telemetry, sessionId, at, { status: 'failed' }) };
+      const turn = s.turns.get(activeId);
+      if (!turn) return { telemetry: telemetryWith(s.telemetry, sessionId, at, { status: 'failed' }) };
+      const turns = new Map(s.turns);
+      turns.set(activeId, { ...turn, status: 'failed', completedAt: at, updatedAt: at });
+      const activeTurnIds = new Map(s.activeTurnIds);
+      activeTurnIds.delete(sessionId);
+      return { turns, activeTurnIds, telemetry: telemetryWith(s.telemetry, sessionId, at, { status: 'failed' }) };
+    });
+  },
 
   appendAssistantDelta(sessionId, delta, at = new Date().toISOString()) {
     if (!delta) return;
@@ -205,12 +442,25 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         refId: id,
         createdAt: block.createdAt,
       });
+      const turnResult = ensureActiveTurn(s, sessionId, at, null, 'streaming');
+      const turns = new Map(turnResult.turns);
+      turns.set(turnResult.turn.id, {
+        ...turnResult.turn,
+        status: 'streaming',
+        assistantBlockIds: appendUnique(turnResult.turn.assistantBlockIds, id),
+        updatedAt: at,
+      });
       return {
         assistants,
         activeTextIds: text.activeTextIds,
         textCounters: text.textCounters,
         items: itemResult.items,
         order: itemResult.order,
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        telemetry: telemetryWith(s.telemetry, sessionId, at, { event: 'message', status: 'streaming' }),
       };
     });
   },
@@ -237,22 +487,48 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         refId: id,
         createdAt: block.createdAt,
       });
+      const turnResult = ensureActiveTurn(s, sessionId, at, null, 'streaming');
+      const turns = new Map(turnResult.turns);
+      turns.set(turnResult.turn.id, {
+        ...turnResult.turn,
+        status: 'streaming',
+        thinkingBlockIds: appendUnique(turnResult.turn.thinkingBlockIds, id),
+        updatedAt: at,
+      });
       return {
         thoughts,
         activeTextIds: text.activeTextIds,
         textCounters: text.textCounters,
         items: itemResult.items,
         order: itemResult.order,
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        telemetry: telemetryWith(s.telemetry, sessionId, at, { event: 'thought', status: 'streaming' }),
       };
     });
   },
 
-  completeTextBlocks(sessionId) {
+  completeTextBlocks(sessionId, at = new Date().toISOString()) {
     set((s) => {
       const activeTextIds = new Map(s.activeTextIds);
       activeTextIds.delete(agentTextBaseKey(sessionId, 'assistant'));
       activeTextIds.delete(agentTextBaseKey(sessionId, 'thought'));
-      return { activeTextIds };
+      const activeTurnIds = new Map(s.activeTurnIds);
+      const activeId = activeTurnIds.get(sessionId);
+      const turns = new Map(s.turns);
+      if (activeId) {
+        const turn = turns.get(activeId);
+        if (turn) turns.set(activeId, { ...turn, status: 'completed', completedAt: at, updatedAt: at });
+        activeTurnIds.delete(sessionId);
+      }
+      return {
+        activeTextIds,
+        turns,
+        activeTurnIds,
+        telemetry: telemetryWith(s.telemetry, sessionId, at, { status: 'completed' }),
+      };
     });
   },
 
@@ -269,7 +545,29 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         refId: id,
         createdAt: existing?.updatedAt ?? tool.updatedAt,
       });
-      return { tools, items: itemResult.items, order: itemResult.order };
+      const turnResult = ensureActiveTurn(s, tool.sessionId, tool.updatedAt, tool.agentId, 'streaming');
+      const turns = new Map(turnResult.turns);
+      turns.set(turnResult.turn.id, {
+        ...turnResult.turn,
+        status: tool.status === 'failed' ? 'failed' : 'streaming',
+        provider: turnResult.turn.provider ?? tool.agentId,
+        toolCallIds: appendUnique(turnResult.turn.toolCallIds, id),
+        updatedAt: tool.updatedAt,
+      });
+      return {
+        tools,
+        items: itemResult.items,
+        order: itemResult.order,
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        telemetry: telemetryWith(s.telemetry, tool.sessionId, tool.updatedAt, {
+          event: 'tool',
+          providerId: tool.agentId,
+          status: tool.status === 'failed' ? 'failed' : 'streaming',
+        }),
+      };
     });
   },
 
@@ -278,7 +576,22 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       const id = agentDiffKey(diff.sessionId, diff.toolCallId);
       const diffs = new Map(s.diffs);
       diffs.set(id, { ...diff, id });
-      return { diffs };
+      const turnResult = ensureActiveTurn(s, diff.sessionId, diff.updatedAt, null, 'streaming');
+      const toolId = agentToolKey(diff.sessionId, diff.toolCallId);
+      const turns = new Map(turnResult.turns);
+      turns.set(turnResult.turn.id, {
+        ...turnResult.turn,
+        toolCallIds: appendUnique(turnResult.turn.toolCallIds, toolId),
+        updatedAt: diff.updatedAt,
+      });
+      return {
+        diffs,
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        telemetry: telemetryWith(s.telemetry, diff.sessionId, diff.updatedAt, { event: 'diff', status: 'streaming' }),
+      };
     });
   },
 
@@ -287,7 +600,27 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       const id = agentTerminalKey(terminal.sessionId, terminal.toolCallId);
       const terminals = new Map(s.terminals);
       terminals.set(id, { ...terminal, id });
-      return { terminals };
+      const turnResult = ensureActiveTurn(s, terminal.sessionId, terminal.updatedAt, terminal.agentId, 'streaming');
+      const toolId = agentToolKey(terminal.sessionId, terminal.toolCallId);
+      const turns = new Map(turnResult.turns);
+      turns.set(turnResult.turn.id, {
+        ...turnResult.turn,
+        provider: turnResult.turn.provider ?? terminal.agentId,
+        toolCallIds: appendUnique(turnResult.turn.toolCallIds, toolId),
+        updatedAt: terminal.updatedAt,
+      });
+      return {
+        terminals,
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        telemetry: telemetryWith(s.telemetry, terminal.sessionId, terminal.updatedAt, {
+          event: 'terminal',
+          providerId: terminal.agentId,
+          status: 'streaming',
+        }),
+      };
     });
   },
 
@@ -303,8 +636,43 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         refId: id,
         createdAt: plan.updatedAt,
       });
-      return { plans, items: itemResult.items, order: itemResult.order };
+      const turnResult = ensureActiveTurn(s, plan.sessionId, plan.updatedAt, null, 'streaming');
+      const turns = new Map(turnResult.turns);
+      turns.set(turnResult.turn.id, {
+        ...turnResult.turn,
+        planId: id,
+        updatedAt: plan.updatedAt,
+      });
+      return {
+        plans,
+        items: itemResult.items,
+        order: itemResult.order,
+        turns,
+        turnOrder: turnResult.turnOrder,
+        activeTurnIds: turnResult.activeTurnIds,
+        turnCounters: turnResult.turnCounters,
+        telemetry: telemetryWith(s.telemetry, plan.sessionId, plan.updatedAt, { event: 'plan', status: 'streaming' }),
+      };
     });
+  },
+
+  recordDebugMessage(message) {
+    set((s) => {
+      const id = `${message.sessionId}\x00debug\x00${message.ts}\x00${s.telemetry.get(message.sessionId)?.debugMessages.length ?? 0}`;
+      const debugMessage = { ...message, id };
+      return {
+        telemetry: telemetryWith(s.telemetry, message.sessionId, message.ts, {
+          event: 'debug',
+          discriminator: message.discriminator,
+          debugMessage,
+        }),
+      };
+    });
+  },
+
+  setProvider(sessionId, providerId) {
+    const at = new Date().toISOString();
+    set((s) => ({ telemetry: telemetryWith(s.telemetry, sessionId, at, { providerId }) }));
   },
 
   clearSession(sessionId) {
@@ -319,11 +687,18 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       const terminals = new Map(s.terminals);
       const plans = new Map(s.plans);
       const items = new Map(s.items);
-      for (const map of [assistants, thoughts, tools, diffs, terminals, plans, items]) {
+      const turns = new Map(s.turns);
+      const activeTurnIds = new Map(s.activeTurnIds);
+      const turnCounters = new Map(s.turnCounters);
+      const telemetry = new Map(s.telemetry);
+      for (const map of [assistants, thoughts, tools, diffs, terminals, plans, items, turns]) {
         for (const key of map.keys()) if (key.startsWith(prefix)) map.delete(key);
       }
       for (const key of activeTextIds.keys()) if (key.startsWith(prefix)) activeTextIds.delete(key);
       for (const key of textCounters.keys()) if (key.startsWith(prefix)) textCounters.delete(key);
+      activeTurnIds.delete(sessionId);
+      turnCounters.delete(sessionId);
+      telemetry.delete(sessionId);
       return {
         assistants,
         thoughts,
@@ -334,7 +709,12 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         terminals,
         plans,
         items,
+        turns,
+        activeTurnIds,
+        turnCounters,
+        telemetry,
         order: s.order.filter((id) => !id.startsWith(prefix)),
+        turnOrder: s.turnOrder.filter((id) => !id.startsWith(prefix)),
       };
     });
   },
@@ -351,6 +731,11 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       plans: new Map(),
       items: new Map(),
       order: [],
+      turns: new Map(),
+      turnOrder: [],
+      activeTurnIds: new Map(),
+      turnCounters: new Map(),
+      telemetry: new Map(),
     });
   },
 }));
@@ -363,4 +748,14 @@ export function selectAgentThreadItems(sessionId: string | null | undefined): Ag
     .filter((id) => id.startsWith(prefix))
     .map((id) => s.items.get(id))
     .filter((item): item is AgentThreadItem => item != null);
+}
+
+export function selectAgentTurns(sessionId: string | null | undefined): AgentTurn[] {
+  if (!sessionId) return [];
+  const s = useAgentSession.getState();
+  const prefix = `${sessionId}\x00turn\x00`;
+  return s.turnOrder
+    .filter((id) => id.startsWith(prefix))
+    .map((id) => s.turns.get(id))
+    .filter((turn): turn is AgentTurn => turn != null);
 }

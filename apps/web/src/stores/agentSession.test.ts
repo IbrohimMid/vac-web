@@ -6,6 +6,7 @@ import {
   agentTextKey,
   agentToolKey,
   selectAgentThreadItems,
+  selectAgentTurns,
   useAgentSession,
 } from './agentSession';
 
@@ -113,5 +114,92 @@ describe('agentSession store', () => {
     expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 1))?.content).toBe('first');
     expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 2))?.content).toBe('second');
     expect(selectAgentThreadItems('sess1').map((item) => item.kind)).toEqual(['assistant', 'assistant']);
+  });
+
+  it('groups user prompt and streaming deltas into an active turn', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'hi', provider: 'gemini-acp', at: '2026-01-01T00:00:00Z' });
+
+    expect(selectAgentTurns('sess1')).toMatchObject([
+      { userText: 'hi', provider: 'gemini-acp', status: 'working', startedAt: '2026-01-01T00:00:00Z' },
+    ]);
+
+    s.appendAssistantDelta('sess1', 'hello', '2026-01-01T00:00:01Z');
+
+    const turn = selectAgentTurns('sess1')[0];
+    expect(turn?.status).toBe('streaming');
+    expect(turn?.assistantBlockIds).toEqual([agentTextKey('sess1', 'assistant')]);
+    expect(useAgentSession.getState().telemetry.get('sess1')?.eventCounts.message).toBe(1);
+    expect(useAgentSession.getState().telemetry.get('sess1')?.promptStatus).toBe('streaming');
+  });
+
+  it('marks the active turn completed or failed', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'hi', provider: 'gemini-acp', at: '2026-01-01T00:00:00Z' });
+    s.completeTextBlocks('sess1', '2026-01-01T00:00:03Z');
+
+    expect(selectAgentTurns('sess1')[0]).toMatchObject({ status: 'completed', completedAt: '2026-01-01T00:00:03Z' });
+    expect(useAgentSession.getState().telemetry.get('sess1')?.promptStatus).toBe('completed');
+
+    s.beginTurn({ sessionId: 'sess1', userText: 'again', provider: 'gemini-acp', at: '2026-01-01T00:00:04Z' });
+    s.failActiveTurn('sess1', '2026-01-01T00:00:05Z');
+
+    expect(selectAgentTurns('sess1')[1]).toMatchObject({ status: 'failed', completedAt: '2026-01-01T00:00:05Z' });
+    expect(useAgentSession.getState().telemetry.get('sess1')?.promptStatus).toBe('failed');
+  });
+
+  it('attaches thought, tool, diff, terminal, and plan events to a turn and telemetry', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'code', provider: 'gemini-acp' });
+    s.appendThoughtDelta('sess1', 'think');
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc1',
+      kind: 'edit',
+      title: 'Edit file',
+      status: 'in_progress',
+      locations: [],
+      agentId: 'gemini-acp',
+      agentKind: 'acp',
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    s.upsertDiff({
+      sessionId: 'sess1',
+      toolCallId: 'tc1',
+      status: 'completed',
+      locations: [],
+      diffs: [{ path: '/tmp/a.ts', old_text: 'a', new_text: 'b' }],
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:01Z',
+    });
+    s.upsertTerminal({
+      sessionId: 'sess1',
+      toolCallId: 'tc1',
+      status: 'completed',
+      rawInputRedacted: null,
+      rawOutputRedacted: 'ok',
+      approvedByApprovalId: null,
+      agentId: 'gemini-acp',
+      agentKind: 'acp',
+      updatedAt: '2026-01-01T00:00:02Z',
+    });
+    s.updatePlan({
+      sessionId: 'sess1',
+      entries: [{ id: 'p1', title: 'Inspect', status: 'completed' }],
+      updatedAt: '2026-01-01T00:00:03Z',
+    });
+
+    const turn = selectAgentTurns('sess1')[0];
+    expect(turn?.thinkingBlockIds).toEqual([agentTextKey('sess1', 'thought')]);
+    expect(turn?.toolCallIds).toEqual([agentToolKey('sess1', 'tc1')]);
+    expect(turn?.planId).toBe(agentPlanKey('sess1'));
+    expect(useAgentSession.getState().telemetry.get('sess1')?.eventCounts).toMatchObject({
+      thought: 1,
+      tool: 1,
+      diff: 1,
+      terminal: 1,
+      plan: 1,
+    });
   });
 });

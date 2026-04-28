@@ -68,6 +68,29 @@ describe('agentSession handlers', () => {
 
     expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 1))?.content).toBe('first');
     expect(useAgentSession.getState().assistants.get(agentTextKey('sess1', 'assistant', 2))?.content).toBe('second');
+    expect(useAgentSession.getState().telemetry.get('sess1')?.promptStatus).toBe('streaming');
+    off();
+  });
+
+  it('tracks provider, completion, errors, and rich event telemetry', () => {
+    const { t, emit } = mockTransport();
+    const off = registerAgentSessionHandlers(t);
+
+    emit('session.ready', { agent_id: 'gemini-acp' });
+    useAgentSession.getState().beginTurn({ sessionId: 'sess1', userText: 'hi', provider: 'gemini-acp' });
+    emit('transcript.delta', { delta: 'hello' });
+    emit('transcript.completed', {});
+
+    expect(useAgentSession.getState().telemetry.get('sess1')).toMatchObject({
+      providerId: 'gemini-acp',
+      promptStatus: 'completed',
+    });
+    expect(useAgentSession.getState().telemetry.get('sess1')?.eventCounts.message).toBe(1);
+
+    useAgentSession.getState().beginTurn({ sessionId: 'sess1', userText: 'again', provider: 'gemini-acp' });
+    emit('transcript.error', { error: 'boom' });
+
+    expect(useAgentSession.getState().telemetry.get('sess1')?.promptStatus).toBe('failed');
     off();
   });
 
@@ -123,6 +146,36 @@ describe('agentSession handlers', () => {
       'Inspect context',
       'Apply edit',
     ]);
+    expect(useAgentSession.getState().telemetry.get('sess1')?.eventCounts).toMatchObject({
+      diff: 1,
+      terminal: 1,
+      plan: 1,
+    });
+    off();
+  });
+
+  it('captures ACP debug discriminators and safe previews', () => {
+    const { t, emit } = mockTransport();
+    const off = registerAgentSessionHandlers(t);
+
+    emit('acp.debug_message', {
+      direction: 'incoming',
+      message_type: 'notification',
+      method: 'session/update',
+      params_preview: { sessionUpdate: 'agent_message_chunk', content_count: 1 },
+      params_hash: 'abc123456789',
+    });
+
+    const telemetry = useAgentSession.getState().telemetry.get('sess1');
+    expect(telemetry?.eventCounts.debug).toBe(1);
+    expect(telemetry?.discriminators.agent_message_chunk).toBe(1);
+    expect(telemetry?.debugMessages[0]).toMatchObject({
+      direction: 'incoming',
+      method: 'session/update',
+      discriminator: 'agent_message_chunk',
+      paramsHash: 'abc123456789',
+    });
+    expect(telemetry?.debugMessages[0]?.paramsPreview).toContain('content_count');
     off();
   });
 });

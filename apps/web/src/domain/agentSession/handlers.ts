@@ -1,6 +1,7 @@
 import {
   useAgentSession,
   type AgentDiff,
+  type AgentDebugMessage,
   type AgentLocation,
   type AgentPlanEntry,
   type AgentToolKind,
@@ -15,6 +16,38 @@ function asRecord(raw: unknown): Record<string, unknown> {
 
 function asString(raw: unknown): string | null {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+function discriminatorFromPreview(raw: unknown): string | null {
+  const preview = asRecord(raw);
+  const direct = asString(preview.sessionUpdate) ?? asString(preview.session_update);
+  if (direct) return direct;
+  const update = asRecord(preview.update);
+  return asString(update.sessionUpdate) ?? asString(update.session_update);
+}
+
+function previewText(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === 'string') return raw.slice(0, 240);
+  try {
+    return JSON.stringify(raw).slice(0, 240);
+  } catch {
+    return '[unserializable preview]';
+  }
+}
+
+function debugMessageFromPayload(sessionId: string, ts: string, raw: unknown): Omit<AgentDebugMessage, 'id'> {
+  const p = asRecord(raw);
+  return {
+    sessionId,
+    direction: asString(p.direction),
+    messageType: asString(p.message_type) ?? asString(p.messageType),
+    method: asString(p.method),
+    discriminator: discriminatorFromPreview(p.params_preview),
+    paramsPreview: previewText(p.params_preview),
+    paramsHash: asString(p.params_hash) ?? asString(p.paramsHash),
+    ts,
+  };
 }
 
 function asToolKind(raw: unknown): AgentToolKind {
@@ -81,6 +114,13 @@ export function registerAgentSessionHandlers(transport: TransportHandle): () => 
   const store = useAgentSession.getState;
 
   offs.push(
+    transport.on('session.ready', (ev) => {
+      const p = asRecord(ev.payload);
+      store().setProvider(ev.session_id, asString(p.agent_id));
+    }),
+  );
+
+  offs.push(
     transport.on('transcript.delta', (ev) => {
       const p = asRecord(ev.payload);
       const delta = asString(p.delta);
@@ -100,7 +140,13 @@ export function registerAgentSessionHandlers(transport: TransportHandle): () => 
 
   offs.push(
     transport.on('transcript.completed', (ev) => {
-      store().completeTextBlocks(ev.session_id);
+      store().completeTextBlocks(ev.session_id, ev.ts);
+    }),
+  );
+
+  offs.push(
+    transport.on('transcript.error', (ev) => {
+      store().failActiveTurn(ev.session_id, ev.ts);
     }),
   );
 
@@ -171,6 +217,12 @@ export function registerAgentSessionHandlers(transport: TransportHandle): () => 
         entries: asPlanEntries(p.entries),
         updatedAt: ev.ts,
       });
+    }),
+  );
+
+  offs.push(
+    transport.on('acp.debug_message', (ev) => {
+      store().recordDebugMessage(debugMessageFromPayload(ev.session_id, ev.ts, ev.payload));
     }),
   );
 

@@ -9,7 +9,7 @@ import { AgentThread } from './AgentThread';
 
 function reset() {
   useAgentSession.getState().clear();
-  useSession.setState({ sessionId: 'sess1' });
+  useSession.setState({ sessionId: 'sess1', agentId: 'gemini-acp' });
 }
 
 describe('AgentThread renderer', () => {
@@ -20,9 +20,9 @@ describe('AgentThread renderer', () => {
     useAgentSession.getState().appendThoughtDelta('sess1', 'I should inspect context.');
     render(<AgentThread sessionId="sess1" />);
 
-    const details = screen.getByText(/Thinking collapsed/).closest('details');
+    const details = screen.getByText(/Thinking/).closest('details');
     expect(details).not.toHaveAttribute('open');
-    fireEvent.click(screen.getByText(/Thinking collapsed/));
+    fireEvent.click(screen.getByText(/Thinking/));
     expect(screen.getByText('I should inspect context.')).toBeInTheDocument();
   });
 
@@ -141,5 +141,61 @@ describe('AgentThread renderer', () => {
     expect(screen.getByText('Apply edit')).toBeInTheDocument();
     expect(screen.getByText('completed')).toBeInTheDocument();
     expect(screen.getByText('in_progress')).toBeInTheDocument();
+  });
+
+  it('renders a working Gemini turn before rich events arrive', () => {
+    useAgentSession.getState().beginTurn({
+      sessionId: 'sess1',
+      userText: 'hi',
+      provider: 'gemini-acp',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    render(<AgentThread sessionId="sess1" />);
+
+    expect(screen.getByText('Gemini CLI ACP')).toBeInTheDocument();
+    expect(screen.getByText('hi')).toBeInTheDocument();
+    expect(screen.getByText('Gemini is working…')).toBeInTheDocument();
+    expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
+  });
+
+  it('keeps turns separated and shows telemetry counts', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'first', provider: 'gemini-acp' });
+    s.appendAssistantDelta('sess1', 'one');
+    s.completeTextBlocks('sess1');
+    s.beginTurn({ sessionId: 'sess1', userText: 'second', provider: 'gemini-acp' });
+    s.appendAssistantDelta('sess1', 'two');
+
+    render(<AgentThread sessionId="sess1" />);
+
+    expect(screen.getByText('first')).toBeInTheDocument();
+    expect(screen.getByText('one')).toBeInTheDocument();
+    expect(screen.getByText('second')).toBeInTheDocument();
+    expect(screen.getByText(/two/)).toBeInTheDocument();
+    expect(screen.getByText('2 deltas')).toBeInTheDocument();
+    expect(screen.getByText('0 tools')).toBeInTheDocument();
+    expect(screen.getByText('0 thoughts')).toBeInTheDocument();
+    expect(screen.getByText('0 plans')).toBeInTheDocument();
+  });
+
+  it('renders ACP debug discriminators and safe preview', () => {
+    useAgentSession.getState().recordDebugMessage({
+      sessionId: 'sess1',
+      direction: 'incoming',
+      messageType: 'notification',
+      method: 'session/update',
+      discriminator: 'agent_message_chunk',
+      paramsPreview: '{"sessionUpdate":"agent_message_chunk","content_count":1}',
+      paramsHash: 'abc123456789',
+      ts: '2026-01-01T00:00:00Z',
+    });
+
+    render(<AgentThread sessionId="sess1" />);
+
+    expect(screen.getByText('ACP Debug')).toBeInTheDocument();
+    expect(screen.getAllByText(/agent_message_chunk/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/content_count/)).toBeInTheDocument();
+    expect(screen.getByText('abc1234567')).toBeInTheDocument();
   });
 });

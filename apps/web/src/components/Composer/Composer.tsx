@@ -17,6 +17,7 @@ import { SlashPalette } from './SlashPalette';
 import { markUsed } from '../../actions/recency';
 import type { ActionSpec } from '../../actions/registry';
 import { useAttachments } from '../../stores/attachments';
+import { useAgentSession } from '../../stores/agentSession';
 import { useComposer } from '../../stores/composer';
 import { useSession } from '../../stores/session';
 import { useTranscript } from '../../stores/transcript';
@@ -51,6 +52,7 @@ export function Composer({ transport }: { transport: TransportHandle }) {
 function TextareaComposer({ transport }: { transport: TransportHandle }) {
   const { text, submitting, setText, setSubmitting, reset } = useComposer();
   const sessionId = useSession((s) => s.sessionId);
+  const provider = useSession((s) => s.agentId);
   const attachments = useAttachments((s) => s.items);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -74,6 +76,7 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
       transport,
       sessionId,
       text,
+      provider,
       attachments: attachments.map((a) => ({ kind: a.kind, label: a.label, payload: a.payload })),
       mentions: [],
       onStart: () => setSubmitting(true),
@@ -153,6 +156,7 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
 function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
   const { submitting, setSubmitting, reset } = useComposer();
   const sessionId = useSession((s) => s.sessionId);
+  const provider = useSession((s) => s.agentId);
   const attachments = useAttachments((s) => s.items);
   const editorRef = useRef<ContentEditableHandle>(null);
   const [hasContent, setHasContent] = useState(false);
@@ -168,6 +172,7 @@ function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
       transport,
       sessionId,
       text,
+      provider,
       attachments: attachments.map((a) => ({ kind: a.kind, label: a.label, payload: a.payload })),
       mentions,
       onStart: () => setSubmitting(true),
@@ -353,6 +358,7 @@ interface DispatchArgs {
   transport: TransportHandle;
   sessionId: string;
   text: string;
+  provider?: string | null;
   attachments: Array<{ kind: string; label: string; payload: string }>;
   mentions: MentionRef[];
   onStart(): void;
@@ -381,6 +387,7 @@ async function dispatchSubmit({
   transport,
   sessionId,
   text,
+  provider = null,
   attachments,
   mentions,
   onStart,
@@ -396,11 +403,16 @@ async function dispatchSubmit({
       state: 'completed',
       createdAt: new Date().toISOString(),
     });
+    useAgentSession.getState().beginTurn({ sessionId, userText: text, provider });
     const payload = buildSubmitPayload({ text, attachments, mentions });
     const ack = await transport.send(sessionId, 'message.submit', payload);
     if (!ack.ok) {
       console.error('submit failed', ack.error);
+      useAgentSession.getState().failActiveTurn(sessionId);
     }
+  } catch (err) {
+    console.error('submit failed', err);
+    useAgentSession.getState().failActiveTurn(sessionId);
   } finally {
     onDone();
   }
