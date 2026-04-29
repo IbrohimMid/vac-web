@@ -14,12 +14,14 @@ if [[ -z "${CLAUDE_CODE_EXECUTABLE:-}" ]] && command -v claude >/dev/null 2>&1; 
   export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"
 fi
 
-# Default the bridge agent registry to the multi-provider fixture so the
-# cockpit Session picker exposes more than just Claude. Override with
-# VAC_WEB_AGENTS_CONFIG=/path/to/agents.toml for a custom registry, or
-# point at fixtures/agents.all-acp.toml for the full ACP registry.
+# Default the bridge agent registry to the full ACP fixture so the cockpit
+# Session picker exposes every adapter we ship (Claude, Gemini, Codex,
+# OpenCode, Copilot, Kimi, Qwen). Adapters that aren't installed surface
+# auth methods on session start; the cockpit's ReauthAction button drives
+# `session.authenticate` against the adapter. Override with
+# VAC_WEB_AGENTS_CONFIG=/path/to/agents.toml for a custom registry.
 if [[ -z "${VAC_WEB_AGENTS_CONFIG:-}" ]]; then
-  export VAC_WEB_AGENTS_CONFIG="$ROOT/fixtures/agents.multi.toml"
+  export VAC_WEB_AGENTS_CONFIG="$ROOT/fixtures/agents.all-acp.toml"
 fi
 echo "[dev] agents -> $VAC_WEB_AGENTS_CONFIG"
 
