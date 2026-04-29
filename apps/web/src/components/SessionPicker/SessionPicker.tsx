@@ -4,6 +4,7 @@ import { activateSessionFromReady } from '../../domain/sessions/activation';
 import { useSession } from '../../stores/session';
 import { ReauthAction } from '../cockpit/ReauthAction';
 import type { AvailableAgent, TransportHandle } from '../../transport';
+import { RegistryBrowser } from './RegistryBrowser';
 
 /// Session-less commands (like session.create) are routed with a placeholder
 /// session_id that bridge ignores; the real session_id arrives via
@@ -61,6 +62,10 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
   const selectedNotInstalled = selectedAgent?.installed === false;
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Sprint 5: registry browser overlay. Closed by default — opening it
+  // triggers `registry.sync` against the bridge so we don't pay the
+  // network round-trip on every SessionPicker render.
+  const [registryOpen, setRegistryOpen] = useState(false);
 
   const create = async () => {
     if (!agentRegistryAvailable) {
@@ -244,7 +249,21 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
       )}
       <p style={{fontSize: 12, color: '#666', margin: '-2px 0 8px'}}>
         Agent registry: {agentRegistryAvailable ? `${advertisedAgents.length} available` : 'unavailable'}
+        {' '}
+        <button
+          type="button"
+          onClick={() => setRegistryOpen(true)}
+          data-testid="registry-open"
+        >
+          Browse registry
+        </button>
       </p>
+      {registryOpen && (
+        <RegistryBrowser
+          transport={transport}
+          onClose={() => setRegistryOpen(false)}
+        />
+      )}
       <label style={{ display: 'block', marginBottom: 8 }}>
         Project root:
         <input
