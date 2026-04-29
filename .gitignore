@@ -49,3 +49,4 @@ logs/
 .build-logs/
 .kilo/
 .local/
+.scratch/

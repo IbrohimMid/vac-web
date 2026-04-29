@@ -52,6 +52,21 @@ const GEMINI: AvailableAgent = {
   kind: 'acp',
   default: false,
 };
+const OPENCODE_MISSING: AvailableAgent = {
+  id: 'opencode',
+  label: 'OpenCode',
+  kind: 'acp',
+  default: false,
+  installed: false,
+  install_hint: 'Install OpenCode: see https://opencode.ai/docs/install',
+};
+const KIMI_MISSING_NO_HINT: AvailableAgent = {
+  id: 'kimi-cli-acp',
+  label: 'Kimi CLI',
+  kind: 'acp',
+  default: false,
+  installed: false,
+};
 
 describe('SessionPicker provider picker', () => {
   beforeEach(resetSession);
@@ -119,5 +134,54 @@ describe('SessionPicker provider picker', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create session/ }));
 
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('renders an install-hint warning and “not installed” marker when selected agent is missing on PATH', () => {
+    // Stage X.5e: simulate a bridge welcome where OpenCode is
+    // advertised but the binary is absent. The picker must:
+    //  1. mark the option label with a “• not installed” suffix so
+    //     operators can spot it before opening the dropdown,
+    //  2. surface the operator-supplied install_hint verbatim in
+    //     a status block, so the cockpit doubles as runbook for
+    //     the install/auth flow,
+    //  3. NOT disable Create session — spawn-time error remains the
+    //     authoritative truth in case the operator has a shim.
+    render(<SessionPicker transport={makeTransport([CLAUDE, OPENCODE_MISSING])} />);
+    const select = screen.getByLabelText('Agent') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'opencode' } });
+    const hint = screen.getByTestId('agent-install-hint');
+    expect(hint).toHaveTextContent('OpenCode');
+    expect(hint).toHaveTextContent('not\u00A0installed on this host.'.replace('\u00A0', ' '));
+    expect(hint).toHaveTextContent('https://opencode.ai/docs/install');
+    expect(hint).toHaveTextContent('spawn error');
+    // Marker on the unselected list option as well, so users
+    // notice it before they pick it.
+    const options = Array.from(select.querySelectorAll('option'));
+    expect(options.find((o) => o.value === 'opencode')?.textContent).toContain('not installed');
+    expect(options.find((o) => o.value === 'claude-acp')?.textContent).not.toContain('not installed');
+    // Create button stays enabled — the bridge spawn failure is the
+    // authoritative source of truth.
+    expect(screen.getByRole('button', { name: /Create session/ })).not.toBeDisabled();
+  });
+
+  it('hides the install-hint warning when the selected agent reports installed: true (or undefined for legacy bridges)', () => {
+    // CLAUDE has no `installed` field at all (legacy bridge
+    // shape) — the picker must NOT show a warning, treating
+    // `undefined` as "unknown, no warning" so old bridges keep
+    // working.
+    render(<SessionPicker transport={makeTransport([CLAUDE, GEMINI])} />);
+    expect(screen.queryByTestId('agent-install-hint')).toBeNull();
+  });
+
+  it('renders the warning without an install_hint sentence when the bridge omitted it', () => {
+    // Forward-compat: an agent flagged installed=false but with
+    // no install_hint must still show the warning + spawn-error
+    // caveat — the operator just gets less guidance.
+    render(<SessionPicker transport={makeTransport([CLAUDE, KIMI_MISSING_NO_HINT])} />);
+    fireEvent.change(screen.getByLabelText('Agent'), { target: { value: 'kimi-cli-acp' } });
+    const hint = screen.getByTestId('agent-install-hint');
+    expect(hint).toHaveTextContent('Kimi CLI');
+    expect(hint).toHaveTextContent('spawn error');
+    expect(hint.textContent).not.toMatch(/install:.*see/i);
   });
 });

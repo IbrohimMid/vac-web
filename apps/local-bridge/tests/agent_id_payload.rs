@@ -76,6 +76,7 @@ fn multi_agent_registry() -> AgentRuntimeRegistry {
         args: vec!["--stdio".into()],
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        install_hint: None,
     };
     let claude = AgentDefinition {
         id: "claude".into(),
@@ -85,6 +86,7 @@ fn multi_agent_registry() -> AgentRuntimeRegistry {
         args: vec!["--acp".into()],
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        install_hint: None,
     };
     let disabled = AgentDefinition {
         id: "disabled-claude".into(),
@@ -94,6 +96,7 @@ fn multi_agent_registry() -> AgentRuntimeRegistry {
         args: vec!["--acp".into()],
         enabled: false,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        install_hint: None,
     };
     let cfg = AgentsConfig {
         default_agent_id: "mock".into(),

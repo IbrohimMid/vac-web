@@ -127,6 +127,7 @@ fn build_acp_registry_with_timeout(
         args,
         enabled: true,
         permission_timeout_ms,
+        install_hint: None,
     };
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),

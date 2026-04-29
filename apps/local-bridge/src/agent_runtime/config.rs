@@ -49,6 +49,10 @@ pub struct AgentDefinition {
     pub args: Vec<String>,
     pub enabled: bool,
     pub permission_timeout_ms: u64,
+    /// Stage X.5e — operator-supplied install/auth instructions surfaced
+    /// in the cockpit when the binary isn't on PATH. Free-form one-liner;
+    /// the cockpit renders it verbatim next to the "not installed" badge.
+    pub install_hint: Option<String>,
 }
 
 /// Raw on-disk shape (toml). Kept separate from `AgentDefinition` so
@@ -74,6 +78,11 @@ struct AgentEntryRaw {
     enabled: bool,
     #[serde(default)]
     permission_timeout_ms: Option<u64>,
+    /// Stage X.5e — optional install/auth hint propagated to the welcome
+    /// frame. Free-form; rendered verbatim by the cockpit when the
+    /// agent's `command` isn't found on PATH.
+    #[serde(default)]
+    install_hint: Option<String>,
 }
 
 fn default_enabled() -> bool {
@@ -148,6 +157,7 @@ impl AgentsConfig {
                 args: entry.args,
                 enabled: entry.enabled,
                 permission_timeout_ms,
+                install_hint: entry.install_hint,
             });
         }
 

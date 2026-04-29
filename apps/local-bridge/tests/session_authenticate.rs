@@ -83,6 +83,7 @@ fn build_acp_registry_with_auth_methods(auth_methods: Value) -> AgentRuntimeRegi
         args: vec!["--acp".into(), "--auth-methods".into(), raw],
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        install_hint: None,
     };
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),
@@ -650,6 +651,7 @@ fn build_acp_registry_with_id_and_auth_methods(
         args: vec!["--acp".into(), "--auth-methods".into(), raw],
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        install_hint: None,
     };
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),

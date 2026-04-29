@@ -43,6 +43,13 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
     advertisedAgents.find((a) => a.default)?.id ?? advertisedAgents[0]?.id ?? '';
   const [selectedAgentId, setSelectedAgentId] = useState<string>(defaultAgentId);
   const agentRegistryAvailable = advertisedAgents.length > 0;
+  // Stage X.5e: surface the selected agent's PATH-install probe so
+  // we can warn the operator before they hit Create. Older bridges
+  // that pre-date the field send `installed === undefined` — treat
+  // that as "unknown, don't warn" so we don't false-positive on
+  // legacy deployments.
+  const selectedAgent = advertisedAgents.find((a) => a.id === selectedAgentId);
+  const selectedNotInstalled = selectedAgent?.installed === false;
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -169,6 +176,7 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
               <option key={a.id} value={a.id}>
                 {a.label}
                 {a.default ? ' (default)' : ''}
+                {a.installed === false ? ' • not installed' : ''}
               </option>
             ))}
           </select>
@@ -176,6 +184,37 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
       ) : (
         <div role="alert" style={{color: 'crimson', marginBottom: 8}}>
           No agents advertised by bridge. Restart bridge with fixtures/agents.multi.toml.
+        </div>
+      )}
+      {selectedNotInstalled && (
+        // Stage X.5e: bridge says the selected agent's `command`
+        // isn't on PATH. We render the operator's install_hint
+        // verbatim plus a generic caveat so they know `Create
+        // session` will fail with a spawn error until they
+        // install/authenticate. We do NOT disable the button —
+        // the spawn failure is the authoritative source of truth,
+        // and the operator may have a wrapper (e.g. shim, alias)
+        // we can't probe.
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="agent-install-hint"
+          style={{
+            marginTop: -4,
+            marginBottom: 8,
+            padding: 8,
+            border: '1px solid #d97706',
+            background: '#fff7ed',
+            color: '#7c2d12',
+            fontSize: 12,
+            borderRadius: 4,
+          }}
+        >
+          <strong>{selectedAgent?.label ?? selectedAgentId}</strong> is not
+          installed on this host.
+          {selectedAgent?.install_hint ? ` ${selectedAgent.install_hint}` : ''}
+          {' '}Starting a session will fail with a spawn error until
+          the adapter binary is on PATH.
         </div>
       )}
       <p style={{fontSize: 12, color: '#666', margin: '-2px 0 8px'}}>

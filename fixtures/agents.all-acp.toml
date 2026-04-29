@@ -3,6 +3,12 @@
 # Zed's ACP Registry (https://agentclientprotocol.com/registry) so
 # the cockpit's Start session form can offer a full picker.
 #
+# Stage X.5e adds an `install_hint` per agent: when the bridge can't
+# find the agent's `command` on PATH, the cockpit Session picker
+# shows a "not installed" badge and renders the hint verbatim so
+# operators know how to authenticate or install the adapter without
+# leaving the UI.
+#
 # Usage:
 #   VAC_WEB_AGENTS_CONFIG=/path/to/agents.all-acp.toml \
 #     cargo run -p local-bridge
@@ -23,6 +29,7 @@ enabled = true
 permission_timeout_ms = 300000
 env_allow = ["ANTHROPIC_*", "CLAUDE_*", "CLAUDE_CODE_EXECUTABLE"]
 cwd_mode = "project-root"
+install_hint = "Requires Node + npx. Auth via Anthropic OAuth on first session start, or set ANTHROPIC_API_KEY."
 
 [agents.gemini-acp]
 kind = "acp"
@@ -40,6 +47,7 @@ env_allow = [
   "CLOUDSDK_*",
 ]
 cwd_mode = "project-root"
+install_hint = "Install Gemini CLI: npm i -g @google/gemini-cli (then run `gemini auth login` once)."
 
 [agents.codex-acp]
 kind = "acp"
@@ -51,6 +59,7 @@ enabled = true
 permission_timeout_ms = 300000
 env_allow = ["OPENAI_*", "CODEX_*", "AZURE_OPENAI_*"]
 cwd_mode = "project-root"
+install_hint = "Requires Node + npx and an OPENAI_API_KEY (or AZURE_OPENAI_* credentials) in the env_allow set."
 
 [agents.opencode]
 kind = "acp"
@@ -72,6 +81,7 @@ env_allow = [
   "GOOGLE_GENERATIVE_AI_API_KEY",
 ]
 cwd_mode = "project-root"
+install_hint = "Install OpenCode: see https://opencode.ai/docs/install. Configure provider keys (OPENAI_API_KEY etc.) before starting a session."
 
 [agents.github-copilot-acp]
 kind = "acp"
@@ -83,6 +93,7 @@ enabled = true
 permission_timeout_ms = 300000
 env_allow = ["GITHUB_*", "COPILOT_*", "GH_TOKEN"]
 cwd_mode = "project-root"
+install_hint = "Requires Node + npx and a Copilot subscription. Sign in via `gh auth login` or set GH_TOKEN."
 
 [agents.kimi-cli-acp]
 kind = "acp"
@@ -94,6 +105,7 @@ enabled = true
 permission_timeout_ms = 300000
 env_allow = ["MOONSHOT_*", "KIMI_*"]
 cwd_mode = "project-root"
+install_hint = "Install Kimi CLI from Moonshot AI and set MOONSHOT_API_KEY (see https://platform.moonshot.ai docs)."
 
 [agents.qwen-code-acp]
 kind = "acp"
@@ -105,3 +117,4 @@ enabled = true
 permission_timeout_ms = 300000
 env_allow = ["DASHSCOPE_*", "QWEN_*", "ALIBABA_*"]
 cwd_mode = "project-root"
+install_hint = "Install Qwen Code (Alibaba Cloud Model Studio) and set DASHSCOPE_API_KEY before starting a session."

@@ -22,5 +22,6 @@ pub use config::{
 };
 pub use errors::{AgentRuntimeError, Result as AgentRuntimeResult};
 pub use registry::{
-    infer_legacy_agent_kind, synth_legacy_registry, AgentRuntimeRegistry, ConfigSource,
+    infer_legacy_agent_kind, is_command_installed, synth_legacy_registry, AgentRuntimeRegistry,
+    ConfigSource,
 };

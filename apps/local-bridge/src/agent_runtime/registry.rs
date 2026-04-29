@@ -175,6 +175,7 @@ pub fn synth_legacy_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
         args: vec!["--stdio".into()],
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
+        install_hint: None,
     };
     let cfg = AgentsConfig {
         default_agent_id: id,
@@ -189,6 +190,56 @@ fn home_config_path() -> PathBuf {
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     base.join("vac-web").join("agents.toml")
+}
+
+/// Stage X.5e — PATH-based install detection used to flag agents whose
+/// `command` binary isn't present on the host so the cockpit can show
+/// an "install needed" badge + hint instead of letting the user pick an
+/// agent that will fail at session spawn time.
+///
+/// - Absolute or path-prefixed commands (e.g. `./tools/foo`,
+///   `/usr/local/bin/foo`) are checked directly: file must exist and be
+///   executable.
+/// - Bare names (e.g. `npx`, `gemini`) are looked up in `PATH` using
+///   [`std::env::split_paths`] so we honour the user's shell setup.
+/// - The function never spawns the binary; it's a metadata probe only.
+pub fn is_command_installed(command: &Path) -> bool {
+    let s = command.to_string_lossy();
+    if s.is_empty() {
+        return false;
+    }
+    let has_separator =
+        s.contains('/') || s.contains('\\') || s.starts_with('.') || command.is_absolute();
+    if has_separator {
+        return is_executable_file(command);
+    }
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    for dir in std::env::split_paths(&path) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = dir.join(command);
+        if is_executable_file(&candidate) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+fn is_executable_file(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(p) {
+        Ok(m) => m.is_file() && (m.permissions().mode() & 0o111 != 0),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(p: &Path) -> bool {
+    p.is_file()
 }
 
 #[cfg(test)]
@@ -338,6 +389,47 @@ command = "custom-engine"
         assert_eq!(mock.default_agent().kind, AgentKind::Mock);
         let native = synth_legacy_registry(PathBuf::from("/path/to/vac"));
         assert_eq!(native.default_agent().kind, AgentKind::VacNative);
+    }
+
+    #[test]
+    fn is_command_installed_finds_sh_on_path() {
+        // `sh` is on PATH on every supported dev/CI environment (Linux,
+        // macOS). Use it as the canary that PATH lookup actually works.
+        // Skip if PATH is missing for some reason.
+        if std::env::var_os("PATH").is_none() {
+            return;
+        }
+        assert!(
+            is_command_installed(Path::new("sh")),
+            "sh must be on PATH for this test machine"
+        );
+    }
+
+    #[test]
+    fn is_command_installed_rejects_unknown_bare_name() {
+        let _g = isolated_env();
+        // Use a name that cannot plausibly exist anywhere on PATH.
+        assert!(!is_command_installed(Path::new(
+            "definitely-not-installed-binary-xyz-9f8a"
+        )));
+    }
+
+    #[test]
+    fn is_command_installed_handles_absolute_path() {
+        // /bin/sh is a hard guarantee on every Unix dev box. On Windows
+        // this would skip via cfg(unix), but our CI is Linux/macOS.
+        if !Path::new("/bin/sh").exists() {
+            return;
+        }
+        assert!(is_command_installed(Path::new("/bin/sh")));
+        assert!(!is_command_installed(Path::new(
+            "/definitely/missing/path/abc-no-such-thing"
+        )));
+    }
+
+    #[test]
+    fn is_command_installed_rejects_empty() {
+        assert!(!is_command_installed(Path::new("")));
     }
 
     #[test]

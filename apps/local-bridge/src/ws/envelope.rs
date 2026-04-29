@@ -75,12 +75,26 @@ pub struct ErrorInfo {
 /// the cockpit can render a provider picker without a separate HTTP
 /// roundtrip. Only enabled agents are surfaced; the bridge marks exactly
 /// one entry as `default = true` (matching `default_agent`).
+///
+/// Stage X.5e adds `installed` + `install_hint` so the cockpit can warn
+/// the user when the adapter binary isn't on PATH (e.g. OpenCode
+/// uninstalled) before they attempt to start a session.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AvailableAgent {
     pub id: String,
     pub label: String,
     pub kind: &'static str,
     pub default: bool,
+    /// PATH-based install probe at welcome time. `false` means the
+    /// command isn't on PATH (or the absolute path doesn't exist /
+    /// isn't executable); the cockpit renders a "not installed" badge
+    /// and surfaces `install_hint` if present. Authentication state is
+    /// orthogonal — advertised via `auth_methods` on `session.ready`.
+    pub installed: bool,
+    /// Operator-supplied hint from the agent fixture (e.g. "npm i -g
+    /// foo" or an auth URL). Skipped from the wire when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +135,8 @@ impl WelcomeFrame {
                 label: a.label.clone(),
                 kind: a.kind.as_str(),
                 default: &a.id == default_id,
+                installed: crate::agent_runtime::is_command_installed(&a.command),
+                install_hint: a.install_hint.clone(),
             })
             .collect();
         Self {
@@ -201,22 +217,30 @@ enabled = false
         for a in &welcome.available_agents {
             assert_eq!(a.kind, "acp");
             assert!(!a.label.is_empty());
+            // Stage X.5e: every advertised agent carries an `installed`
+            // probe. The fixture commands (`npx`, `gemini`) may or may
+            // not exist in CI, so just assert the field is set
+            // deterministically (i.e. `is_command_installed` returns a
+            // bool without panicking).
+            let _ = a.installed;
         }
     }
 
     #[test]
     fn welcome_with_registry_serializes_with_available_agents_field() {
         // Wire-shape regression: the FE depends on the `available_agents`
-        // key being a JSON array of `{id,label,kind,default}` objects.
+        // key being a JSON array of `{id,label,kind,default,installed}`
+        // objects, with `install_hint` optional.
         let src = r#"
 default_agent = "only"
 
 [agents.only]
 kind = "mock"
 label = "Only"
-command = "only"
+command = "only-binary-that-cannot-exist-on-path-xyz"
 args = []
 enabled = true
+install_hint = "Build via cargo: cargo install only-binary"
 "#;
         let registry = registry_from_toml(src);
         let welcome = WelcomeFrame::with_registry(&registry);
@@ -228,6 +252,44 @@ enabled = true
         assert_eq!(agents[0]["label"], "Only");
         assert_eq!(agents[0]["kind"], "mock");
         assert_eq!(agents[0]["default"], true);
+        // Stage X.5e: install probe + hint surface on the wire.
+        assert_eq!(
+            agents[0]["installed"], false,
+            "unknown binary must report installed=false: {}",
+            agents[0]
+        );
+        assert_eq!(
+            agents[0]["install_hint"], "Build via cargo: cargo install only-binary",
+            "install_hint passed through verbatim: {}",
+            agents[0]
+        );
+    }
+
+    #[test]
+    fn welcome_with_registry_omits_install_hint_when_absent() {
+        // Wire-shape: `install_hint` must be skipped (not `null`) when
+        // the fixture omits it, so older FE clients that don't know
+        // about the field don't choke on a `null` they didn't expect.
+        let src = r#"
+default_agent = "only"
+
+[agents.only]
+kind = "mock"
+label = "Only"
+command = "only-missing-binary-xyz"
+args = []
+enabled = true
+"#;
+        let registry = registry_from_toml(src);
+        let welcome = WelcomeFrame::with_registry(&registry);
+        let json = serde_json::to_value(&welcome).expect("serialize");
+        let agents = json["available_agents"].as_array().expect("array");
+        assert!(
+            agents[0].get("install_hint").is_none(),
+            "install_hint absent when not configured: {}",
+            agents[0]
+        );
+        assert_eq!(agents[0]["installed"], false);
     }
 
     #[test]

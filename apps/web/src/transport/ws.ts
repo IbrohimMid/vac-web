@@ -31,11 +31,22 @@ export interface AckFrame {
 /// `apps/local-bridge/src/ws/envelope.rs`. Only enabled agents are
 /// surfaced; exactly one entry has `default: true` (matching the
 /// fixture's `default_agent`).
+///
+/// Stage X.5e adds optional `installed` and `install_hint`. Older
+/// bridges that predate the field omit them; consumers must treat
+/// `installed === undefined` as "unknown" (not "not installed").
 export interface AvailableAgent {
   id: string;
   label: string;
   kind: string;
   default: boolean;
+  /// PATH-based install probe at welcome time. Optional for forward
+  /// compatibility with older bridges. `false` means the agent's
+  /// command isn't on PATH and the cockpit should warn the operator.
+  installed?: boolean;
+  /// Free-form install/auth hint surfaced by the bridge fixture.
+  /// Rendered verbatim by the cockpit when `installed === false`.
+  install_hint?: string;
 }
 
 export interface WelcomeFrame {
