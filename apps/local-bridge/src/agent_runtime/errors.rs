@@ -48,6 +48,26 @@ pub enum AgentRuntimeError {
 
     #[error("agents config: agent id must be non-empty and only [a-z0-9_-]; got `{id}`")]
     InvalidId { id: String },
+
+    /// Audit P2 fix: agent `mcp_servers` entry failed shape
+    /// validation. Catches typos like `kind` instead of `type`,
+    /// missing `command` for stdio servers, missing `url` for http
+    /// servers, and entirely non-object entries — all of which
+    /// would have silently passed in earlier sprints and only blown
+    /// up at first ACP `mcp_servers` advert.
+    #[error("agents config: agent `{agent_id}` mcp_servers[{index}] invalid: {reason}")]
+    InvalidMcpServer {
+        agent_id: String,
+        index: usize,
+        reason: String,
+    },
+
+    /// Audit P2 fix: registry source carries `trusted_url_prefixes`
+    /// but a runtime `registry.sync` URL falls outside the
+    /// allowlist. The dispatcher rejects the call rather than
+    /// fetching from an unvetted host.
+    #[error("registry: URL `{url}` not in trusted_url_prefixes")]
+    RegistryTrustViolation { url: String },
 }
 
 pub type Result<T> = std::result::Result<T, AgentRuntimeError>;

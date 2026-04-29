@@ -341,11 +341,13 @@ args = []
 enabled = true
 
 [[agents.only.mcp_servers]]
+type = "stdio"
 name = "linear"
 command = "npx"
 args = ["-y", "@linear/mcp"]
 
 [[agents.only.mcp_servers]]
+type = "stdio"
 command = "unnamed-mcp"
 args = []
 "#;

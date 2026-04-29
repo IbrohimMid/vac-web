@@ -50,3 +50,10 @@ logs/
 .kilo/
 .local/
 .scratch/
+
+# local helper scripts (build/test gates)
+.run-*.sh
+.clippy.log
+.clippy.done
+.cargotest.log
+.cargotest.done

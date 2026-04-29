@@ -30,7 +30,16 @@ pub struct TerminalHandle {
     /// channel is unbounded but we only ever push at most a handful of
     /// kill signals per terminal, so this is fine.
     kill_tx: mpsc::UnboundedSender<()>,
+    /// Audit P2 fix (stream separation): stdout and stderr are now
+    /// captured into independent buffers instead of being merged into
+    /// one. `terminal/output` returns both fields plus a concatenated
+    /// `output` for backward compatibility with older clients.
     stdout_buf: Arc<Mutex<Vec<u8>>>,
+    stderr_buf: Arc<Mutex<Vec<u8>>>,
+    /// Cached for `terminal.lifecycle` events; lets the dispatcher
+    /// surface command/args without re-resolving them from params.
+    pub command: String,
+    pub args: Vec<String>,
     exit_code: Arc<Mutex<Option<i32>>>,
     exit_notify: Arc<tokio::sync::Notify>,
     /// Set to `true` once the owner-task has observed a kill signal.
@@ -142,11 +151,15 @@ pub async fn handle_terminal_create(
     let stderr = child.stderr.take();
 
     let stdout_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_notify = Arc::new(tokio::sync::Notify::new());
     let killed = Arc::new(AtomicBool::new(false));
 
-    let buf_clone = Arc::clone(&stdout_buf);
+    // Audit P2 fix (stream separation): stdout and stderr are read
+    // into independent buffers so the cockpit can distinguish error
+    // output from normal output (Zed-class terminals colorize stderr).
+    let stdout_clone = Arc::clone(&stdout_buf);
     if let Some(mut out) = stdout {
         tokio::spawn(async move {
             let mut tmp = [0u8; 4096];
@@ -154,7 +167,7 @@ pub async fn handle_terminal_create(
                 match out.read(&mut tmp).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let mut buf = buf_clone.lock().await;
+                        let mut buf = stdout_clone.lock().await;
                         let remaining = MAX_OUTPUT_READ_BYTES.saturating_sub(buf.len());
                         if remaining > 0 {
                             buf.extend_from_slice(&tmp[..n.min(remaining)]);
@@ -166,7 +179,7 @@ pub async fn handle_terminal_create(
         });
     }
 
-    let buf_clone2 = Arc::clone(&stdout_buf);
+    let stderr_clone = Arc::clone(&stderr_buf);
     if let Some(mut err) = stderr {
         tokio::spawn(async move {
             let mut tmp = [0u8; 4096];
@@ -174,7 +187,7 @@ pub async fn handle_terminal_create(
                 match err.read(&mut tmp).await {
                     Ok(0) => break,
                     Ok(n) => {
-                        let mut buf = buf_clone2.lock().await;
+                        let mut buf = stderr_clone.lock().await;
                         let remaining = MAX_OUTPUT_READ_BYTES.saturating_sub(buf.len());
                         if remaining > 0 {
                             buf.extend_from_slice(&tmp[..n.min(remaining)]);
@@ -240,6 +253,9 @@ pub async fn handle_terminal_create(
     let handle = Arc::new(TerminalHandle {
         kill_tx,
         stdout_buf,
+        stderr_buf,
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         exit_code,
         exit_notify,
         killed,
@@ -286,10 +302,26 @@ pub async fn handle_terminal_output(
         .map(|r| Arc::clone(r.value()))
         .ok_or_else(|| TerminalError::NotFound(terminal_id.to_string()))?;
 
-    let buf = handle.stdout_buf.lock().await;
-    let output = String::from_utf8_lossy(&buf).to_string();
+    // Audit P2 fix (stream separation): return stdout and stderr as
+    // independent fields. `output` keeps the previous merged shape so
+    // existing ACP clients that only read `output` still work.
+    let stdout_bytes = handle.stdout_buf.lock().await;
+    let stderr_bytes = handle.stderr_buf.lock().await;
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    let output = if stderr.is_empty() {
+        stdout.clone()
+    } else if stdout.is_empty() {
+        stderr.clone()
+    } else {
+        format!("{stdout}{stderr}")
+    };
 
-    Ok(json!({ "output": output }))
+    Ok(json!({
+        "output": output,
+        "stdout": stdout,
+        "stderr": stderr,
+    }))
 }
 
 pub async fn handle_terminal_wait_for_exit(
@@ -518,6 +550,76 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, TerminalError::NotFound(_)));
+    }
+
+    /// Audit P2 fix regression test: stdout and stderr must surface in
+    /// independent fields so the cockpit can render stderr distinctly.
+    /// Spawns a `bash -c` that writes one line to each stream and
+    /// asserts the per-stream fields are populated separately. Falls
+    /// back to a skip if `bash` isn't on PATH (e.g. minimal CI image).
+    #[tokio::test]
+    async fn output_separates_stdout_and_stderr() {
+        if std::process::Command::new("bash")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("bash not on PATH; skipping stdout/stderr split test");
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(dir.path(), vec![allow("bash")]);
+        // The shell-arg profile rejects any arg containing shell
+        // metacharacters (`;`, `>`, `'`, `&`, etc.) so we cannot use
+        // `bash -c '...'` directly. Instead, write a tiny script to a
+        // tempfile and run it as a positional arg — the path itself has
+        // no metacharacters and the profile accepts it.
+        let script_path = dir.path().join("split.sh");
+        std::fs::write(
+            &script_path,
+            "#!/usr/bin/env bash\nprintf OUT_LINE\\n\nprintf ERR_LINE\\n 1>&2\n",
+        )
+        .unwrap();
+        let create_params = json!({
+            "command": "bash",
+            "args": [script_path.to_str().unwrap()],
+        });
+        let created = handle_terminal_create(&ctx, &create_params).await.unwrap();
+        let tid = created["terminalId"].as_str().unwrap().to_string();
+
+        // Wait for child to exit so both reader tasks see EOF.
+        let wait_params = json!({ "terminalId": tid, "timeoutMs": 3_000 });
+        let _ = handle_terminal_wait_for_exit(&ctx, &wait_params)
+            .await
+            .unwrap();
+        // Give reader tasks a moment to drain after EOF.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let output_params = json!({ "terminalId": tid });
+        let result = handle_terminal_output(&ctx, &output_params).await.unwrap();
+        let stdout = result["stdout"].as_str().unwrap();
+        let stderr = result["stderr"].as_str().unwrap();
+        let merged = result["output"].as_str().unwrap();
+        assert!(
+            stdout.contains("OUT_LINE"),
+            "stdout should carry OUT_LINE; got {stdout:?}"
+        );
+        assert!(
+            stderr.contains("ERR_LINE"),
+            "stderr should carry ERR_LINE; got {stderr:?}"
+        );
+        assert!(
+            !stdout.contains("ERR_LINE"),
+            "stdout should not include stderr content; got {stdout:?}"
+        );
+        assert!(
+            !stderr.contains("OUT_LINE"),
+            "stderr should not include stdout content; got {stderr:?}"
+        );
+        assert!(
+            merged.contains("OUT_LINE") && merged.contains("ERR_LINE"),
+            "merged output should include both for back-compat; got {merged:?}"
+        );
     }
 
     /// Audit Sprint 2 P1 regression test: spawn a long-running process,

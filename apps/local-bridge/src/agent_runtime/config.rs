@@ -85,6 +85,14 @@ struct RegistryRaw {
     /// hour. Set to `0` to bypass the cache entirely.
     #[serde(default)]
     cache_ttl_secs: Option<u64>,
+    /// Audit P2 fix: optional URL allowlist enforced by
+    /// `dispatch_registry_sync`. When present and non-empty, any
+    /// `registry.sync` URL must start with one of these prefixes;
+    /// anything else is rejected with `registry.trust_violation`.
+    /// Path-kind sources are unaffected. Empty / unset means
+    /// "trust whatever the operator typed" (current behaviour).
+    #[serde(default)]
+    trusted_url_prefixes: Option<Vec<String>>,
 }
 
 /// Sprint 5 — resolved registry source. Mirrors `[registry]` with the
@@ -97,6 +105,9 @@ pub struct RegistrySource {
     /// Cache TTL in seconds. Default 3600 (1h); 0 disables caching.
     pub cache_ttl_secs: u64,
     pub kind: RegistrySourceKind,
+    /// Audit P2 fix: optional allowlist of URL prefixes enforced by
+    /// `dispatch_registry_sync`. Empty vec means no enforcement.
+    pub trusted_url_prefixes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,10 +140,17 @@ impl RegistrySource {
             };
             RegistrySourceKind::Path(resolved)
         };
+        let trusted_url_prefixes = raw
+            .trusted_url_prefixes
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| !s.trim().is_empty())
+            .collect::<Vec<_>>();
         Ok(Self {
             raw: raw.source,
             cache_ttl_secs: raw.cache_ttl_secs.unwrap_or(DEFAULT_REGISTRY_TTL_SECS),
             kind,
+            trusted_url_prefixes,
         })
     }
 }
@@ -225,6 +243,14 @@ impl AgentsConfig {
                     min: MIN_PERMISSION_TIMEOUT_MS,
                 });
             }
+            // Audit P2 fix: validate `mcp_servers` shape up-front so a
+            // typo in agents.toml fails at load time with a clear
+            // message instead of crashing the agent at first
+            // `session/new` advert. We intentionally only check the
+            // bits the ACP advert actually needs (`type` + `command`
+            // for stdio, `type` + `url` for http) so operator-supplied
+            // extra fields pass through untouched.
+            validate_mcp_servers(&id, &entry.mcp_servers)?;
             let label = entry.label.unwrap_or_else(|| id.clone());
             agents.push(AgentDefinition {
                 id,
@@ -285,6 +311,68 @@ fn validate_id(id: &str) -> Result<()> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     {
         return Err(AgentRuntimeError::InvalidId { id: id.to_string() });
+    }
+    Ok(())
+}
+
+/// Audit P2 fix: validate the shape of every `mcp_servers` entry on
+/// an agent. Each entry must be a JSON object with a string `type`
+/// of either `"stdio"` (requires non-empty `command`) or `"http"`
+/// (requires non-empty `url`). Anything else returns a structured
+/// `InvalidMcpServer` error with the offending index so the operator
+/// can fix the right entry. This runs both at startup (`from_toml_str`)
+/// and on `registry.add` (which round-trips the entry through
+/// `from_toml_str` for validation), so the bridge never accepts a
+/// silently-broken MCP advert.
+fn validate_mcp_servers(agent_id: &str, servers: &[serde_json::Value]) -> Result<()> {
+    for (index, entry) in servers.iter().enumerate() {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| AgentRuntimeError::InvalidMcpServer {
+                agent_id: agent_id.to_string(),
+                index,
+                reason: "entry must be a TOML table / JSON object".into(),
+            })?;
+        let ty = obj.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+            AgentRuntimeError::InvalidMcpServer {
+                agent_id: agent_id.to_string(),
+                index,
+                reason: "missing string `type` (expected \"stdio\" or \"http\")".into(),
+            }
+        })?;
+        match ty {
+            "stdio" => {
+                let command = obj
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if command.is_empty() {
+                    return Err(AgentRuntimeError::InvalidMcpServer {
+                        agent_id: agent_id.to_string(),
+                        index,
+                        reason: "stdio mcp server requires non-empty `command`".into(),
+                    });
+                }
+            }
+            "http" => {
+                let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("").trim();
+                if url.is_empty() {
+                    return Err(AgentRuntimeError::InvalidMcpServer {
+                        agent_id: agent_id.to_string(),
+                        index,
+                        reason: "http mcp server requires non-empty `url`".into(),
+                    });
+                }
+            }
+            other => {
+                return Err(AgentRuntimeError::InvalidMcpServer {
+                    agent_id: agent_id.to_string(),
+                    index,
+                    reason: format!("unknown `type` `{other}` (expected \"stdio\" or \"http\")"),
+                });
+            }
+        }
     }
     Ok(())
 }

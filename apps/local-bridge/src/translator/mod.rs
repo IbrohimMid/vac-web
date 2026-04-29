@@ -1887,6 +1887,33 @@ async fn dispatch_registry_sync(
         );
     };
 
+    // Audit P2 fix: enforce optional `trusted_url_prefixes` allowlist
+    // before fetching. URL-kind sources outside the allowlist return
+    // `registry.trust_violation`; path-kind sources are unaffected
+    // (they're already on disk and don't pull from the network).
+    if let crate::agent_runtime::config::RegistrySourceKind::Url(u) = &source.kind {
+        if !source.trusted_url_prefixes.is_empty()
+            && !source
+                .trusted_url_prefixes
+                .iter()
+                .any(|prefix| u.starts_with(prefix))
+        {
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "registry.trust_violation".into(),
+                        message: format!(
+                            "registry URL `{u}` is not covered by trusted_url_prefixes"
+                        ),
+                    }),
+                },
+                vec![],
+            );
+        }
+    }
+
     // Cache next to the loaded agents.toml when we have one; otherwise
     // skip caching (embedded default has no on-disk home).
     let cache_dir = registry

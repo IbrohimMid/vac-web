@@ -1052,6 +1052,65 @@ async fn emit_event(handle: &SessionHandleRef, event: ServerEvent) {
     emit_to(&handle.ring, &handle.broadcast, event).await;
 }
 
+/// Audit P2 fix helper: structured payload for `terminal.lifecycle`
+/// ServerEvents. Lives next to [`build_terminal_lifecycle_payload`]
+/// so the dispatcher can emit a self-contained event without having
+/// to peek at the in-memory `TerminalHandle` map (which can already
+/// be gone by the time `released`/`exited` is observed).
+struct TerminalLifecyclePayload {
+    kind: &'static str,
+    terminal_id: String,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    exit_code: Option<i32>,
+}
+
+/// Derive a [`TerminalLifecyclePayload`] from an ACP terminal
+/// request/response pair. Returns `None` for methods that don't
+/// represent a lifecycle transition (e.g. `terminal/output`) or
+/// when the response shape is unexpected.
+fn build_terminal_lifecycle_payload(
+    method: &str,
+    params: &serde_json::Value,
+    response: &serde_json::Value,
+) -> Option<TerminalLifecyclePayload> {
+    let kind: &'static str = match method {
+        "terminal/create" => "created",
+        "terminal/wait_for_exit" => "exited",
+        "terminal/kill" => "killed",
+        "terminal/release" => "released",
+        _ => return None,
+    };
+    let terminal_id = match method {
+        "terminal/create" => response.get("terminalId")?.as_str()?.to_string(),
+        _ => params.get("terminalId")?.as_str()?.to_string(),
+    };
+    let command = params
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let args = params.get("args").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            .collect::<Vec<String>>()
+    });
+    let exit_code = if method == "terminal/wait_for_exit" {
+        response
+            .get("exitCode")
+            .and_then(|v| v.as_i64())
+            .map(|n| n as i32)
+    } else {
+        None
+    };
+    Some(TerminalLifecyclePayload {
+        kind,
+        terminal_id,
+        command,
+        args,
+        exit_code,
+    })
+}
+
 /// Stage X.5h.2 Step 3b — emit the canonical 4-lane VAC event
 /// surface for an [`ObservedToolActivity`] produced by the OpenCode
 /// HTTP API tap (sub-agent tool calls). Mirrors
@@ -1963,7 +2022,9 @@ impl SessionHandle {
             tokio::spawn(async move {
                 use crate::agent_runtime::acp::terminal_handler::*;
                 while let Some(req) = terminal_rx.recv().await {
-                    let result = match req.method.as_str() {
+                    let method = req.method.clone();
+                    let params = req.params.clone();
+                    let result = match method.as_str() {
                         "terminal/create" => handle_terminal_create(&term_ctx, &req.params)
                             .await
                             .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
@@ -1989,6 +2050,36 @@ impl SessionHandle {
                     };
                     match result {
                         Ok(value) => {
+                            // Audit P2 fix: emit `terminal.lifecycle`
+                            // ServerEvents so the cockpit Activity log
+                            // surfaces terminal create/exit/kill/release
+                            // in real time instead of waiting for the
+                            // agent to poll `terminal/output`. Each
+                            // event carries enough context (terminalId,
+                            // command, args, exitCode when relevant)
+                            // to render a one-line activity row.
+                            if let Some(lp) =
+                                build_terminal_lifecycle_payload(&method, &params, &value)
+                            {
+                                let payload = serde_json::json!({
+                                    "kind": lp.kind,
+                                    "terminal_id": lp.terminal_id,
+                                    "command": lp.command,
+                                    "args": lp.args,
+                                    "exit_code": lp.exit_code,
+                                    "agent_id": term_ctx.agent_id.clone(),
+                                    "agent_kind": "acp",
+                                });
+                                let lifecycle = ServerEvent {
+                                    seq: 0,
+                                    session_id: term_handle.id.clone(),
+                                    event_type: "terminal.lifecycle".into(),
+                                    payload,
+                                    v: 1,
+                                    ts: chrono::Utc::now().to_rfc3339(),
+                                };
+                                emit_event(&term_handle, lifecycle).await;
+                            }
                             let _ = term_acp.client.respond_result(req.id, value);
                         }
                         Err((code, msg, data)) => {
