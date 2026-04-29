@@ -14,12 +14,14 @@ if [[ -z "${CLAUDE_CODE_EXECUTABLE:-}" ]] && command -v claude >/dev/null 2>&1; 
   export CLAUDE_CODE_EXECUTABLE="$(command -v claude)"
 fi
 
-# When Claude is available, use the ACP agent fixture so the bridge
-# spawns claude-agent-acp instead of falling back to mock-engine.
-if [[ -n "${CLAUDE_CODE_EXECUTABLE:-}" ]] && [[ -z "${VAC_WEB_AGENTS_CONFIG:-}" ]]; then
-  export VAC_WEB_AGENTS_CONFIG="$ROOT/fixtures/agents.claude.toml"
-  echo "[dev] agents -> $VAC_WEB_AGENTS_CONFIG"
+# Default the bridge agent registry to the multi-provider fixture so the
+# cockpit Session picker exposes more than just Claude. Override with
+# VAC_WEB_AGENTS_CONFIG=/path/to/agents.toml for a custom registry, or
+# point at fixtures/agents.all-acp.toml for the full ACP registry.
+if [[ -z "${VAC_WEB_AGENTS_CONFIG:-}" ]]; then
+  export VAC_WEB_AGENTS_CONFIG="$ROOT/fixtures/agents.multi.toml"
 fi
+echo "[dev] agents -> $VAC_WEB_AGENTS_CONFIG"
 
 echo "[dev] bridge -> $VAC_BRIDGE_URL"
 echo "[dev] web   -> http://localhost:5173 (proxied /api -> bridge)"
