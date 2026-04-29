@@ -113,6 +113,23 @@ function App() {
         const relay = parseRelayParamsFromLocation();
         if (relay) {
           t = await createRelayTransport(relay);
+          // Strip relay/token query params from the visible URL so the
+          // attach token doesn't leak via history, screenshots, referrer
+          // headers, telemetry, or copy-pasted bookmarks. See audit pass-2
+          // P2 "Token handling threat model".
+          try {
+            const cleaned = new URL(window.location.href);
+            for (const k of ['relay', 'device', 'session', 'token', 'last_event_id']) {
+              cleaned.searchParams.delete(k);
+            }
+            const next =
+              cleaned.pathname +
+              (cleaned.searchParams.toString() ? `?${cleaned.searchParams.toString()}` : '') +
+              cleaned.hash;
+            window.history.replaceState({}, document.title, next);
+          } catch {
+            /* non-fatal: pairing succeeded, only the URL hygiene step failed */
+          }
         } else {
           const wsUrl =
             (location.protocol === 'https:' ? 'wss:' : 'ws:') +

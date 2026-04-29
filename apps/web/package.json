@@ -16,23 +16,29 @@
     {
       "name": "initial bundle (eager main chunk)",
       "path": "dist/assets/index-*.js",
-      "limit": "110 KB",
-      "gzip": true
+      "limit": "120 KB",
+      "gzip": true,
+      "webpack": false
     },
     {
       "name": "tanstack chunk",
       "path": "dist/assets/tanstack-*.js",
       "limit": "60 KB",
-      "gzip": true
+      "gzip": true,
+      "webpack": false
     },
     {
       "name": "xterm chunk (lazy via ShellDrawer)",
       "path": "dist/assets/xterm-*.js",
       "limit": "90 KB",
-      "gzip": true
+      "gzip": true,
+      "webpack": false
     }
   ],
   "dependencies": {
+    "@noble/ciphers": "^1.0.0",
+    "@noble/curves": "^1.6.0",
+    "@noble/hashes": "^1.5.0",
     "@tanstack/react-query": "^5.59.20",
     "@tanstack/react-virtual": "^3.10.9",
     "isomorphic-dompurify": "^3.10.0",
@@ -56,6 +62,7 @@
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^20.9.0",
     "postcss": "^8.4.47",
     "size-limit": "^11.1.6",

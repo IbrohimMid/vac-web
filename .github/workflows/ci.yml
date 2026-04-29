@@ -35,9 +35,10 @@ jobs:
       - run: pnpm -r build
       - run: pnpm -r test
       - name: Bundle size budget
-        # Will activate once size-limit lands in the lockfile; see
-        # `apps/web/package.json` size-limit config block.
-        run: pnpm --filter @vac-web/web exec size-limit || echo "size-limit not yet installed"
+        # Blocking: size-limit is in the lockfile. Budgets live in
+        # `apps/web/package.json` size-limit config block. Bumps must be
+        # justified by a measured improvement or PR description.
+        run: pnpm --filter @vac-web/web exec size-limit
 
   schema:
     runs-on: ubuntu-latest

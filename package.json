@@ -19,6 +19,7 @@
     "codegen:verify": "bash scripts/verify-codegen.sh",
     "schema:validate": "bash scripts/schema-validate.sh",
     "manifest:verify": "bash scripts/manifest-verify.sh",
+    "audit:rust": "bash scripts/audit-rust.sh",
     "format": "prettier --write \"**/*.{ts,tsx,json,md,yaml,yml}\" --ignore-path .gitignore"
   },
   "devDependencies": {

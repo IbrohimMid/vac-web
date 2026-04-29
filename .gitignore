@@ -46,5 +46,6 @@ logs/
 
 # Local dogfood / runtime artifacts (CI logs, agent-manager state, ad-hoc local fixtures)
 .ci-logs/
+.build-logs/
 .kilo/
 .local/

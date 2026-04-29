@@ -8,10 +8,13 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"no unit tests yet\" && exit 0",
+    "test": "vitest run",
     "lint": "echo \"ok\" && exit 0"
   },
   "devDependencies": {
-    "typescript": "^5.6.3"
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
   }
 }

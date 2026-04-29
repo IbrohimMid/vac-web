@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { buildRelayUrl } from './relay';
-import { IdentitySealer, RejectingSealer, pickSealer } from './e2e';
+import {
+  IdentitySealer,
+  RejectingSealer,
+  pickSealer,
+  createE2eSealer,
+  generateE2eKeypair,
+} from './e2e';
 
 describe('buildRelayUrl', () => {
   it('appends /client/attach + all query params', () => {
@@ -61,5 +67,98 @@ describe('e2e sealer', () => {
 
   it('RejectingSealer.open returns null', () => {
     expect(new RejectingSealer().open(new Uint8Array())).toBeNull();
+  });
+});
+
+describe('e2e X25519 + XChaCha20-Poly1305 sealer', () => {
+  it('round-trips a payload between two parties', async () => {
+    const alice = await generateE2eKeypair();
+    const bob = await generateE2eKeypair();
+    const salt = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    const aliceSealer = await createE2eSealer({
+      ourPrivateKey: alice.privateKey,
+      peerPublicKey: bob.publicKey,
+      sessionSalt: salt,
+    });
+    const bobSealer = await createE2eSealer({
+      ourPrivateKey: bob.privateKey,
+      peerPublicKey: alice.publicKey,
+      sessionSalt: salt,
+    });
+
+    const plaintext = new TextEncoder().encode('hello relay');
+    const sealed = aliceSealer.seal(plaintext);
+    expect(sealed).not.toEqual(plaintext); // ciphertext is distinct
+    expect(sealed.length).toBeGreaterThan(plaintext.length); // includes nonce + tag
+
+    const opened = bobSealer.open(sealed);
+    expect(opened).not.toBeNull();
+    expect(new TextDecoder().decode(opened!)).toBe('hello relay');
+  });
+
+  it('rejects tampered ciphertext (returns null)', async () => {
+    const alice = await generateE2eKeypair();
+    const bob = await generateE2eKeypair();
+    const salt = new Uint8Array([9, 9, 9]);
+
+    const aliceSealer = await createE2eSealer({
+      ourPrivateKey: alice.privateKey,
+      peerPublicKey: bob.publicKey,
+      sessionSalt: salt,
+    });
+    const bobSealer = await createE2eSealer({
+      ourPrivateKey: bob.privateKey,
+      peerPublicKey: alice.publicKey,
+      sessionSalt: salt,
+    });
+
+    const sealed = aliceSealer.seal(new Uint8Array([1, 2, 3, 4]));
+    // Flip a byte in the AEAD tag region.
+    const lastIdx = sealed.length - 1;
+    sealed[lastIdx] = (sealed[lastIdx] ?? 0) ^ 0xff;
+    expect(bobSealer.open(sealed)).toBeNull();
+  });
+
+  it('rejects ciphertext from a wrong peer key (returns null)', async () => {
+    const alice = await generateE2eKeypair();
+    const bob = await generateE2eKeypair();
+    const eve = await generateE2eKeypair();
+    const salt = new Uint8Array([7, 7, 7]);
+
+    const aliceSealer = await createE2eSealer({
+      ourPrivateKey: alice.privateKey,
+      peerPublicKey: bob.publicKey,
+      sessionSalt: salt,
+    });
+    const eveSealer = await createE2eSealer({
+      ourPrivateKey: eve.privateKey,
+      peerPublicKey: alice.publicKey,
+      sessionSalt: salt,
+    });
+
+    const sealed = aliceSealer.seal(new Uint8Array([42]));
+    expect(eveSealer.open(sealed)).toBeNull();
+  });
+
+  it('rejects undersized framed input (returns null, no throw)', async () => {
+    const alice = await generateE2eKeypair();
+    const bob = await generateE2eKeypair();
+    const sealer = await createE2eSealer({
+      ourPrivateKey: alice.privateKey,
+      peerPublicKey: bob.publicKey,
+      sessionSalt: new Uint8Array([1]),
+    });
+    expect(sealer.open(new Uint8Array(8))).toBeNull();
+  });
+
+  it('refuses contexts with wrong key sizes', async () => {
+    await expect(
+      createE2eSealer({
+        ourPrivateKey: new Uint8Array(16),
+        peerPublicKey: new Uint8Array(32),
+        sessionSalt: new Uint8Array([1]),
+      }),
+    ).rejects.toThrow(/32 bytes/);
   });
 });
