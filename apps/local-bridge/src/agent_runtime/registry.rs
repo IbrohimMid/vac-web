@@ -118,6 +118,27 @@ impl AgentRuntimeRegistry {
         &self.source
     }
 
+    /// Sprint 5 — expose `[registry]` source if the operator opted into
+    /// remote agent discovery. `None` when the loaded config has no
+    /// `[registry]` table (covers the embedded default + every existing
+    /// fixture; behaviour is fully backward-compatible).
+    pub fn registry_source(&self) -> Option<&super::config::RegistrySource> {
+        self.config.registry_source.as_ref()
+    }
+
+    /// Sprint 5 — path of the loaded `agents.toml` (if any). Used by
+    /// `registry.add` to know where to append new entries. Returns
+    /// `None` for the embedded default; the cockpit must surface a
+    /// dedicated error in that case.
+    pub fn source_path(&self) -> Option<&Path> {
+        match &self.source {
+            ConfigSource::EnvFile(p) | ConfigSource::XdgConfig(p) | ConfigSource::HomeConfig(p) => {
+                Some(p.as_path())
+            }
+            ConfigSource::Embedded => None,
+        }
+    }
+
     /// Log a one-line startup summary so operators can see which
     /// driver kinds are wired without enabling debug logs.
     pub fn log_summary(&self) {
@@ -181,6 +202,7 @@ pub fn synth_legacy_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
     let cfg = AgentsConfig {
         default_agent_id: id,
         agents: vec![agent],
+        registry_source: None,
     };
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }

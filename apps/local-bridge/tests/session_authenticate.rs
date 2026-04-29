@@ -89,6 +89,7 @@ fn build_acp_registry_with_auth_methods(auth_methods: Value) -> AgentRuntimeRegi
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),
         agents: vec![agent],
+        registry_source: None,
     };
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }
@@ -658,6 +659,7 @@ fn build_acp_registry_with_id_and_auth_methods(
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),
         agents: vec![agent],
+        registry_source: None,
     };
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }

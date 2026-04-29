@@ -133,6 +133,7 @@ fn build_acp_registry_with_timeout(
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),
         agents: vec![agent],
+        registry_source: None,
     };
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }

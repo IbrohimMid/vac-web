@@ -104,6 +104,7 @@ fn multi_agent_registry() -> AgentRuntimeRegistry {
     let cfg = AgentsConfig {
         default_agent_id: "mock".into(),
         agents: vec![mock, claude, disabled],
+        registry_source: None,
     };
     AgentRuntimeRegistry::from_config(cfg, ConfigSource::Embedded)
 }

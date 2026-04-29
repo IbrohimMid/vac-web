@@ -12,6 +12,8 @@ const SESSIONLESS_COMMANDS: &[&str] = &[
     "session.create",
     "session.list",
     "session.snapshot",
+    "registry.sync",
+    "registry.add",
 ];
 
 const KNOWN_COMMANDS: &[&str] = &[
@@ -88,6 +90,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "connector.disconnect",
     "connector.capabilities",
     "connector.health",
+    "registry.sync",
+    "registry.add",
 ];
 
 /// Map command type → required tool capability.

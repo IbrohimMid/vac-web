@@ -1384,6 +1384,8 @@ pub async fn dispatch_command(
             events.extend(extra_events);
             (ack, events)
         }
+        "registry.sync" => dispatch_registry_sync(&cmd, &state).await,
+        "registry.add" => dispatch_registry_add(&cmd, &state).await,
         _ => {
             // Forward to engine via session handle.
             let Some(handle) = state.sessions.get(&cmd.session_id) else {
@@ -1857,6 +1859,244 @@ async fn relay_executor_event(
         }
         _ => false,
     }
+}
+
+/// Sprint 5 — fetch the configured remote / on-disk registry and return
+/// the merged catalog as a `registry.synced` event.
+///
+/// The command is sessionless; `cmd.session_id` is ignored. Errors are
+/// surfaced via `ServerAck { ok: false, error: … }` with codes:
+/// - `registry.not_configured` — no `[registry]` table in agents.toml.
+/// - `registry.fetch_failed` — HTTP / file IO / parse failure.
+async fn dispatch_registry_sync(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let registry = state.sessions.agents();
+    let Some(source) = registry.registry_source() else {
+        return (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "registry.not_configured".into(),
+                    message: "agents.toml has no [registry] table".into(),
+                }),
+            },
+            vec![],
+        );
+    };
+
+    // Cache next to the loaded agents.toml when we have one; otherwise
+    // skip caching (embedded default has no on-disk home).
+    let cache_dir = registry
+        .source_path()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf());
+    let result = crate::agent_runtime::sync_registry(source, registry, cache_dir.as_deref()).await;
+    match result {
+        Ok(snap) => {
+            let payload = json!({
+                "source": snap.source,
+                "sourceKind": snap.source_kind,
+                "fromCache": snap.from_cache,
+                "agents": snap.entries,
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                vec![ServerEvent {
+                    seq: 0,
+                    session_id: String::new(),
+                    event_type: "registry.synced".into(),
+                    payload,
+                    v: 1,
+                    ts: chrono::Utc::now().to_rfc3339(),
+                }],
+            )
+        }
+        Err(err) => (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "registry.fetch_failed".into(),
+                    message: format!("{err:#}"),
+                }),
+            },
+            vec![],
+        ),
+    }
+}
+
+/// Sprint 5 — append a remote agent entry to the local agents.toml.
+///
+/// Payload shape: `{ id, label, kind, command, args?, install_hint? }`.
+/// All identity fields are required and validated (kind must be `mock` /
+/// `vac-native` / `acp`). Idempotent on `id` collision: returns
+/// `ok: true` with `payload.added = false` when the entry already
+/// exists locally.
+async fn dispatch_registry_add(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let registry = state.sessions.agents();
+    let Some(target) = registry.source_path().map(|p| p.to_path_buf()) else {
+        return (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "registry.no_local_config".into(),
+                    message: "bridge is running with the embedded default config; cannot append"
+                        .into(),
+                }),
+            },
+            vec![],
+        );
+    };
+
+    let entry: crate::agent_runtime::RegistryEntry = match parse_registry_add_payload(&cmd.payload)
+    {
+        Ok(e) => e,
+        Err(msg) => {
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "registry.invalid_payload".into(),
+                        message: msg,
+                    }),
+                },
+                vec![],
+            );
+        }
+    };
+
+    // We need a fresh AgentsConfig snapshot (not a mutable view of the
+    // running registry) to validate the merge before touching disk.
+    let snapshot = match std::fs::read_to_string(&target)
+        .map_err(anyhow::Error::from)
+        .and_then(|raw| {
+            crate::agent_runtime::AgentsConfig::from_toml_str(&raw, &target)
+                .map_err(anyhow::Error::from)
+        }) {
+        Ok(c) => c,
+        Err(err) => {
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "registry.config_read_failed".into(),
+                        message: format!("{err:#}"),
+                    }),
+                },
+                vec![],
+            );
+        }
+    };
+
+    match crate::agent_runtime::append_agent_to_config(&target, &entry, &snapshot) {
+        Ok(added) => {
+            let payload = json!({
+                "id": entry.id,
+                "added": added,
+                "path": target.display().to_string(),
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                vec![ServerEvent {
+                    seq: 0,
+                    session_id: String::new(),
+                    event_type: "registry.added".into(),
+                    payload,
+                    v: 1,
+                    ts: chrono::Utc::now().to_rfc3339(),
+                }],
+            )
+        }
+        Err(err) => (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "registry.append_failed".into(),
+                    message: format!("{err:#}"),
+                }),
+            },
+            vec![],
+        ),
+    }
+}
+
+fn parse_registry_add_payload(
+    payload: &serde_json::Value,
+) -> Result<crate::agent_runtime::RegistryEntry, String> {
+    let obj = payload
+        .as_object()
+        .ok_or_else(|| "payload must be an object".to_string())?;
+    let id = obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing id".to_string())?
+        .trim()
+        .to_string();
+    if id.is_empty() {
+        return Err("id must be non-empty".into());
+    }
+    let kind = obj
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing kind".to_string())?
+        .to_string();
+    if !matches!(kind.as_str(), "mock" | "vac-native" | "acp") {
+        return Err(format!("unsupported kind '{kind}'"));
+    }
+    let command = obj
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing command".to_string())?
+        .to_string();
+    if command.trim().is_empty() {
+        return Err("command must be non-empty".into());
+    }
+    let label = obj
+        .get("label")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| id.clone());
+    let args = obj
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let install_hint = obj
+        .get("install_hint")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Ok(crate::agent_runtime::RegistryEntry {
+        id,
+        label,
+        kind,
+        command,
+        args,
+        install_hint,
+        source: crate::agent_runtime::RegistryEntrySource::Remote,
+        installed: false,
+    })
 }
 
 #[cfg(test)]

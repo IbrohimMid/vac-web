@@ -15,13 +15,18 @@ pub mod config;
 pub mod errors;
 pub mod opencode_serve;
 pub mod registry;
+pub mod registry_sync;
 
 pub use config::{
-    AgentDefinition, AgentKind, AgentsConfig, DEFAULT_PERMISSION_TIMEOUT_MS, EMBEDDED_DEFAULT_TOML,
-    MIN_PERMISSION_TIMEOUT_MS,
+    AgentDefinition, AgentKind, AgentsConfig, RegistrySource, RegistrySourceKind,
+    DEFAULT_PERMISSION_TIMEOUT_MS, EMBEDDED_DEFAULT_TOML, MIN_PERMISSION_TIMEOUT_MS,
 };
 pub use errors::{AgentRuntimeError, Result as AgentRuntimeResult};
 pub use registry::{
     infer_legacy_agent_kind, is_command_installed, synth_legacy_registry, AgentRuntimeRegistry,
     ConfigSource,
+};
+pub use registry_sync::{
+    append_agent_to_config, sync as sync_registry, RegistryEntry, RegistryEntrySource,
+    RegistrySyncResult,
 };

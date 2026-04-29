@@ -68,6 +68,73 @@ struct AgentsFileRaw {
     default_agent: Option<String>,
     #[serde(default)]
     agents: BTreeMap<String, AgentEntryRaw>,
+    /// Sprint 5 — optional `[registry]` table pointing at a remote or
+    /// on-disk catalog of additional ACP agents that the cockpit can
+    /// discover and install on top of the local `[agents.*]` set.
+    #[serde(default)]
+    registry: Option<RegistryRaw>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistryRaw {
+    /// HTTP(S) URL or absolute path to a TOML catalog using the same
+    /// `[agents.*]` shape. Required when `[registry]` is present — a
+    /// `[registry]` block with no `source` is rejected.
+    source: String,
+    /// Time-to-live for the on-disk cache, in seconds. Defaults to one
+    /// hour. Set to `0` to bypass the cache entirely.
+    #[serde(default)]
+    cache_ttl_secs: Option<u64>,
+}
+
+/// Sprint 5 — resolved registry source. Mirrors `[registry]` with the
+/// raw `source` string classified into URL vs path so callers don't
+/// re-parse it on every `registry.sync`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistrySource {
+    /// As written in TOML — useful for logging + audit.
+    pub raw: String,
+    /// Cache TTL in seconds. Default 3600 (1h); 0 disables caching.
+    pub cache_ttl_secs: u64,
+    pub kind: RegistrySourceKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegistrySourceKind {
+    /// Absolute or relative filesystem path. Relative paths are
+    /// resolved against the directory of the loaded agents.toml.
+    Path(PathBuf),
+    /// HTTP(S) URL. The bridge fetches it on `registry.sync`.
+    Url(String),
+}
+
+const DEFAULT_REGISTRY_TTL_SECS: u64 = 3600;
+
+impl RegistrySource {
+    fn from_raw(raw: RegistryRaw, source_path: &Path) -> Result<Self> {
+        if raw.source.trim().is_empty() {
+            return Err(AgentRuntimeError::Parse {
+                path: source_path.to_path_buf(),
+                message: "[registry] source must not be empty".into(),
+            });
+        }
+        let kind = if raw.source.starts_with("http://") || raw.source.starts_with("https://") {
+            RegistrySourceKind::Url(raw.source.clone())
+        } else {
+            let p = PathBuf::from(&raw.source);
+            let resolved = if p.is_absolute() {
+                p
+            } else {
+                source_path.parent().map(|d| d.join(&p)).unwrap_or(p)
+            };
+            RegistrySourceKind::Path(resolved)
+        };
+        Ok(Self {
+            raw: raw.source,
+            cache_ttl_secs: raw.cache_ttl_secs.unwrap_or(DEFAULT_REGISTRY_TTL_SECS),
+            kind,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +167,10 @@ fn default_enabled() -> bool {
 pub struct AgentsConfig {
     pub default_agent_id: String,
     pub agents: Vec<AgentDefinition>,
+    /// Sprint 5 — optional remote/on-disk registry source. Drives the
+    /// `registry.sync` WS command; absent when the operator hasn't
+    /// opted into discoverable agents.
+    pub registry_source: Option<RegistrySource>,
 }
 
 impl AgentsConfig {
@@ -194,9 +265,15 @@ impl AgentsConfig {
             });
         }
 
+        let registry_source = match raw.registry {
+            Some(r) => Some(RegistrySource::from_raw(r, source_path)?),
+            None => None,
+        };
+
         Ok(AgentsConfig {
             default_agent_id,
             agents,
+            registry_source,
         })
     }
 }
