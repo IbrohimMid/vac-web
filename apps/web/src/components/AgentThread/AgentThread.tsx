@@ -7,14 +7,35 @@ import {
   type AgentDebugMessage,
   type AgentDiff,
   type AgentPlanEntry,
-  type AgentTelemetry,
   type AgentThreadItem,
   type AgentToolCall,
   type AgentToolStatus,
   type AgentTurn,
 } from '../../stores/agentSession';
 import { useSession } from '../../stores/session';
+import type { TransportHandle } from '../../transport';
 import '../../styles/transcript.css';
+
+// X.5f.3 Patch B: shared shape for the optional plumbing the cockpit
+// gives AgentThread (transport for message.cancel_stream / retry,
+// onOpenTab to switch the workbench tab to Review / Runtime). Both
+// are optional so the legacy render tests keep working without
+// touching every fixture.
+export interface AgentThreadActions {
+  transport?: TransportHandle | null;
+  onOpenTab?: ((tab: 'review' | 'runtime' | 'activity' | 'approvals' | 'agents' | 'plan' | 'workflow') => void) | null;
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    }
+  } catch {
+    // Clipboard can fail in test environments / sandboxed iframes;
+    // swallow so the action button never throws into the UI.
+  }
+}
 
 const TERMINAL_PREVIEW_LIMIT = 500;
 const EMPTY_DEBUG_MESSAGES: AgentDebugMessage[] = [];
@@ -25,6 +46,11 @@ type ProviderMeta = { label: string; shortLabel: string };
 function providerMeta(provider: string | null | undefined): ProviderMeta {
   if (provider === 'gemini-acp') return { label: 'Gemini CLI ACP', shortLabel: 'Gemini' };
   if (provider === 'claude-acp') return { label: 'Claude Agent ACP', shortLabel: 'Claude' };
+  if (provider === 'codex-acp') return { label: 'Codex CLI ACP', shortLabel: 'Codex' };
+  if (provider === 'opencode') return { label: 'OpenCode ACP', shortLabel: 'OpenCode' };
+  if (provider === 'github-copilot-acp') return { label: 'GitHub Copilot ACP', shortLabel: 'Copilot' };
+  if (provider === 'kimi-cli-acp') return { label: 'Kimi CLI ACP', shortLabel: 'Kimi' };
+  if (provider === 'qwen-code-acp') return { label: 'Qwen Code ACP', shortLabel: 'Qwen' };
   if (provider) return { label: provider, shortLabel: provider };
   return { label: 'ACP provider', shortLabel: 'Agent' };
 }
@@ -71,10 +97,6 @@ function safeTerminalPreview(raw: string | null): { text: string | null; truncat
   return { text, truncated, redacted };
 }
 
-function richSeen(telemetry: AgentTelemetry | undefined, kind: 'message' | 'thought' | 'tool' | 'plan'): string {
-  return telemetry && telemetry.eventCounts[kind] > 0 ? '✓' : '–';
-}
-
 function DiffPreview({ diff }: { diff: AgentDiff }) {
   const oldLine = diff.old_text?.split('\n').find((line) => line.length > 0) ?? '';
   const newLine = diff.new_text?.split('\n').find((line) => line.length > 0) ?? '';
@@ -100,21 +122,59 @@ export function ThinkingBlock({ content, active = false }: { content: string; ac
   );
 }
 
-export function DiffCard({ toolCallId, sessionId }: { toolCallId: string; sessionId: string }) {
+export function DiffCard({
+  toolCallId,
+  sessionId,
+  onOpenTab,
+}: {
+  toolCallId: string;
+  sessionId: string;
+  onOpenTab?: AgentThreadActions['onOpenTab'];
+}) {
   const diff = useAgentSession((s) => s.diffs.get(agentDiffKey(sessionId, toolCallId)));
   if (!diff || diff.diffs.length === 0) return null;
+  const primaryPath = diff.diffs[0]?.path ?? null;
   return (
     <div className="agent-card nested" aria-label="Diff update">
       <div className="agent-card-title">Diff update</div>
       {diff.diffs.map((d) => <DiffPreview key={d.path} diff={d} />)}
+      <div className="agent-card-actions" role="group" aria-label="Diff actions">
+        <button
+          type="button"
+          className="agent-action"
+          disabled={!onOpenTab}
+          onClick={() => onOpenTab && onOpenTab('review')}
+          title={onOpenTab ? 'Jump to the Review tab to inspect this changeset' : 'Unavailable: not mounted in workbench'}
+        >
+          Open Review
+        </button>
+        <button
+          type="button"
+          className="agent-action"
+          disabled={!primaryPath}
+          onClick={() => primaryPath && void copyToClipboard(primaryPath)}
+          title={primaryPath ? `Copy path: ${primaryPath}` : 'Unavailable: no path on this diff'}
+        >
+          Copy path
+        </button>
+      </div>
     </div>
   );
 }
 
-export function TerminalCard({ toolCallId, sessionId }: { toolCallId: string; sessionId: string }) {
+export function TerminalCard({
+  toolCallId,
+  sessionId,
+  onOpenTab,
+}: {
+  toolCallId: string;
+  sessionId: string;
+  onOpenTab?: AgentThreadActions['onOpenTab'];
+}) {
   const terminal = useAgentSession((s) => s.terminals.get(agentTerminalKey(sessionId, toolCallId)));
   const preview = useMemo(() => safeTerminalPreview(terminal?.rawOutputRedacted ?? null), [terminal?.rawOutputRedacted]);
   if (!terminal || !preview.text) return null;
+  const fullOutput = terminal.rawOutputRedacted ?? '';
   return (
     <div className="agent-card nested" aria-label="Terminal output">
       <div className="agent-card-title">Terminal output</div>
@@ -123,16 +183,139 @@ export function TerminalCard({ toolCallId, sessionId }: { toolCallId: string; se
         {preview.redacted && <span>redacted</span>}
         {preview.truncated && <span>truncated</span>}
       </div>
+      <div className="agent-card-actions" role="group" aria-label="Terminal actions">
+        <button
+          type="button"
+          className="agent-action"
+          disabled={!fullOutput}
+          onClick={() => fullOutput && void copyToClipboard(fullOutput)}
+          title={fullOutput ? 'Copy redacted terminal output to clipboard' : 'Unavailable: no terminal output'}
+        >
+          Copy output
+        </button>
+        <button
+          type="button"
+          className="agent-action"
+          disabled={!onOpenTab}
+          onClick={() => onOpenTab && onOpenTab('runtime')}
+          title={onOpenTab ? 'Jump to the Runtime tab to inspect job logs' : 'Unavailable: not mounted in workbench'}
+        >
+          Open Runtime
+        </button>
+      </div>
     </div>
   );
 }
 
-export function ToolCallCard({ tool }: { tool: AgentToolCall }) {
+/**
+ * Derive a single-line input summary from a tool call's `rawInput`.
+ *
+ * The bridge forwards `raw_input_redacted` (a JSON object with secret-shaped
+ * keys masked). Different providers/tools shape it differently:
+ *  - Bash / shell: `{ command, description? }` → `$ <command>`
+ *  - Read / file: `{ path | filePath | file_path }` → `path: <path>`
+ *  - Grep / search: `{ pattern, path? }` → `grep: <pattern>` (+ path)
+ *  - Glob: `{ pattern }` → `glob: <pattern>`
+ *  - Edit / Write: `{ path, oldString?/newString? | content? }` → `edit: <path>`
+ *  - OpenCode `task`: `{ description, subagent_type? }` → quoted description
+ *  - Anything else: pretty-printed first ~200 chars of JSON.
+ *
+ * Returns `null` when there is no usable input shape.
+ */
+function summarizeToolInput(rawInput: unknown): string | null {
+  if (rawInput == null) return null;
+  if (typeof rawInput === 'string') return rawInput.length > 0 ? rawInput.slice(0, 240) : null;
+  if (typeof rawInput !== 'object') return String(rawInput);
+  const r = rawInput as Record<string, unknown>;
+  const str = (k: string): string | null => (typeof r[k] === 'string' && (r[k] as string).length > 0 ? (r[k] as string) : null);
+  const command = str('command') ?? str('cmd');
+  if (command) return `$ ${command}`;
+  const pattern = str('pattern') ?? str('query') ?? str('regex');
+  const path = str('path') ?? str('filePath') ?? str('file_path') ?? str('absolute_path') ?? str('directory');
+  if (pattern) return path ? `${pattern}  ·  ${path}` : pattern;
+  if (path) return path;
+  const description = str('description') ?? str('prompt') ?? str('text');
+  if (description) {
+    const subagent = str('subagent_type');
+    return subagent ? `${subagent}: ${description}` : description;
+  }
+  const url = str('url');
+  if (url) return url;
+  try {
+    const json = JSON.stringify(rawInput);
+    return json.length > 240 ? `${json.slice(0, 240)}…` : json;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compact, redacted preview of a non-Execute tool's `rawOutput`. Execute
+ * already renders via TerminalCard from the dedicated tool.terminal.updated
+ * lane; this fallback handles Read/Edit/Other where the bridge attaches
+ * the redacted output directly on the tool_call payload.
+ */
+function summarizeToolOutput(rawOutput: unknown): string | null {
+  if (rawOutput == null) return null;
+  if (typeof rawOutput === 'string') return rawOutput.length > 0 ? rawOutput.slice(0, 600) : null;
+  try {
+    const json = JSON.stringify(rawOutput);
+    return json.length > 600 ? `${json.slice(0, 600)}…` : json;
+  } catch {
+    return null;
+  }
+}
+
+export function ToolCallCard({
+  tool,
+  onOpenTab,
+  childrenByParent,
+}: {
+  tool: AgentToolCall;
+  onOpenTab?: AgentThreadActions['onOpenTab'];
+  // X.5h.1 — parent→children map built once at the turn level so each
+  // ToolCallCard can pluck its direct descendants without re-scanning the
+  // entire tools store. When omitted (e.g. AgentThreadItemRow path), the
+  // card renders as before with no nested children.
+  childrenByParent?: Map<string, AgentToolCall[]> | undefined;
+}) {
   const primaryPath = tool.locations[0]?.path ?? null;
+  const children = childrenByParent?.get(tool.toolCallId) ?? [];
+  const subagentLabel = tool.subagentType
+    ? `Sub ${tool.subagentType.charAt(0).toUpperCase()}${tool.subagentType.slice(1)} Agent`
+    : null;
+  // X.5f.3 Patch A: when the bridge filled in a fallback DTO from
+  // a non-canonical wire shape (e.g. Gemini snake_case), show a
+  // small "normalized from <shape> shape" affordance so the user
+  // understands why the title/kind look generic.
+  const rawShape = tool.rawShape ?? null;
+  const inputSummary = useMemo(() => summarizeToolInput(tool.rawInput), [tool.rawInput]);
+  const outputSummary = useMemo(
+    () => (tool.kind === 'execute' ? null : summarizeToolOutput(tool.rawOutput)),
+    [tool.kind, tool.rawOutput],
+  );
+  const isCommand = inputSummary?.startsWith('$ ') ?? false;
+  const displayTitle = tool.title ?? (tool.kind === 'execute' ? 'Run' : tool.kind === 'read' ? 'Read' : tool.kind === 'edit' ? 'Edit' : 'Tool');
+  const summary = useMemo(() => {
+    const title = tool.title ?? tool.kind;
+    const path = primaryPath ? ` · ${primaryPath}` : '';
+    const args = inputSummary ? ` · ${inputSummary}` : '';
+    return `${title} (${tool.kind}, ${tool.status})${path}${args} [tool_call_id=${tool.toolCallId}]`;
+  }, [tool.title, tool.kind, tool.status, tool.toolCallId, primaryPath, inputSummary]);
   return (
-    <details className="agent-card tool" aria-label={`Tool call ${tool.toolCallId}`} open={tool.status === 'in_progress'}>
+    <details className="agent-card tool" aria-label={`Tool call ${tool.toolCallId}`} open={tool.status === 'in_progress' || tool.status === 'completed'}>
       <summary className="agent-card-title">
-        <span>Tool call</span>
+        <span className="agent-tool-name"><strong>{displayTitle}</strong>{tool.title && tool.title !== displayTitle && <span className="agent-card-meta"> · {tool.kind}</span>}</span>
+        {subagentLabel && (
+          <span className="agent-subagent-badge" title={`Sub-agent type: ${tool.subagentType}`}>
+            {subagentLabel}
+          </span>
+        )}
+        {inputSummary && (
+          <code className={`agent-tool-args ${isCommand ? 'is-command' : ''}`} title={inputSummary}>
+            {inputSummary}
+          </code>
+        )}
         <span className="agent-tool-lifecycle">
           <span className={tool.status === 'pending' ? 'active' : ''}>queued</span>
           <span>→</span>
@@ -144,13 +327,73 @@ export function ToolCallCard({ tool }: { tool: AgentToolCall }) {
         </span>
         <span className={`agent-status ${statusClass(tool.status)}`}>{statusLabel(tool.status)}</span>
       </summary>
-      <div className="agent-tool-main">
-        <strong>{tool.title ?? tool.kind}</strong>
-        <span>{tool.kind}</span>
+      {rawShape && (
+        <div className="agent-card-meta" data-testid="tool-raw-shape">
+          {rawShape === 'opencode_serve'
+            ? 'via opencode sub-agent tap'
+            : `normalized from ${rawShape} shape`}
+        </div>
+      )}
+      {tool.locations.length > 0 && (
+        <div className="agent-tool-locations" aria-label="Tool call locations">
+          {tool.locations.map((loc, i) => (
+            <span className="agent-path" key={`${loc.path}:${loc.line ?? ''}:${i}`}>
+              {loc.path}{loc.line != null ? `:${loc.line}` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      {outputSummary && (
+        <div className="agent-tool-output" aria-label="Tool call output preview">
+          <div className="agent-card-meta">Output</div>
+          <pre className="agent-terminal-output">{outputSummary}</pre>
+        </div>
+      )}
+      <div className="agent-card-actions" role="group" aria-label="Tool call actions">
+        <button
+          type="button"
+          className="agent-action"
+          onClick={() => {
+            void navigator.clipboard?.writeText(summary);
+          }}
+          title="Copy tool call summary to clipboard"
+        >
+          Copy tool summary
+        </button>
+        <button
+          type="button"
+          className="agent-action"
+          onClick={() => {
+            const panel = document.querySelector<HTMLDetailsElement>('details.agent-card.debug');
+            if (panel) {
+              panel.open = true;
+              panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }}
+          title={`Open ACP Debug panel filtered to ${tool.toolCallId}`}
+        >
+          Open ACP Debug
+        </button>
       </div>
-      {primaryPath && <div className="agent-path">{primaryPath}</div>}
-      <DiffCard sessionId={tool.sessionId} toolCallId={tool.toolCallId} />
-      <TerminalCard sessionId={tool.sessionId} toolCallId={tool.toolCallId} />
+      <DiffCard sessionId={tool.sessionId} toolCallId={tool.toolCallId} onOpenTab={onOpenTab} />
+      <TerminalCard sessionId={tool.sessionId} toolCallId={tool.toolCallId} onOpenTab={onOpenTab} />
+      {children.length > 0 && (
+        <div
+          className="agent-tool-children"
+          role="group"
+          aria-label={`Sub-agent activity for ${displayTitle}`}
+          data-testid="agent-tool-children"
+        >
+          {children.map((child) => (
+            <ToolCallCard
+              key={child.id}
+              tool={child}
+              onOpenTab={onOpenTab}
+              childrenByParent={childrenByParent}
+            />
+          ))}
+        </div>
+      )}
     </details>
   );
 }
@@ -173,22 +416,41 @@ export function PlanCard({ entries }: { entries: AgentPlanEntry[] }) {
   );
 }
 
+function pluralize(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+// X.5f.3 Patch C: render a provider-aware header line + a compact
+// counts summary in place of the generic "Rich agent session" string
+// and the verbose "Rich events: ..." badge. The intent is to make
+// it obvious which provider is on the wire and what kinds of rich
+// events have actually been observed for this session.
 function AgentTelemetryBadge({ sessionId, provider }: { sessionId: string; provider: string | null }) {
   const telemetry = useAgentSession((s) => s.telemetry.get(sessionId));
   const meta = providerMeta(telemetry?.providerId ?? provider);
   const counts = telemetry?.eventCounts;
+  const status = telemetry?.promptStatus ?? 'idle';
+  const statusLabelText =
+    status === 'streaming' || status === 'working' ? 'Streaming'
+    : status === 'completed' ? 'Completed'
+    : status === 'failed' ? 'Failed'
+    : 'Idle';
+  const messageCount = counts?.message ?? 0;
+  const toolCount = counts?.tool ?? 0;
+  const thoughtCount = counts?.thought ?? 0;
+  const planCount = counts?.plan ?? 0;
+  const summaryParts = [
+    pluralize(messageCount, 'message', 'messages'),
+    pluralize(toolCount, 'tool', 'tools'),
+    thoughtCount === 0 ? 'no thoughts emitted' : pluralize(thoughtCount, 'thought', 'thoughts'),
+    planCount === 0 ? 'no plan emitted' : pluralize(planCount, 'plan', 'plans'),
+  ];
   return (
     <div className="agent-telemetry" aria-label="Provider rich event telemetry">
-      <span className={`agent-status ${turnStatusClass(telemetry?.promptStatus ?? 'idle')}`}>
-        {meta.shortLabel} · {telemetry?.promptStatus ?? 'idle'}
+      <span className={`agent-status ${turnStatusClass(status)}`}>
+        {meta.label} · {statusLabelText}
       </span>
-      <span>{counts?.message ?? 0} deltas</span>
-      <span>{counts?.tool ?? 0} tools</span>
-      <span>{counts?.thought ?? 0} thoughts</span>
-      <span>{counts?.plan ?? 0} plans</span>
-      <span>
-        Rich events: message {richSeen(telemetry, 'message')} thought {richSeen(telemetry, 'thought')} tool {richSeen(telemetry, 'tool')} plan {richSeen(telemetry, 'plan')}
-      </span>
+      <span className="agent-card-meta">{summaryParts.join(' · ')}</span>
     </div>
   );
 }
@@ -197,9 +459,20 @@ function AcpDebugPanel({ sessionId }: { sessionId: string }) {
   const debugMessages = useAgentSession((s) => s.telemetry.get(sessionId)?.debugMessages ?? EMPTY_DEBUG_MESSAGES);
   const discriminators = useAgentSession((s) => s.telemetry.get(sessionId)?.discriminators ?? EMPTY_DISCRIMINATORS);
   if (debugMessages.length === 0 && Object.keys(discriminators).length === 0) return null;
+  // X.5f.3 Patch C: collapse the debug panel summary into one
+  // compact line so it does not visually compete with the agent
+  // turn cards. Diagnostics stays one click away via the disclosure.
+  const frameCount = debugMessages.length;
+  const bucketCount = Object.keys(discriminators).length;
+  const summaryText =
+    `Diagnostics · ${pluralize(frameCount, 'ACP frame', 'ACP frames')} · `
+    + `${pluralize(bucketCount, 'discriminator bucket', 'discriminator buckets')}`;
   return (
     <details className="agent-card debug" aria-label="ACP Debug">
-      <summary>ACP Debug</summary>
+      <summary className="agent-card-title">
+        <span>{summaryText}</span>
+        <span className="agent-card-meta">[Open]</span>
+      </summary>
       <div className="agent-debug-grid">
         <div>
           <strong>session/update discriminators</strong>
@@ -236,7 +509,17 @@ function AcpDebugRow({ message }: { message: AgentDebugMessage }) {
   );
 }
 
-function AgentTurnCard({ turn }: { turn: AgentTurn }) {
+function AgentTurnCard({
+  turn,
+  sessionId,
+  transport,
+  onOpenTab,
+}: {
+  turn: AgentTurn;
+  sessionId: string;
+  transport?: TransportHandle | null;
+  onOpenTab?: AgentThreadActions['onOpenTab'];
+}) {
   const assistantsById = useAgentSession((s) => s.assistants);
   const thoughtsById = useAgentSession((s) => s.thoughts);
   const toolsById = useAgentSession((s) => s.tools);
@@ -253,6 +536,36 @@ function AgentTurnCard({ turn }: { turn: AgentTurn }) {
     () => turn.toolCallIds.map((id) => toolsById.get(id)).filter(Boolean),
     [toolsById, turn.toolCallIds],
   );
+  // X.5h.1 — Trae-style nested sub-agent tree.
+  // Top-level tools are those whose parent is unknown to this turn (either
+  // missing or pointing at a tool we don't have in scope). Children are
+  // rendered nested inside their parent task card and skipped at the top
+  // level so the timeline stays a clean sub-agent→child tree instead of a
+  // flat list with duplicates.
+  const toolByCallId = useMemo(() => {
+    const m = new Map<string, AgentToolCall>();
+    for (const t of tools) if (t) m.set(t.toolCallId, t);
+    return m;
+  }, [tools]);
+  const topLevelTools = useMemo(
+    () =>
+      tools.filter((t) => {
+        if (!t) return false;
+        const parent = t.parentToolCallId;
+        return !parent || !toolByCallId.has(parent);
+      }),
+    [tools, toolByCallId],
+  );
+  const childrenByParent = useMemo(() => {
+    const m = new Map<string, AgentToolCall[]>();
+    for (const t of tools) {
+      if (!t || !t.parentToolCallId) continue;
+      const arr = m.get(t.parentToolCallId) ?? [];
+      arr.push(t);
+      m.set(t.parentToolCallId, arr);
+    }
+    return m;
+  }, [tools]);
   const meta = providerMeta(turn.provider);
   const isActive = turn.status === 'working' || turn.status === 'streaming';
   const emptyResponse = assistants.length === 0 && thoughts.length === 0 && tools.length === 0 && !plan;
@@ -266,10 +579,69 @@ function AgentTurnCard({ turn }: { turn: AgentTurn }) {
           <span>{meta.label}</span>
           <span className={`agent-status ${turnStatusClass(turn.status)}`}>{turn.status}</span>
           {elapsed && <span className="agent-card-meta">{elapsed}</span>}
+          <div className="agent-card-actions" role="group" aria-label="Turn actions">
+            <button
+              type="button"
+              className="agent-action"
+              disabled={!isActive || !transport}
+              onClick={() => {
+                if (transport) void transport.send(sessionId, 'message.cancel_stream', {});
+              }}
+              title={
+                !isActive
+                  ? 'Unavailable: turn is not streaming'
+                  : !transport
+                    ? 'Unavailable: not mounted in workbench'
+                    : 'Cancel the in-flight agent turn'
+              }
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="agent-action"
+              disabled={isActive || !transport || !turn.userText}
+              onClick={() => {
+                if (transport && turn.userText)
+                  void transport.send(sessionId, 'message.submit', {
+                    text: turn.userText,
+                    attachments: [],
+                    mentions: [],
+                  });
+              }}
+              title={
+                isActive
+                  ? 'Unavailable: turn still streaming'
+                  : !transport
+                    ? 'Unavailable: not mounted in workbench'
+                    : !turn.userText
+                      ? 'Unavailable: no user prompt to retry'
+                      : 'Resubmit the original prompt for this turn'
+              }
+            >
+              Retry
+            </button>
+          </div>
         </div>
         {turn.userText && <div className="agent-user-prompt">{turn.userText}</div>}
         {emptyResponse && isActive && (
-          <div className="agent-message pending">{meta.shortLabel} is working…</div>
+          // X.5f.3 Patch F: while the turn is active and the provider has
+          // not emitted any rich event yet, surface a louder placeholder
+          // so dogfooders don't think the UI is dead. Includes an
+          // animated spinner glyph and the elapsed time pulled from the
+          // header so the wait state is unambiguous at a glance.
+          <div
+            className="agent-message pending agent-working"
+            role="status"
+            aria-live="polite"
+            data-testid="agent-working-placeholder"
+          >
+            <span className="agent-working-spinner" aria-hidden="true" />
+            <span>
+              {meta.shortLabel} is working
+              {elapsed ? ` · ${elapsed} elapsed` : '…'}
+            </span>
+          </div>
         )}
         {thoughts.map((thought) => (
           <ThinkingBlock key={thought!.id} content={thought!.content} active={isActive} />
@@ -278,16 +650,66 @@ function AgentTurnCard({ turn }: { turn: AgentTurn }) {
           <div key={assistant!.id} className={`agent-message ${isActive ? 'streaming' : ''}`}>
             {assistant!.content}
             {isActive && <span className="streaming-cursor">▍</span>}
+            {!isActive && assistant!.content && (
+              <div className="agent-card-actions" role="group" aria-label="Assistant actions">
+                <button
+                  type="button"
+                  className="agent-action"
+                  onClick={() => void copyToClipboard(assistant!.content)}
+                  title="Copy assistant response to clipboard"
+                >
+                  Copy response
+                </button>
+              </div>
+            )}
           </div>
         ))}
         {plan && <PlanCard entries={plan.entries} />}
-        {tools.map((tool) => <ToolCallCard key={tool!.id} tool={tool!} />)}
+        {topLevelTools.map((tool) => (
+          <ToolCallCard
+            key={tool!.id}
+            tool={tool!}
+            onOpenTab={onOpenTab}
+            childrenByParent={childrenByParent}
+          />
+        ))}
+        {/* X.5f.3 Patch D: when the provider streamed assistant text but
+            emitted no rich (thinking/tool/diff/terminal/plan) events for
+            this completed turn, surface a one-line explainer so the user
+            understands why the timeline only shows a message. */}
+        {!isActive
+          && assistants.length > 0
+          && thoughts.length === 0
+          && tools.length === 0
+          && !plan
+          && (
+            <div className="agent-card-meta" data-testid="agent-text-only-fallback">
+              {meta.label} streamed a text-only response. No thinking, tool, diff, terminal, or plan events were emitted for this turn.
+            </div>
+          )}
+        {/* X.5f.3 Patch F: when the provider's turn completed (or failed)
+            without emitting ANY content at all (no assistant text, thought,
+            tool, diff, terminal, or plan), the card would otherwise render
+            only a header — looking dead in the timeline. Surface an explicit
+            "completed empty" notice and a Retry hint so dogfooders can tell
+            the difference between "still working" and "finished with nothing". */}
+        {!isActive && emptyResponse && (
+          <div
+            className="agent-card-meta agent-empty-turn"
+            data-testid="agent-empty-turn-fallback"
+          >
+            {meta.label} {turn.status === 'failed' ? 'failed' : 'finished'} without emitting any
+            content for this turn. No assistant text, thinking, tool, diff, terminal, or plan
+            events were observed. Use Retry above to resend the prompt, or open ACP Debug below
+            to inspect the raw frames.
+          </div>
+        )}
       </div>
     </article>
   );
 }
 
-function AgentThreadItemRow({ item }: { item: AgentThreadItem }) {
+function AgentThreadItemRow({ item, onOpenTab }: { item: AgentThreadItem; onOpenTab?: AgentThreadActions['onOpenTab'] }) {
   const assistant = useAgentSession((s) => s.assistants.get(item.refId));
   const thought = useAgentSession((s) => s.thoughts.get(item.refId));
   const tool = useAgentSession((s) => s.tools.get(item.refId));
@@ -300,7 +722,7 @@ function AgentThreadItemRow({ item }: { item: AgentThreadItem }) {
     return <ThinkingBlock content={thought.content} />;
   }
   if (item.kind === 'tool' && tool) {
-    return <ToolCallCard tool={tool} />;
+    return <ToolCallCard tool={tool} onOpenTab={onOpenTab} />;
   }
   if (item.kind === 'plan' && plan) {
     return <PlanCard entries={plan.entries} />;
@@ -308,7 +730,15 @@ function AgentThreadItemRow({ item }: { item: AgentThreadItem }) {
   return null;
 }
 
-export function AgentThread({ sessionId }: { sessionId?: string | null }) {
+export function AgentThread({
+  sessionId,
+  transport,
+  onOpenTab,
+}: {
+  sessionId?: string | null;
+  transport?: TransportHandle | null;
+  onOpenTab?: AgentThreadActions['onOpenTab'];
+}) {
   const currentSession = useSession((s) => s.sessionId);
   const provider = useSession((s) => s.agentId);
   const sid = sessionId ?? currentSession;
@@ -318,6 +748,22 @@ export function AgentThread({ sessionId }: { sessionId?: string | null }) {
   const turnOrder = useAgentSession((s) => s.turnOrder);
   const telemetry = useAgentSession((s) => (sid ? s.telemetry.get(sid) : undefined));
   const turns = useMemo(() => selectAgentTurns(sid), [sid, turnsState, turnOrder]);
+  // X.5f.3 Patch D: dev-only sanity warning. If the raw debug stream
+  // shows tool_call discriminators but the normalized tool count is
+  // still zero, the bridge silently dropped the wire shape and we
+  // want devs to notice immediately during dogfood.
+  const devWarning = useMemo(() => {
+    if (!import.meta.env.DEV) return null;
+    if (!telemetry) return null;
+    const discriminators = telemetry.discriminators ?? {};
+    const toolCallSeen = (discriminators['tool_call'] ?? 0)
+      + (discriminators['tool_call_update'] ?? 0);
+    const normalizedTools = telemetry.eventCounts?.tool ?? 0;
+    if (toolCallSeen > 0 && normalizedTools === 0) {
+      return 'ACP tool_call was seen in debug but no normalized tool card was created.';
+    }
+    return null;
+  }, [telemetry]);
   const items = useMemo(() => {
     if (!sid) return [];
     const prefix = `${sid}\x00`;
@@ -332,10 +778,28 @@ export function AgentThread({ sessionId }: { sessionId?: string | null }) {
   return (
     <section className="agent-thread" aria-label="Rich agent thread">
       <div className="agent-thread-header">
-        <span>Rich agent session</span>
         <AgentTelemetryBadge sessionId={sid} provider={provider} />
       </div>
-      {turns.length > 0 ? turns.map((turn) => <AgentTurnCard key={turn.id} turn={turn} />) : items.map((item) => <AgentThreadItemRow key={item.id} item={item} />)}
+      {devWarning && (
+        <div
+          className="agent-card-meta agent-dev-warning"
+          role="alert"
+          data-testid="agent-dev-warning"
+        >
+          ⚠️ {devWarning}
+        </div>
+      )}
+      {turns.length > 0
+        ? turns.map((turn) => (
+            <AgentTurnCard
+              key={turn.id}
+              turn={turn}
+              sessionId={sid}
+              transport={transport ?? null}
+              onOpenTab={onOpenTab ?? null}
+            />
+          ))
+        : items.map((item) => <AgentThreadItemRow key={item.id} item={item} onOpenTab={onOpenTab ?? null} />)}
       <AcpDebugPanel sessionId={sid} />
     </section>
   );

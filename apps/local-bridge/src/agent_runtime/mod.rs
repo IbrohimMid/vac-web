@@ -13,6 +13,7 @@
 pub mod acp;
 pub mod config;
 pub mod errors;
+pub mod opencode_serve;
 pub mod registry;
 
 pub use config::{

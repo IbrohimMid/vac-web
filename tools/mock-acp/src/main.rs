@@ -73,6 +73,14 @@ struct Args {
     /// adapter. Each entry should at minimum have `id` and `type`
     /// (and optionally `name`, `vars`).
     auth_methods_json: Option<String>,
+    /// X.5f.3 Patch A — mimic Gemini CLI ACP wire shape.
+    /// When set, scripted tool emissions use `tool_call_id`
+    /// snake_case, omit `kind` / `title` / `status` on the
+    /// initial `tool_call`, and emit only the snake_case id on
+    /// the follow-up `tool_call_update`. Used to reproduce the
+    /// dogfood gap where `debug discriminators` saw `tool_call`
+    /// but live `telemetry.tool` was 0.
+    gemini_shape: bool,
 }
 
 fn parse_args() -> Args {
@@ -94,6 +102,7 @@ fn parse_args() -> Args {
             "--rotate-tool-call-id" => a.rotate_tool_call_id = true,
             "--same-raw-input-different-tool" => a.same_raw_input_different_tool = true,
             "--auth-methods" => a.auth_methods_json = argv.next(),
+            "--gemini-shape" => a.gemini_shape = true,
             "--profile" | "--session-id" | "--project" => {
                 let _ = argv.next();
                 a.cli_passthrough = true;
@@ -521,6 +530,26 @@ async fn emit_scripted_tool(
         "tc_script"
     };
 
+    // X.5f.3 Patch A — when --gemini-shape is set, replace the
+    // canonical (camelCase, fully-typed) tool emission with a
+    // minimal Gemini-CLI-shaped pair: snake_case tool_call_id,
+    // no kind/title/status on create, status only on update.
+    // The emit-*-tool flag still gates whether we emit at all,
+    // but the kind-specific richness (read/edit/execute/failed)
+    // is intentionally collapsed because real Gemini doesn't
+    // provide it. This is the fixture the bridge's tolerant
+    // parser must normalize into a fallback ToolCallCard.
+    if args.gemini_shape {
+        emit_gemini_shape_sequence(
+            stdout,
+            session_id,
+            scripted_tool_call_id,
+            args.emit_failed_tool,
+        )
+        .await;
+        return;
+    }
+
     if args.emit_read_tool {
         emit_read_sequence(stdout, session_id, scripted_tool_call_id).await;
     }
@@ -778,6 +807,54 @@ async fn emit_failed_sequence(
         }
     });
     let _ = writeln_json(stdout, &failed).await;
+}
+
+/// X.5f.3 Patch A — emit a Gemini-CLI-shaped tool_call /
+/// tool_call_update pair. The intent is to reproduce the
+/// dogfood gap exactly:
+///   * snake_case `tool_call_id` (not `toolCallId`)
+///   * no `kind`, no `title`, no `status` on the create
+///   * follow-up `tool_call_update` carries snake_case id and
+///     either `"status": "completed"` (success path) or
+///     `"status": "failed"` when --emit-failed-tool was set.
+///
+/// The tolerant parser in `tool_activity::extract_observed_tool_activity`
+/// must normalize this into a ToolCallCard with
+/// `kind=Other`, `title="Gemini tool call"`, `raw_shape=Some("gemini")`.
+async fn emit_gemini_shape_sequence(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    failed: bool,
+) {
+    let create = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "tool_call_id": tool_call_id,
+                "rawInput": { "prompt": "echo from gemini-shape" }
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &create).await;
+    let final_status = if failed { "failed" } else { "completed" };
+    let update = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "tool_call_id": tool_call_id,
+                "status": final_status,
+                "rawOutput": "hello from gemini-shape mock\n"
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &update).await;
 }
 
 async fn writeln_json(out: &Arc<Mutex<tokio::io::Stdout>>, v: &Value) -> Result<()> {

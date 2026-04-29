@@ -5,8 +5,8 @@ use crate::agent_runtime::acp::{
     sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AcpSessionUpdate,
     AuthClientCapabilities, AuthenticateRequest, AuthenticateResponse, ClientCapabilities,
     ContentBlock, FsClientCapabilities, InitializeRequest, JsonRpcError, NewSessionRequest,
-    PermissionRequest, PromptRequest, SessionNotification, ToolKind, ToolStatus,
-    DEFAULT_RAW_OUTPUT_CAP_BYTES, TOOL_CALL_HASH_DROP_FIELDS,
+    ObservedToolActivity, PermissionRequest, PromptRequest, SessionNotification, ToolKind,
+    ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES, TOOL_CALL_HASH_DROP_FIELDS,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
 use crate::notify::{activity_event, Severity as NotifySeverity};
@@ -14,10 +14,10 @@ use crate::ws::envelope::{ClientCommand, ServerEvent};
 use bridge_core::{EventRing, StateHolder};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{info, warn};
 
 use super::assessment_validation::{
@@ -86,6 +86,19 @@ pub struct AcpRuntime {
     /// — the bridge refuses to launch arbitrary commands even when an
     /// allowlisted agent is involved.
     pub(crate) agent_command: PathBuf,
+    /// X.5h.1 — sub-agent task scope stack. When OpenCode (or any
+    /// ACP agent that emits a `kind: other` tool call titled `task`)
+    /// dispatches a sub-agent, we push the parent tool_call_id when
+    /// the task transitions to pending/in_progress, and pop on
+    /// completed/failed. Subsequent tool calls and thought chunks
+    /// snapshot the current top as their `parent_tool_call_id` so the
+    /// FE can render a Trae-style nested tree without inventing
+    /// temporal heuristics.
+    pub(crate) task_scope: StdMutex<Vec<String>>,
+    /// Stage X.5h.2 — OpenCode HTTP API tap for sub-agent tool activity.
+    /// Populated post-spawn when --port flag was wired; None otherwise.
+    pub(crate) subagent_tap:
+        StdMutex<Option<Arc<crate::agent_runtime::opencode_serve::OpencodeSubagentTap>>>,
 }
 
 const APPROVAL_CORRELATION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
@@ -106,6 +119,39 @@ impl AcpRuntime {
         }
         let hash = sha256_hex_canonical_excluding(tool_call, TOOL_CALL_HASH_DROP_FIELDS);
         self.approval_by_full_hash.insert(hash, entry);
+    }
+
+    /// X.5h.1 — return the current sub-agent task tool_call_id to use
+    /// as `parent_tool_call_id` for child events. Returns `None` when
+    /// no task is active. Skips its own id (a task tool call's pending
+    /// frame must not parent itself).
+    pub(crate) fn current_task_parent(&self, self_tool_call_id: &str) -> Option<String> {
+        let stack = self.task_scope.lock().ok()?;
+        stack
+            .iter()
+            .rev()
+            .find(|id| id.as_str() != self_tool_call_id)
+            .cloned()
+    }
+
+    /// X.5h.1 — push a parent task onto the scope stack. Idempotent:
+    /// repeated pending/in_progress frames for the same task do not
+    /// double-push.
+    pub(crate) fn enter_task_scope(&self, tool_call_id: &str) {
+        if let Ok(mut stack) = self.task_scope.lock() {
+            if !stack.iter().any(|id| id.as_str() == tool_call_id) {
+                stack.push(tool_call_id.to_string());
+            }
+        }
+    }
+
+    /// X.5h.1 — remove a finished task from the scope stack. Removes
+    /// from anywhere in the stack to tolerate out-of-order completion
+    /// (parallel sub-agents).
+    pub(crate) fn exit_task_scope(&self, tool_call_id: &str) {
+        if let Ok(mut stack) = self.task_scope.lock() {
+            stack.retain(|id| id.as_str() != tool_call_id);
+        }
     }
 
     /// Lookup correlation by primary key, then fallback. Returns the
@@ -913,6 +959,106 @@ async fn emit_event(handle: &SessionHandleRef, event: ServerEvent) {
     emit_to(&handle.ring, &handle.broadcast, event).await;
 }
 
+/// Stage X.5h.2 Step 3b — emit the canonical 4-lane VAC event
+/// surface for an [`ObservedToolActivity`] produced by the OpenCode
+/// HTTP API tap (sub-agent tool calls). Mirrors
+/// [`SessionHandle::map_tool_activity`]'s emit pattern but skips the
+/// X.5c.2 audit/correlation extras (audit is approval-correlated, and
+/// sub-agent tool calls don't carry approvals in this stage).
+///
+/// Lanes:
+/// 1. Primary  — `tool.observed` / `tool.updated` / `tool.failed`.
+/// 2. Rich     — `tool.call.created` / `tool.call.updated`.
+/// 3. Diff     — `tool.diff.updated` (only when `activity.diffs`
+///    is non-empty).
+/// 4. Terminal — `tool.terminal.updated` (only for `Execute` and
+///    not `Pending`).
+///
+/// `discriminator` is `"tool_call"` for started events and
+/// `"tool_call_update"` for completion events. Anything else falls
+/// through to `tool.call.updated`.
+async fn emit_subagent_activity_lanes(
+    handle: &SessionHandleRef,
+    activity: &ObservedToolActivity,
+    discriminator: &str,
+) {
+    let event_type = match activity.status {
+        ToolStatus::Failed => "tool.failed",
+        ToolStatus::Pending => "tool.observed",
+        _ => "tool.updated",
+    };
+    let payload = serde_json::to_value(activity).unwrap_or(serde_json::Value::Null);
+    let ts = chrono::Utc::now().to_rfc3339();
+
+    let event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: event_type.into(),
+        payload: payload.clone(),
+        v: 1,
+        ts: ts.clone(),
+    };
+    emit_event(handle, event).await;
+
+    let rich_event_type = match discriminator {
+        "tool_call" => "tool.call.created",
+        "tool_call_update" => "tool.call.updated",
+        _ => "tool.call.updated",
+    };
+    let rich_event = ServerEvent {
+        seq: 0,
+        session_id: handle.id.clone(),
+        event_type: rich_event_type.into(),
+        payload: payload.clone(),
+        v: 1,
+        ts: ts.clone(),
+    };
+    emit_event(handle, rich_event).await;
+
+    if !activity.diffs.is_empty() {
+        let diff_event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "tool.diff.updated".into(),
+            payload: serde_json::json!({
+                "tool_call_id": activity.tool_call_id,
+                "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "diffs": activity.diffs.clone(),
+                "locations": activity.locations.clone(),
+                "approved_by_approval_id": activity.approved_by_approval_id.clone(),
+                "agent_id": activity.agent_id.clone(),
+                "agent_kind": activity.agent_kind.as_str(),
+                "parent_tool_call_id": activity.parent_tool_call_id.clone(),
+            }),
+            v: 1,
+            ts: ts.clone(),
+        };
+        emit_event(handle, diff_event).await;
+    }
+
+    if matches!(activity.kind, ToolKind::Execute) && !matches!(activity.status, ToolStatus::Pending)
+    {
+        let terminal_event = ServerEvent {
+            seq: 0,
+            session_id: handle.id.clone(),
+            event_type: "tool.terminal.updated".into(),
+            payload: serde_json::json!({
+                "tool_call_id": activity.tool_call_id,
+                "status": payload.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                "raw_input_redacted": activity.raw_input_redacted.clone(),
+                "raw_output_redacted": activity.raw_output_redacted.clone(),
+                "approved_by_approval_id": activity.approved_by_approval_id.clone(),
+                "agent_id": activity.agent_id.clone(),
+                "agent_kind": activity.agent_kind.as_str(),
+                "parent_tool_call_id": activity.parent_tool_call_id.clone(),
+            }),
+            v: 1,
+            ts: ts.clone(),
+        };
+        emit_event(handle, terminal_event).await;
+    }
+}
+
 async fn emit_to(
     ring: &Arc<RwLock<EventRing<ServerEvent>>>,
     bcast: &broadcast::Sender<ServerEvent>,
@@ -1351,9 +1497,34 @@ impl SessionHandle {
                 env.push(("CLAUDE_CODE_EXECUTABLE".to_string(), exec));
             }
         }
+        // Stage X.5h.2 — inject --port/--hostname for OpenCode acp child
+        // so the bridge can subscribe to /event SSE for sub-agent tool
+        // activity that ACP doesn't surface natively.
+        let mut spawn_args: Vec<String> = opts.agent.args.to_vec();
+        let opencode_serve_port: Option<u16> = if is_opencode_agent(
+            &opts.agent.id,
+            &opts.agent.command,
+        ) {
+            match pick_free_port() {
+                Ok(port) => {
+                    spawn_args.push("--port".to_string());
+                    spawn_args.push(port.to_string());
+                    spawn_args.push("--hostname".to_string());
+                    spawn_args.push("127.0.0.1".to_string());
+                    info!(agent = %opts.agent.id, port, "X.5h.2: opencode acp child --port wired");
+                    Some(port)
+                }
+                Err(e) => {
+                    warn!(agent = %opts.agent.id, error = %e, "X.5h.2: pick_free_port failed; subagent tap disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let (client, mut child) = AcpClient::spawn(
             &opts.agent.command,
-            &opts.agent.args,
+            &spawn_args,
             &env,
             Some(Arc::clone(&debug)),
         )?;
@@ -1419,6 +1590,8 @@ impl SessionHandle {
             audit: opts.audit.clone(),
             debug: Some(Arc::clone(&debug)),
             agent_command: opts.agent.command.clone(),
+            task_scope: StdMutex::new(Vec::new()),
+            subagent_tap: StdMutex::new(None),
         });
 
         // Resolve workflow spec. Unknown ids are rejected upstream at the
@@ -1462,6 +1635,41 @@ impl SessionHandle {
             audit: opts.audit.clone(),
             assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
+
+        // Stage X.5h.2 Step 3b — launch the sub-agent tap and the drainer
+        // that translates its forwarded ObservedToolActivity into the
+        // canonical 4-lane VAC event surface. Tap is launched here
+        // (after `handle` Arc construction) because the drainer needs
+        // to clone `handle` to call `emit_subagent_activity_lanes`.
+        if let Some(port) = opencode_serve_port {
+            let base_url = format!("http://127.0.0.1:{}", port);
+            let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<
+                crate::agent_runtime::opencode_serve::SubagentToolEvent,
+            >();
+            let tap = crate::agent_runtime::opencode_serve::OpencodeSubagentTap::launch(
+                base_url,
+                acp_session_id.clone(),
+                opts.session_id.clone(),
+                opts.agent.id.clone(),
+                opts.agent.kind,
+                Arc::downgrade(&acp_runtime),
+                sub_tx,
+            );
+            if let Ok(mut slot) = acp_runtime.subagent_tap.lock() {
+                *slot = Some(Arc::new(tap));
+            }
+            let drain_handle = Arc::clone(&handle);
+            tokio::spawn(async move {
+                while let Some(evt) = sub_rx.recv().await {
+                    emit_subagent_activity_lanes(&drain_handle, &evt.activity, evt.discriminator)
+                        .await;
+                }
+                tracing::info!(
+                    session = %drain_handle.id,
+                    "opencode subagent drain channel closed"
+                );
+            });
+        }
 
         if let Some(debug) = acp_runtime.debug.as_ref() {
             debug
@@ -1568,6 +1776,30 @@ impl SessionHandle {
     }
 }
 
+/// X.5h.2 — detect an OpenCode ACP agent for the bridge wiring step.
+/// Matches the agents.toml id (`opencode`/`opencode-*`) or a bare
+/// `opencode` binary basename so a custom alias still gets the tap wired.
+fn is_opencode_agent(agent_id: &str, command: &std::path::Path) -> bool {
+    if agent_id == "opencode" || agent_id.starts_with("opencode-") {
+        return true;
+    }
+    command
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s == "opencode")
+        .unwrap_or(false)
+}
+
+/// X.5h.2 — pick a free local TCP port by binding `:0`. Small TOCTOU
+/// window between drop and the opencode child's rebind is acceptable
+/// for a local-bridge child and avoids a new `portpicker` dep.
+fn pick_free_port() -> std::io::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
+}
+
 /// Map an ACP `session/update` notification onto the VAC event surface.
 ///
 /// X.5f.1 keeps the legacy events alive while adding a richer, Zed-like
@@ -1599,22 +1831,37 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
             emit_event(handle, event).await;
         }
         AcpSessionUpdate::AgentThoughtChunk { text } => {
+            // X.5h.1 — if a sub-agent task is active, attach its
+            // tool_call_id so the FE can render the thought collapsed
+            // inside that task card. None for top-level thoughts.
+            let parent_tool_call_id = handle
+                .acp
+                .as_ref()
+                .and_then(|acp| acp.current_task_parent(""));
+            let mut payload = serde_json::json!({ "delta": text });
+            if let Some(p) = parent_tool_call_id.as_deref() {
+                payload["parent_tool_call_id"] = serde_json::Value::String(p.to_string());
+            }
             let thought_event = ServerEvent {
                 seq: 0,
                 session_id: handle.id.clone(),
                 event_type: "transcript.thought_delta".into(),
-                payload: serde_json::json!({ "delta": text }),
+                payload,
                 v: 1,
                 ts: ts.clone(),
             };
             emit_event(handle, thought_event).await;
 
             // Backward compatibility for the pre-rich transcript surface.
+            let mut legacy_payload = serde_json::json!({ "delta": text, "kind": "thought" });
+            if let Some(p) = parent_tool_call_id.as_deref() {
+                legacy_payload["parent_tool_call_id"] = serde_json::Value::String(p.to_string());
+            }
             let legacy_event = ServerEvent {
                 seq: 0,
                 session_id: handle.id.clone(),
                 event_type: "transcript.delta".into(),
-                payload: serde_json::json!({ "delta": text, "kind": "thought" }),
+                payload: legacy_payload,
                 v: 1,
                 ts,
             };
@@ -1701,10 +1948,33 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
 /// Redaction-safe preview for ACP `session/update` tracing. This helper
 /// intentionally keeps only structural metadata needed to diagnose event
 /// routing and excludes rawInput/rawOutput/content text/vendor payloads.
+///
+/// X.5f.3 Patch A: also surfaces snake_case `tool_call_id` and bare
+/// `id` so we can diagnose Gemini-shape payloads at trace time. The
+/// payload-level recovery still happens in `extract_observed_tool_activity`;
+/// this preview just avoids the misleading `toolCallId: null` log line
+/// when the raw frame actually carried a snake_case id.
 fn safe_acp_update_preview(update: &serde_json::Value) -> serde_json::Value {
+    let tool_call_id_camel = update.get("toolCallId").and_then(|v| v.as_str());
+    let tool_call_id_snake = update.get("tool_call_id").and_then(|v| v.as_str());
+    let bare_id = update.get("id").and_then(|v| v.as_str());
+    let resolved_tool_call_id = tool_call_id_camel
+        .filter(|s| !s.is_empty())
+        .or(tool_call_id_snake.filter(|s| !s.is_empty()))
+        .or(bare_id.filter(|s| !s.is_empty()));
+    let raw_shape_hint = if tool_call_id_camel.filter(|s| !s.is_empty()).is_some() {
+        "canonical"
+    } else if tool_call_id_snake.filter(|s| !s.is_empty()).is_some()
+        || bare_id.filter(|s| !s.is_empty()).is_some()
+    {
+        "gemini"
+    } else {
+        "unknown"
+    };
     serde_json::json!({
         "sessionUpdate": update.get("sessionUpdate").and_then(|v| v.as_str()),
-        "toolCallId": update.get("toolCallId").and_then(|v| v.as_str()),
+        "toolCallId": resolved_tool_call_id,
+        "raw_shape": raw_shape_hint,
         "kind": update.get("kind").and_then(|v| v.as_str()),
         "status": update.get("status").and_then(|v| v.as_str()),
         "title_present": update.get("title").is_some(),
@@ -1745,12 +2015,50 @@ async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotificatio
         }
     }
 
+    // X.5h.1 — Trae-style sub-agent nesting.
+    //
+    // Maintain the task scope stack BEFORE snapshotting parent so a
+    // sub-agent task tool itself doesn't claim itself as parent (the
+    // helper already filters self, but pushing here keeps the stack
+    // tip accurate for any *child* events that arrive between this
+    // pending frame and the matching completion).
+    //
+    // Push on pending/in_progress for ToolKind::Task; pop on terminal
+    // status. Idempotent push tolerates repeated in_progress frames
+    // from the agent (ACP allows incremental updates per tool call).
+    // A sub-agent dispatch surfaces as ToolKind::Other with a non-empty
+    // `subagent_type` (mirrors raw_input.subagent_type from the OpenCode
+    // `task` tool shape). We can't rely on a dedicated ToolKind::Task
+    // because providers vary — `subagent_type` is the cross-provider signal.
+    let is_subagent_task = activity.subagent_type.is_some();
+    let parent_tool_call_id: Option<String> = if let Some(acp) = handle.acp.as_ref() {
+        if is_subagent_task {
+            match activity.status {
+                ToolStatus::Pending | ToolStatus::InProgress => {
+                    acp.enter_task_scope(&activity.tool_call_id);
+                }
+                ToolStatus::Completed | ToolStatus::Failed => {
+                    acp.exit_task_scope(&activity.tool_call_id);
+                }
+            }
+        }
+        acp.current_task_parent(&activity.tool_call_id)
+    } else {
+        None
+    };
+
     let event_type = match activity.status {
         ToolStatus::Failed => "tool.failed",
         ToolStatus::Pending => "tool.observed",
         _ => "tool.updated",
     };
-    let payload = serde_json::to_value(&activity).unwrap_or(serde_json::Value::Null);
+    let mut payload = serde_json::to_value(&activity).unwrap_or(serde_json::Value::Null);
+    if let (Some(p), Some(obj)) = (parent_tool_call_id.as_deref(), payload.as_object_mut()) {
+        obj.insert(
+            "parent_tool_call_id".to_string(),
+            serde_json::Value::String(p.to_string()),
+        );
+    }
     let ts = chrono::Utc::now().to_rfc3339();
     let event = ServerEvent {
         seq: 0,

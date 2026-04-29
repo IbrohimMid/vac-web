@@ -11,7 +11,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { Composer } from '../Composer/Composer';
 import { AgentThread } from '../AgentThread/AgentThread';
-import { Transcript } from '../Transcript/Transcript';
 import { useShell } from '../../stores/shell';
 import { useApprovals } from '../../stores/approvals';
 import { useAssessment } from '../../stores/assessment';
@@ -71,42 +70,56 @@ interface Props {
 
 export function BuildSurface({ transport }: Props) {
   const [tab, setTab] = useState<WBTabId>('approvals');
+  const [wbCollapsed, setWbCollapsed] = useState(false);
   const shellOpen = useShell((s) => s.open);
   const setShellOpen = useShell((s) => s.setOpen);
 
   return (
     <div
-      className={`build-grid ${shellOpen ? 'shell-open' : ''}`}
+      className={`build-grid ${shellOpen ? 'shell-open' : ''} ${wbCollapsed ? 'wb-collapsed' : ''}`}
       style={
         {
-          ['--transcript-fr' as string]: '1.2fr',
-          ['--workbench-fr' as string]: '0.8fr',
+          ['--transcript-fr' as string]: wbCollapsed ? '1fr' : '1.2fr',
+          ['--workbench-fr' as string]: wbCollapsed ? 'auto' : '0.8fr',
         } as React.CSSProperties
       }
     >
-      <TranscriptPane transport={transport} />
+      <TranscriptPane transport={transport} setTab={setTab} />
       <Workbench
         tab={tab}
         setTab={setTab}
         shellOpen={shellOpen}
         setShellOpen={setShellOpen}
         transport={transport}
+        collapsed={wbCollapsed}
+        setCollapsed={setWbCollapsed}
       />
     </div>
   );
 }
 
-function TranscriptPane({ transport }: { transport: TransportHandle }) {
+function TranscriptPane({
+  transport,
+  setTab,
+}: {
+  transport: TransportHandle;
+  setTab: (t: WBTabId) => void;
+}) {
   const sessionId = useSession((s) => s.sessionId);
   const messageCount = useTranscript((s) => s.order.length);
+  // X.5f.3 Patch B: AgentThread tool/diff/terminal/turn actions
+  // need to switch the workbench tab to Review or Runtime, and to
+  // send message.cancel_stream / message.submit. Plumb the same
+  // transport + setTab BuildSurface already owns so the buttons
+  // perform real navigation/state changes (no cosmetic shells).
   return (
     <div className="transcript-pane">
       <div className="transcript-hd">
-        <Icon name="dot" size={10} style={{ color: 'var(--ok)' }} />
+        <Icon name="dot" size={10} style={ { color: 'var(--ok)' } } />
         <span className="session-title">
           {sessionId ? `Session ${sessionId.slice(0, 12)}` : 'No active session'}
         </span>
-        <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
+        <span className="muted" style={ { marginLeft: 'auto', fontSize: 12 } }>
           {messageCount} {messageCount === 1 ? 'turn' : 'turns'}
         </span>
         <button className="icon-btn" title="Session info" aria-label="Session info">
@@ -115,8 +128,11 @@ function TranscriptPane({ transport }: { transport: TransportHandle }) {
       </div>
       <div className="transcript-scroll">
         <div className="transcript-inner">
-          <AgentThread sessionId={sessionId} />
-          <Transcript />
+          <AgentThread
+            sessionId={sessionId}
+            transport={transport}
+            onOpenTab={(t) => setTab(t as WBTabId)}
+          />
         </div>
       </div>
       <Composer transport={transport} />
@@ -130,9 +146,11 @@ interface WorkbenchProps {
   shellOpen: boolean;
   setShellOpen: (o: boolean) => void;
   transport: TransportHandle;
+  collapsed: boolean;
+  setCollapsed: (v: boolean) => void;
 }
 
-function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: WorkbenchProps) {
+function Workbench({ tab, setTab, shellOpen, setShellOpen, transport, collapsed, setCollapsed }: WorkbenchProps) {
   const pendingApprovals = useApprovals((s) => s.pendingOrder.length);
   const reviewFiles = useReview((s) => s.files.length);
   const runningJobs = useRuntime((s) => {
@@ -161,17 +179,21 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
   };
 
   return (
-    <div className="workbench">
+    <div className={`workbench ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="tabs">
         {WB_TABS.map((t) => {
           const c = countFor(t.id);
+          const isActive = tab === t.id && !collapsed;
           return (
             <div
               key={t.id}
-              className={`tab ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
+              className={`tab ${isActive ? 'active' : ''}`}
+              onClick={() => {
+                if (collapsed) setCollapsed(false);
+                setTab(t.id);
+              }}
               role="tab"
-              aria-selected={tab === t.id}
+              aria-selected={isActive}
             >
               {t.label}
               {c != null && <span className="count">{c}</span>}
@@ -179,6 +201,15 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
           );
         })}
         <div className="spacer"></div>
+        <button
+          className="icon-btn"
+          onClick={() => setCollapsed(!collapsed)}
+          title={collapsed ? 'Expand workbench' : 'Collapse workbench'}
+          aria-label={collapsed ? 'Expand workbench' : 'Collapse workbench'}
+          aria-expanded={!collapsed}
+        >
+          <Icon name={collapsed ? 'chevron-u' : 'chevron-d'} size={14} />
+        </button>
         <button
           className={`icon-btn ${shellOpen ? 'bordered' : ''}`}
           onClick={() => setShellOpen(!shellOpen)}
@@ -188,6 +219,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
           <Icon name="terminal" size={14} />
         </button>
       </div>
+      {!collapsed && (
       <div className="wb-body">
         <Suspense fallback={<TabFallback />}>
           {tab === 'approvals' && <ApprovalsTab transport={transport} />}
@@ -206,6 +238,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport }: Workbenc
           {tab === 'memory' && <MemoryView />}
         </Suspense>
       </div>
+      )}
     </div>
   );
 }

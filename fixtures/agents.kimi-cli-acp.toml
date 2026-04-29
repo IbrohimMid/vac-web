@@ -1,0 +1,29 @@
+# Kimi Code CLI ACP fixture (Moonshot AI).
+#
+# Kimi CLI ships with native ACP support; see
+# https://moonshotai.github.io/kimi-cli/ and the Zed agent page at
+# https://zed.dev/acp/agent/kimi-cli. Install via:
+#   curl -LsSf https://code.kimi.com/install.sh | bash
+# or:
+#   uv tool install --python 3.13 kimi-cli
+#
+# The canonical ACP launch command is `kimi acp` (subcommand). If your
+# build only supports the older flag, swap args to ["--acp"].
+#
+# Auth: needs a Moonshot API key (`MOONSHOT_API_KEY`) or a Kimi For
+# Coding login. Bridge does NOT synthesize terminal auth.
+default_agent = "kimi-cli-acp"
+
+[agents.kimi-cli-acp]
+kind = "acp"
+label = "Kimi CLI"
+command = "kimi"
+args = ["acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "MOONSHOT_*",
+  "KIMI_*",
+]
+cwd_mode = "project-root"

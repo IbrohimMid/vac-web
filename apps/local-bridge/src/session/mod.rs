@@ -5,7 +5,7 @@ mod handle;
 mod registry;
 
 pub use handle::{
-    ApprovalIntent, ApprovalResolution, ApprovalResolveError, AuthenticateError,
+    AcpRuntime, ApprovalIntent, ApprovalResolution, ApprovalResolveError, AuthenticateError,
     AuthenticateOutcome, SessionHandle, SessionHandleRef, SpawnOptions,
 };
 pub use registry::SessionRegistry;

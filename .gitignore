@@ -43,3 +43,8 @@ test-results/
 logs/
 .agent-logs/
 .codebuddy
+
+# Local dogfood / runtime artifacts (CI logs, agent-manager state, ad-hoc local fixtures)
+.ci-logs/
+.kilo/
+.local/

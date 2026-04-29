@@ -155,6 +155,15 @@ export function registerAgentSessionHandlers(transport: TransportHandle): () => 
       const p = asRecord(ev.payload);
       const toolCallId = asString(p.tool_call_id);
       if (!toolCallId) return;
+      // X.5f.3 Patch A: surface the bridge's raw_shape hint so the
+      // FE can render a "normalized from gemini shape" affordance
+      // when Gemini CLI ACP emits minimal tool_call frames.
+      // Forward `raw_input_redacted` / `raw_output_redacted` so the FE
+      // can render the actual command, file path, or arguments inside
+      // the tool card (the bridge has already redacted secret-shaped
+      // env values and capped output bytes).
+      const rawInput = p.raw_input_redacted ?? p.rawInput;
+      const rawOutput = p.raw_output_redacted ?? p.rawOutput;
       store().upsertToolCall({
         sessionId: ev.session_id,
         toolCallId,
@@ -165,6 +174,16 @@ export function registerAgentSessionHandlers(transport: TransportHandle): () => 
         agentId: asString(p.agent_id),
         agentKind: asString(p.agent_kind),
         approvedByApprovalId: asString(p.approved_by_approval_id),
+        rawShape: asString(p.raw_shape),
+        rawInput: rawInput === undefined ? undefined : rawInput,
+        rawOutput: rawOutput === undefined ? undefined : rawOutput,
+        // X.5h.1 — Trae-style nested sub-agent rendering. The bridge
+        // snapshots the parent task tool_call_id from its task_scope
+        // stack, and surfaces the OpenCode `subagent_type` directly
+        // from raw_input. Forward both so the store can build the
+        // parent→children tree without temporal heuristics.
+        parentToolCallId: asString(p.parent_tool_call_id),
+        subagentType: asString(p.subagent_type),
         updatedAt: typeof p.ts === 'string' ? p.ts : ev.ts,
       });
     });

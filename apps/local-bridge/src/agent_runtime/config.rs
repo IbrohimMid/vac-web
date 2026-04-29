@@ -403,4 +403,123 @@ command = "x"
             assert!(a.enabled, "{} enabled", a.id);
         }
     }
+
+    fn load_fixture(name: &str) -> AgentsConfig {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(format!("fixtures/{name}"));
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {name}: {e}"));
+        AgentsConfig::from_toml_str(&src, &path).unwrap_or_else(|e| panic!("parse {name}: {e}"))
+    }
+
+    #[test]
+    fn opencode_acp_fixture_loads() {
+        // Per https://opencode.ai/docs/acp the canonical command is the
+        // `acp` subcommand, not the deprecated `--acp` flag. Lock the
+        // fixture against regressions.
+        let cfg = load_fixture("agents.opencode.toml");
+        assert_eq!(cfg.default_agent_id, "opencode");
+        let agent = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "opencode")
+            .expect("opencode present");
+        assert!(matches!(agent.kind, AgentKind::Acp));
+        assert_eq!(agent.command.to_string_lossy(), "opencode");
+        assert_eq!(agent.args, vec!["acp".to_string()]);
+        assert!(agent.enabled);
+    }
+
+    #[test]
+    fn codex_acp_fixture_loads() {
+        // Pairs with @zed-industries/codex-acp from npm.
+        let cfg = load_fixture("agents.codex-acp.toml");
+        assert_eq!(cfg.default_agent_id, "codex-acp");
+        let agent = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "codex-acp")
+            .expect("codex-acp present");
+        assert!(matches!(agent.kind, AgentKind::Acp));
+        assert_eq!(agent.command.to_string_lossy(), "npx");
+        assert!(agent.args.iter().any(|a| a == "@zed-industries/codex-acp"));
+        assert!(agent.enabled);
+    }
+
+    #[test]
+    fn github_copilot_acp_fixture_loads() {
+        let cfg = load_fixture("agents.github-copilot-acp.toml");
+        assert_eq!(cfg.default_agent_id, "github-copilot-acp");
+        let agent = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "github-copilot-acp")
+            .expect("github-copilot-acp present");
+        assert!(matches!(agent.kind, AgentKind::Acp));
+        assert!(agent
+            .args
+            .iter()
+            .any(|a| a == "@github/copilot-language-server"));
+        assert!(agent.args.iter().any(|a| a == "--stdio"));
+        assert!(agent.enabled);
+    }
+
+    #[test]
+    fn kimi_cli_acp_fixture_loads() {
+        let cfg = load_fixture("agents.kimi-cli-acp.toml");
+        assert_eq!(cfg.default_agent_id, "kimi-cli-acp");
+        let agent = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "kimi-cli-acp")
+            .expect("kimi-cli-acp present");
+        assert!(matches!(agent.kind, AgentKind::Acp));
+        assert_eq!(agent.command.to_string_lossy(), "kimi");
+        assert_eq!(agent.args, vec!["acp".to_string()]);
+    }
+
+    #[test]
+    fn qwen_code_acp_fixture_loads() {
+        let cfg = load_fixture("agents.qwen-code-acp.toml");
+        assert_eq!(cfg.default_agent_id, "qwen-code-acp");
+        let agent = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "qwen-code-acp")
+            .expect("qwen-code-acp present");
+        assert!(matches!(agent.kind, AgentKind::Acp));
+        assert_eq!(agent.command.to_string_lossy(), "qwen-code");
+        assert_eq!(agent.args, vec!["acp".to_string()]);
+    }
+
+    #[test]
+    fn all_acp_fixture_loads() {
+        // The all-providers fixture mirrors the Zed ACP Registry. Every
+        // agent we ship a single-provider fixture for must be present
+        // and enabled here, with Claude as the default.
+        let cfg = load_fixture("agents.all-acp.toml");
+        assert_eq!(cfg.default_agent_id, "claude-acp");
+        let ids: Vec<&str> = cfg.agents.iter().map(|a| a.id.as_str()).collect();
+        for required in [
+            "claude-acp",
+            "gemini-acp",
+            "codex-acp",
+            "opencode",
+            "github-copilot-acp",
+            "kimi-cli-acp",
+            "qwen-code-acp",
+        ] {
+            assert!(
+                ids.contains(&required),
+                "{required} present in all-acp fixture: {ids:?}"
+            );
+        }
+        for a in &cfg.agents {
+            assert!(matches!(a.kind, AgentKind::Acp), "{} is acp", a.id);
+            assert!(a.enabled, "{} enabled", a.id);
+        }
+    }
 }

@@ -155,8 +155,60 @@ describe('AgentThread renderer', () => {
 
     expect(screen.getByText('Gemini CLI ACP')).toBeInTheDocument();
     expect(screen.getByText('hi')).toBeInTheDocument();
-    expect(screen.getByText('Gemini is working…')).toBeInTheDocument();
+    // X.5f.3 Patch F: louder placeholder — the working state is now
+    // a status region with a spinner glyph and elapsed time, so test
+    // by testid + substring rather than by exact ellipsis text.
+    const working = screen.getByTestId('agent-working-placeholder');
+    expect(working).toBeInTheDocument();
+    expect(working).toHaveAttribute('role', 'status');
+    expect(working.textContent ?? '').toMatch(/Gemini is working/);
     expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
+  });
+
+  it('shows the empty-turn fallback when a turn completes with no events', () => {
+    // X.5f.3 Patch F: a Gemini turn that finishes (transcript.completed)
+    // without emitting any assistant text, thought, tool, diff, terminal,
+    // or plan must not render as a silent empty card. The fallback note
+    // tells the user the turn finished and points them at Retry / Debug.
+    const s = useAgentSession.getState();
+    s.beginTurn({
+      sessionId: 'sess1',
+      userText: 'hi',
+      provider: 'gemini-acp',
+      at: '2026-01-01T00:00:00Z',
+    });
+    s.completeTextBlocks('sess1', '2026-01-01T00:00:01Z');
+
+    render(<AgentThread sessionId="sess1" />);
+
+    const fallback = screen.getByTestId('agent-empty-turn-fallback');
+    expect(fallback).toBeInTheDocument();
+    expect(fallback.textContent ?? '').toMatch(/Gemini CLI ACP/);
+    expect(fallback.textContent ?? '').toMatch(/finished without emitting any/);
+    // The text-only fallback (Patch D) MUST NOT also fire — there were
+    // no assistant blocks at all.
+    expect(screen.queryByTestId('agent-text-only-fallback')).not.toBeInTheDocument();
+    // And the working spinner is gone now that the turn is no longer active.
+    expect(screen.queryByTestId('agent-working-placeholder')).not.toBeInTheDocument();
+  });
+
+  it('shows the failed-turn fallback wording when a turn fails empty', () => {
+    // X.5f.3 Patch F: same fallback fires for a failed empty turn,
+    // but with "failed" wording so dogfooders can tell the diff between
+    // "completed with nothing" vs "errored with nothing".
+    const s = useAgentSession.getState();
+    s.beginTurn({
+      sessionId: 'sess1',
+      userText: 'hi',
+      provider: 'gemini-acp',
+      at: '2026-01-01T00:00:00Z',
+    });
+    s.failActiveTurn('sess1', '2026-01-01T00:00:01Z');
+
+    render(<AgentThread sessionId="sess1" />);
+
+    const fallback = screen.getByTestId('agent-empty-turn-fallback');
+    expect(fallback.textContent ?? '').toMatch(/failed without emitting any/);
   });
 
   it('keeps turns separated and shows telemetry counts', () => {
@@ -173,10 +225,9 @@ describe('AgentThread renderer', () => {
     expect(screen.getByText('one')).toBeInTheDocument();
     expect(screen.getByText('second')).toBeInTheDocument();
     expect(screen.getByText(/two/)).toBeInTheDocument();
-    expect(screen.getByText('2 deltas')).toBeInTheDocument();
-    expect(screen.getByText('0 tools')).toBeInTheDocument();
-    expect(screen.getByText('0 thoughts')).toBeInTheDocument();
-    expect(screen.getByText('0 plans')).toBeInTheDocument();
+    expect(
+      screen.getByText('2 messages · 0 tools · no thoughts emitted · no plan emitted'),
+    ).toBeInTheDocument();
   });
 
   it('renders ACP debug discriminators and safe preview', () => {
@@ -193,9 +244,59 @@ describe('AgentThread renderer', () => {
 
     render(<AgentThread sessionId="sess1" />);
 
-    expect(screen.getByText('ACP Debug')).toBeInTheDocument();
+    expect(screen.getByText(/Diagnostics · .* ACP frame/)).toBeInTheDocument();
     expect(screen.getAllByText(/agent_message_chunk/).length).toBeGreaterThan(0);
     expect(screen.getByText(/content_count/)).toBeInTheDocument();
     expect(screen.getByText('abc1234567')).toBeInTheDocument();
+  });
+  it('renders the opencode_serve sub-agent tap badge instead of the gemini fallback wording', () => {
+    // Stage X.5h.2 Step 3b: when the bridge taps the OpenCode sub-agent
+    // HTTP API, the FE shows "via opencode sub-agent tap" instead of
+    // the X.5f.3 "normalized from <shape> shape" wording (which is for
+    // Gemini snake_case fallback DTOs, not for the OpenCode tap which
+    // is a real second-source observation, not a normalization).
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'sub-agent probe', provider: 'gemini-acp' });
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'oc_sub_call_xyz',
+      kind: 'execute',
+      title: 'bash',
+      status: 'completed',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      rawShape: 'opencode_serve',
+      parentToolCallId: 'tc_parent_task',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    render(<AgentThread sessionId="sess1" />);
+
+    const meta = screen.getByTestId('tool-raw-shape');
+    expect(meta.textContent).toContain('via opencode sub-agent tap');
+    expect(meta.textContent).not.toContain('normalized from');
+  });
+
+  it('keeps the X.5f.3 gemini fallback wording for raw_shape=gemini', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'gemini probe', provider: 'gemini-acp' });
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'gemini-tc-2',
+      kind: 'other',
+      title: 'Gemini tool call',
+      status: 'completed',
+      locations: [],
+      agentId: 'gemini-acp',
+      agentKind: 'acp',
+      approvedByApprovalId: null,
+      rawShape: 'gemini',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    render(<AgentThread sessionId="sess1" />);
+
+    const meta = screen.getByTestId('tool-raw-shape');
+    expect(meta.textContent).toContain('normalized from gemini shape');
   });
 });

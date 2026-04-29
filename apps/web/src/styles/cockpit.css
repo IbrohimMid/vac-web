@@ -1212,3 +1212,10 @@ button:focus-visible, [role="button"]:focus-visible, a:focus-visible {
 *::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: var(--ink-5); background-clip: padding-box; border: 2px solid transparent; }
 *::-webkit-scrollbar-track { background: transparent; }
+
+/* Workbench collapse — frees vertical space for the transcript pane. */
+.build-grid.wb-collapsed { grid-template-rows: 1fr auto; }
+.build-grid.wb-collapsed.shell-open { grid-template-rows: 1fr auto 220px; }
+.workbench.is-collapsed { border-top: 1px solid var(--line); }
+.workbench.is-collapsed .tabs { border-bottom: none; }
+.workbench.is-collapsed .tab { color: var(--ink-3); }

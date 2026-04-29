@@ -123,6 +123,30 @@ pub struct ObservedToolActivity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approved_by_approval_id: Option<String>,
     pub ts: chrono::DateTime<chrono::Utc>,
+    /// Hint about the wire shape this DTO was extracted from.
+    /// `None` for the canonical ACP shape (camelCase `toolCallId`
+    /// well-formed). `Some("gemini")` when we had to fall back to
+    /// snake_case `tool_call_id` / a bare `id`, or synthesize the
+    /// id from the payload hash. Lets the FE label provider quirks
+    /// without re-parsing the wire payload, and lets the X.5f.3
+    /// dogfood test assert that Gemini-shape tool calls were
+    /// successfully normalized rather than silently dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_shape: Option<String>,
+    /// X.5h.1 — parent sub-agent task tool_call_id when this tool was
+    /// dispatched inside an OpenCode-style `task` (sub-agent). Set by
+    /// [`SessionHandle::map_tool_activity`] from the AcpRuntime task
+    /// scope stack; left `None` for the canonical top-level case.
+    /// The FE uses this to render a Trae-style nested tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_tool_call_id: Option<String>,
+    /// X.5h.1 — for `task` parent tool calls, the dispatched
+    /// subagent kind (e.g. `"explore"`, `"code"`, `"search"`).
+    /// Mirrors `raw_input.subagent_type`. Lets the FE render the
+    /// agent badge (`Sub Coding Agent`, `Search Agent`, …) without
+    /// re-parsing the redacted input on the FE side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
 }
 
 fn ser_agent_kind<S: serde::Serializer>(k: &AgentKind, s: S) -> Result<S::Ok, S::Error> {
@@ -148,20 +172,44 @@ pub fn extract_observed_tool_activity(
     if disc != "tool_call" && disc != "tool_call_update" {
         return None;
     }
-    let tool_call_id = update
-        .get("toolCallId")
-        .and_then(|v| v.as_str())?
-        .to_string();
+    // Tolerate provider variants. ACP canonical shape uses
+    // camelCase `toolCallId`; the X.5f.3 dogfood report showed
+    // Gemini CLI ACP emitting `tool_call` / `tool_call_update`
+    // discriminators whose normalized tool count stayed at 0,
+    // which means this extractor was returning `None` on real
+    // Gemini payloads. We now also accept snake_case
+    // `tool_call_id` and a bare `id`, and as a last resort
+    // synthesize a stable id from the payload hash so the rest
+    // of the pipeline still gets a tool card. The `raw_shape`
+    // hint propagates downstream so the FE can label provider
+    // quirks.
+    let (tool_call_id, raw_shape) = resolve_tool_call_id(update);
     let kind = update
         .get("kind")
         .and_then(|v| v.as_str())
         .map(ToolKind::from_acp)
         .unwrap_or(ToolKind::Other);
-    let title = update
+    let title_from_payload = update
         .get("title")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let status = ToolStatus::from_acp(update.get("status").and_then(|v| v.as_str()));
+    // Non-canonical shapes that don't carry a title get a
+    // meaningful default so the FE never renders an empty header.
+    let title = match (title_from_payload, raw_shape.as_deref()) {
+        (Some(t), _) => Some(t),
+        (None, Some("gemini")) => Some("Gemini tool call".to_string()),
+        (None, _) => None,
+    };
+    // `tool_call` without an explicit status defaults to pending;
+    // `tool_call_update` without an explicit status defaults to
+    // in_progress (an incremental update with no status field
+    // must NOT silently downgrade a previously completed/failed
+    // state to pending).
+    let status = match update.get("status").and_then(|v| v.as_str()) {
+        Some(s) => ToolStatus::from_acp(Some(s)),
+        None if disc == "tool_call_update" => ToolStatus::InProgress,
+        None => ToolStatus::Pending,
+    };
     let locations = extract_locations(update);
     let diffs = extract_diffs(update);
 
@@ -203,6 +251,17 @@ pub fn extract_observed_tool_activity(
         other => other,
     });
 
+    // X.5h.1 — if the agent's redacted input still carries a
+    // `subagent_type` field (OpenCode `task` tool shape:
+    // `{ description, subagent_type, prompt }`), surface it on the DTO
+    // so the FE can render the right sub-agent badge. Other providers
+    // and other tool kinds typically don't carry this key, so it stays
+    // `None`.
+    let subagent_type = raw_input_redacted
+        .get("subagent_type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     Some(ObservedToolActivity {
         session_id: session_id.to_string(),
         agent_id: agent_id.to_string(),
@@ -219,7 +278,60 @@ pub fn extract_observed_tool_activity(
         raw_output_redacted,
         approved_by_approval_id: None,
         ts: chrono::Utc::now(),
+        raw_shape,
+        parent_tool_call_id: None,
+        subagent_type,
     })
+}
+
+/// Resolve the tool-call id from an ACP `session/update` payload,
+/// tolerating provider-specific spellings.
+///
+/// Order of preference:
+///
+/// 1. Canonical ACP camelCase `toolCallId` → `(id, None)`.
+/// 2. Snake_case `tool_call_id` → `(id, Some("gemini"))`.
+/// 3. Bare `id` → `(id, Some("gemini"))`.
+/// 4. Synthesize `synth_<short_hash>` from a stable subset of the
+///    update payload (drops `status` and any `rawOutput*` field so
+///    the eventual `tool_call_update` from the same logical call
+///    hashes to the same id) → `(synth, Some("gemini"))`.
+///
+/// The synthesized fallback is intentionally *deterministic* so
+/// `tool_call` and a follow-up `tool_call_update` from the same
+/// logical call still correlate, and `tool.diff.updated` /
+/// `tool.terminal.updated` events still attach to the same card.
+fn resolve_tool_call_id(update: &Value) -> (String, Option<String>) {
+    if let Some(id) = update.get("toolCallId").and_then(|v| v.as_str()) {
+        if !id.is_empty() {
+            return (id.to_string(), None);
+        }
+    }
+    if let Some(id) = update.get("tool_call_id").and_then(|v| v.as_str()) {
+        if !id.is_empty() {
+            return (id.to_string(), Some("gemini".to_string()));
+        }
+    }
+    if let Some(id) = update.get("id").and_then(|v| v.as_str()) {
+        if !id.is_empty() {
+            return (id.to_string(), Some("gemini".to_string()));
+        }
+    }
+    // Stable synthetic id: hash the update payload with the
+    // runtime-only fields (`status`, `rawOutput`, snake_case
+    // variants) stripped so an in_progress→completed pair from the
+    // same logical call hashes identically.
+    let mut for_hash = update.clone();
+    if let Value::Object(ref mut m) = for_hash {
+        m.remove("status");
+        m.remove("rawOutput");
+        m.remove("raw_output");
+        m.remove("sessionUpdate");
+        m.remove("session_update");
+    }
+    let h = sha256_hex_canonical(&for_hash);
+    let synth = format!("synth_{}", &h[..16.min(h.len())]);
+    (synth, Some("gemini".to_string()))
 }
 
 fn extract_diffs(update: &Value) -> Vec<ToolDiff> {
@@ -703,6 +815,196 @@ mod tests {
         // Truncation kicks in on the (now-redacted) string.
         assert!(out.ends_with(TRUNCATION_MARKER) || out.len() <= DEFAULT_RAW_OUTPUT_CAP_BYTES);
         assert!(!out.contains("sk-ant-1234567890"));
+    }
+
+    // ---------- X.5f.3 Patch A — Gemini-shape tolerance ----------
+
+    /// Canonical ACP shape (camelCase `toolCallId`, full fields)
+    /// must continue to extract with `raw_shape == None` so the
+    /// existing Claude-agent-acp acceptance contract is unchanged.
+    #[test]
+    fn canonical_camel_case_shape_has_no_raw_shape_hint() {
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tc-1",
+                "kind": "read",
+                "title": "Read File",
+                "status": "pending"
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "claude-agent-acp",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .unwrap();
+        assert_eq!(dto.tool_call_id, "tc-1");
+        assert_eq!(dto.kind, ToolKind::Read);
+        assert_eq!(dto.status, ToolStatus::Pending);
+        assert_eq!(dto.title.as_deref(), Some("Read File"));
+        assert!(
+            dto.raw_shape.is_none(),
+            "canonical shape must not be tagged as gemini"
+        );
+    }
+
+    /// Gemini-style snake_case `tool_call_id` must extract with
+    /// `raw_shape == Some("gemini")` and a sane default title so
+    /// the FE renders a non-empty card.
+    #[test]
+    fn gemini_shape_snake_case_tool_call_id_extracts() {
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "tool_call_id": "tc_gemini_1"
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "gemini-acp",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .expect("snake_case tool_call_id must not be silently dropped");
+        assert_eq!(dto.tool_call_id, "tc_gemini_1");
+        assert_eq!(dto.kind, ToolKind::Other);
+        assert_eq!(dto.status, ToolStatus::Pending);
+        assert_eq!(dto.title.as_deref(), Some("Gemini tool call"));
+        assert_eq!(dto.raw_shape.as_deref(), Some("gemini"));
+    }
+
+    /// A Gemini `tool_call_update` lacking an explicit status must
+    /// default to `in_progress`, never silently downgrade a real
+    /// completed/failed state to pending.
+    #[test]
+    fn gemini_shape_tool_call_update_without_status_defaults_in_progress() {
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "tool_call_id": "tc_gemini_1",
+                "locations": [{ "path": "/repo/file.rs" }]
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "gemini-acp",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .expect("snake_case tool_call_update must extract");
+        assert_eq!(dto.status, ToolStatus::InProgress);
+        assert_eq!(dto.locations.len(), 1);
+        assert_eq!(dto.raw_shape.as_deref(), Some("gemini"));
+    }
+
+    /// Bare `id` field (no `toolCallId` of any case) extracts via
+    /// the third fallback rung.
+    #[test]
+    fn gemini_shape_bare_id_extracts() {
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "id": "call_abc123"
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "gemini-acp",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .expect("bare `id` must not be silently dropped");
+        assert_eq!(dto.tool_call_id, "call_abc123");
+        assert_eq!(dto.raw_shape.as_deref(), Some("gemini"));
+    }
+
+    /// A Gemini `tool_call` with NO recognizable id field must
+    /// still produce a normalized DTO via the synthetic-id rung,
+    /// and a follow-up `tool_call_update` with the same body
+    /// (modulo `status` / `rawOutput`) must hash to the same id
+    /// so diff/terminal/review correlation still works.
+    #[test]
+    fn gemini_shape_missing_id_synthesizes_stable_id_across_pair() {
+        let create = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "kind": "execute",
+                "title": "Run command",
+                "rawInput": { "command": "ls -la" }
+            }
+        });
+        let update = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "kind": "execute",
+                "title": "Run command",
+                "status": "completed",
+                "rawInput": { "command": "ls -la" },
+                "rawOutput": "total 0\n"
+            }
+        });
+        let dto_create = extract_observed_tool_activity(
+            "sid",
+            "gemini-acp",
+            AgentKind::Acp,
+            &create,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .expect("missing id must synthesize, not drop");
+        let dto_update = extract_observed_tool_activity(
+            "sid",
+            "gemini-acp",
+            AgentKind::Acp,
+            &update,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .expect("follow-up update must also synthesize");
+        assert!(dto_create.tool_call_id.starts_with("synth_"));
+        assert_eq!(
+            dto_create.tool_call_id, dto_update.tool_call_id,
+            "create+update of same logical call must hash to same synthesized id"
+        );
+        assert_eq!(dto_create.status, ToolStatus::Pending);
+        assert_eq!(dto_update.status, ToolStatus::Completed);
+        assert_eq!(dto_create.raw_shape.as_deref(), Some("gemini"));
+        assert_eq!(dto_update.raw_shape.as_deref(), Some("gemini"));
+    }
+
+    /// Empty `toolCallId` must not be treated as a valid id.
+    /// Without this guard, `"".to_string()` would propagate as
+    /// the tool_call_id and break correlation across the pair.
+    #[test]
+    fn empty_canonical_id_falls_through_to_fallback_rungs() {
+        let n = json!({
+            "sessionId": "sid",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "",
+                "tool_call_id": "tc_real"
+            }
+        });
+        let dto = extract_observed_tool_activity(
+            "sid",
+            "gemini-acp",
+            AgentKind::Acp,
+            &n,
+            DEFAULT_RAW_OUTPUT_CAP_BYTES,
+        )
+        .expect("empty canonical id must fall through, not panic");
+        assert_eq!(dto.tool_call_id, "tc_real");
+        assert_eq!(dto.raw_shape.as_deref(), Some("gemini"));
     }
 
     #[test]

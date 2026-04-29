@@ -118,6 +118,135 @@ describe('agentSession handlers', () => {
     off();
   });
 
+  it('renders a minimal Gemini-shape tool_call without crashing on empty fields', () => {
+    // X.5f.3 Patch A FE consumer acceptance. The bridge fills in a
+    // fallback DTO (kind=other, title="Gemini tool call",
+    // status=pending, raw_shape="gemini") when Gemini CLI ACP
+    // emits a snake_case tool_call frame. The FE must accept this
+    // payload, surface the rawShape hint, and bump telemetry.tool
+    // even though locations / diffs / rawInput / rawOutput are all
+    // empty.
+    const { t, emit } = mockTransport();
+    const off = registerAgentSessionHandlers(t);
+
+    useAgentSession.getState().beginTurn({ sessionId: 'sess1', userText: 'gemini probe', provider: 'gemini-acp' });
+    emit('tool.call.created', {
+      tool_call_id: 'gemini-tc-1',
+      kind: 'other',
+      title: 'Gemini tool call',
+      status: 'pending',
+      raw_shape: 'gemini',
+      agent_id: 'gemini-acp',
+    });
+    emit('tool.call.updated', {
+      tool_call_id: 'gemini-tc-1',
+      kind: 'other',
+      title: 'Gemini tool call',
+      status: 'completed',
+      raw_shape: 'gemini',
+      agent_id: 'gemini-acp',
+    });
+
+    const tool = useAgentSession.getState().tools.get(agentToolKey('sess1', 'gemini-tc-1'));
+    expect(tool).toBeDefined();
+    expect(tool?.toolCallId).toBe('gemini-tc-1');
+    expect(tool?.kind).toBe('other');
+    expect(tool?.title).toBe('Gemini tool call');
+    expect(tool?.status).toBe('completed');
+    expect(tool?.rawShape).toBe('gemini');
+    // Empty locations must be tolerated, not crash the renderer.
+    expect(tool?.locations).toEqual([]);
+
+    // Telemetry tool count must reach >= 1 so the provider header
+    // can stop saying "no tool emitted" once a Gemini tool_call
+    // is seen on the wire.
+    const telemetry = useAgentSession.getState().telemetry.get('sess1');
+    expect(telemetry?.eventCounts.tool ?? 0).toBeGreaterThanOrEqual(1);
+    off();
+  });
+
+  it('captures sub-agent tool from opencode_serve tap with parent_tool_call_id', () => {
+    // Stage X.5h.2 Step 3b: when the bridge taps the OpenCode sub-agent
+    // HTTP API, it forwards each inner tool call as `tool.call.created`/
+    // `tool.call.updated` with a namespaced `oc_sub_*` tool_call_id,
+    // raw_shape: "opencode_serve", and the parent task tool_call_id
+    // snapshot. The FE must store all three so the AgentThread renderer
+    // can nest the sub-tool under its parent task card.
+    const { t, emit } = mockTransport();
+    const off = registerAgentSessionHandlers(t);
+
+    emit('tool.call.created', {
+      tool_call_id: 'oc_sub_call_abc',
+      kind: 'execute',
+      title: 'bash',
+      status: 'in_progress',
+      raw_shape: 'opencode_serve',
+      agent_id: 'opencode',
+      agent_kind: 'opencode',
+      parent_tool_call_id: 'tc_parent_task',
+      raw_input_redacted: { command: 'echo hi', description: 'probe' },
+    });
+    emit('tool.call.updated', {
+      tool_call_id: 'oc_sub_call_abc',
+      kind: 'execute',
+      title: 'bash',
+      status: 'completed',
+      raw_shape: 'opencode_serve',
+      agent_id: 'opencode',
+      agent_kind: 'opencode',
+      parent_tool_call_id: 'tc_parent_task',
+      raw_input_redacted: { command: 'echo hi', description: 'probe' },
+      raw_output_redacted: 'hi\n',
+    });
+
+    const tool = useAgentSession.getState().tools.get(agentToolKey('sess1', 'oc_sub_call_abc'));
+    expect(tool).toBeDefined();
+    expect(tool?.toolCallId).toBe('oc_sub_call_abc');
+    expect(tool?.kind).toBe('execute');
+    expect(tool?.status).toBe('completed');
+    expect(tool?.rawShape).toBe('opencode_serve');
+    expect(tool?.parentToolCallId).toBe('tc_parent_task');
+    expect(tool?.subagentType ?? null).toBeNull();
+    // raw_output_redacted should propagate through the upsert.
+    expect(tool?.rawOutput).toBe('hi\n');
+    off();
+  });
+
+  it('captures sub-agent diff and terminal updates with namespaced oc_sub ids', () => {
+    // Stage X.5h.2 Step 3b: diff + terminal lanes for sub-tool keep the
+    // namespaced `oc_sub_*` tool_call_id so the FE store routes the
+    // attachments to the correct sub-tool card (not the parent task).
+    const { t, emit } = mockTransport();
+    const off = registerAgentSessionHandlers(t);
+
+    emit('tool.diff.updated', {
+      tool_call_id: 'oc_sub_call_edit',
+      status: 'completed',
+      locations: [{ path: '/src/lib.rs' }],
+      diffs: [{ path: '/src/lib.rs', old_text: 'a', new_text: 'b' }],
+      parent_tool_call_id: 'tc_parent_task',
+    });
+    emit('tool.terminal.updated', {
+      tool_call_id: 'oc_sub_call_bash',
+      status: 'completed',
+      raw_input_redacted: { command: 'ls' },
+      raw_output_redacted: 'README.md\n',
+      agent_id: 'opencode',
+      agent_kind: 'opencode',
+      parent_tool_call_id: 'tc_parent_task',
+    });
+
+    const diff = useAgentSession.getState().diffs.get(agentDiffKey('sess1', 'oc_sub_call_edit'));
+    expect(diff?.diffs[0]?.path).toBe('/src/lib.rs');
+    expect(diff?.toolCallId).toBe('oc_sub_call_edit');
+
+    const term = useAgentSession.getState().terminals.get(agentTerminalKey('sess1', 'oc_sub_call_bash'));
+    expect(term?.rawOutputRedacted).toBe('README.md\n');
+    expect(term?.toolCallId).toBe('oc_sub_call_bash');
+    expect(term?.agentId).toBe('opencode');
+    off();
+  });
+
   it('captures diff, terminal, and plan updates', () => {
     const { t, emit } = mockTransport();
     const off = registerAgentSessionHandlers(t);

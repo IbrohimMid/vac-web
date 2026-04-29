@@ -1,0 +1,107 @@
+# Multi-provider fixture: every ACP-registry agent we ship a fixture
+# for, with Claude as the default and the rest as opt-ins. Mirrors
+# Zed's ACP Registry (https://agentclientprotocol.com/registry) so
+# the cockpit's Start session form can offer a full picker.
+#
+# Usage:
+#   VAC_WEB_AGENTS_CONFIG=/path/to/agents.all-acp.toml \
+#     cargo run -p local-bridge
+#
+# Each agent is independently spawnable; pick the default that
+# matches your account. Disable any agent you don't have installed by
+# flipping `enabled = false` (the bridge filters disabled agents from
+# the welcome frame's `available_agents`).
+default_agent = "claude-acp"
+
+[agents.claude-acp]
+kind = "acp"
+label = "Claude Agent ACP"
+command = "npx"
+args = ["-y", "@agentclientprotocol/claude-agent-acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["ANTHROPIC_*", "CLAUDE_*", "CLAUDE_CODE_EXECUTABLE"]
+cwd_mode = "project-root"
+
+[agents.gemini-acp]
+kind = "acp"
+label = "Gemini CLI ACP"
+command = "gemini"
+args = ["--acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "GEMINI_*",
+  "GOOGLE_*",
+  "GOOGLE_CLOUD_*",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "CLOUDSDK_*",
+]
+cwd_mode = "project-root"
+
+[agents.codex-acp]
+kind = "acp"
+label = "Codex CLI"
+command = "npx"
+args = ["-y", "@zed-industries/codex-acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["OPENAI_*", "CODEX_*", "AZURE_OPENAI_*"]
+cwd_mode = "project-root"
+
+[agents.opencode]
+kind = "acp"
+label = "OpenCode"
+command = "opencode"
+args = ["acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "OPENCODE_*",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GROQ_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "OPENROUTER_API_KEY",
+  "MISTRAL_API_KEY",
+  "XAI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+]
+cwd_mode = "project-root"
+
+[agents.github-copilot-acp]
+kind = "acp"
+label = "GitHub Copilot"
+command = "npx"
+args = ["-y", "@github/copilot-language-server", "--stdio"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["GITHUB_*", "COPILOT_*", "GH_TOKEN"]
+cwd_mode = "project-root"
+
+[agents.kimi-cli-acp]
+kind = "acp"
+label = "Kimi CLI"
+command = "kimi"
+args = ["acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["MOONSHOT_*", "KIMI_*"]
+cwd_mode = "project-root"
+
+[agents.qwen-code-acp]
+kind = "acp"
+label = "Qwen Code"
+command = "qwen-code"
+args = ["acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = ["DASHSCOPE_*", "QWEN_*", "ALIBABA_*"]
+cwd_mode = "project-root"

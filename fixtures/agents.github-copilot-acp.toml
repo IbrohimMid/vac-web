@@ -1,0 +1,33 @@
+# GitHub Copilot CLI ACP fixture (PREVIEW).
+#
+# As of Feb 2026, GitHub announced ACP support in Copilot CLI as
+# public preview. The Copilot Language Server release also exposes an
+# ACP transport (see https://github.com/github/copilot-language-server-release).
+#
+# We default to the npm-published language server because it has the
+# most stable distribution channel. If you have the standalone
+# `copilot` CLI installed, swap command/args to:
+#   command = "copilot"
+#   args    = ["acp"]
+#
+# Auth: requires a GitHub account with an active Copilot Pro / Pro+ /
+# Business / Enterprise subscription. The first launch will prompt for
+# OAuth via `copilot auth login` (or via Zed-style auth flow inside
+# the language server). The bridge does NOT synthesize terminal auth
+# for this adapter -- auth happens out-of-band before launch.
+default_agent = "github-copilot-acp"
+
+[agents.github-copilot-acp]
+kind = "acp"
+label = "GitHub Copilot"
+command = "npx"
+args = ["-y", "@github/copilot-language-server", "--stdio"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "GITHUB_*",
+  "COPILOT_*",
+  "GH_TOKEN",
+]
+cwd_mode = "project-root"

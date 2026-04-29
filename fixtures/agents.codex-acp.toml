@@ -1,0 +1,26 @@
+# Canonical Codex CLI ACP fixture.
+#
+# Pairs with the Zed-published adapter `@zed-industries/codex-acp`
+# (https://www.npmjs.com/package/@zed-industries/codex-acp). The
+# adapter wraps OpenAI's Codex CLI (https://github.com/openai/codex)
+# and exposes it over ACP via stdio.
+#
+# Auth: requires `OPENAI_API_KEY` (or a Codex login in `~/.codex`).
+# Codex-acp does not advertise an ACP authMethod, so the bridge does
+# NOT synthesize a terminal-auth method for it.
+default_agent = "codex-acp"
+
+[agents.codex-acp]
+kind = "acp"
+label = "Codex CLI"
+command = "npx"
+args = ["-y", "@zed-industries/codex-acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "OPENAI_*",
+  "CODEX_*",
+  "AZURE_OPENAI_*",
+]
+cwd_mode = "project-root"

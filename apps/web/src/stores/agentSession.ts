@@ -37,6 +37,51 @@ export interface AgentToolCall {
   agentId: string | null;
   agentKind: string | null;
   approvedByApprovalId: string | null;
+  /**
+   * X.5f.3 Patch A: bridge-supplied hint for the raw ACP wire shape
+   * the bridge had to normalize. "gemini" indicates a snake_case
+   * Gemini CLI ACP frame that the bridge filled in with fallback
+   * defaults (kind=other, title="Gemini tool call"). The FE shows
+   * a small "normalized from <shape> shape" affordance so the user
+   * can tell why the tool card is minimal.
+   *
+   * Optional so legacy / canonical tool_call payloads (and existing
+   * test fixtures that don't care about the wire shape) stay valid
+   * without touching every call site.
+   */
+  rawShape?: string | null;
+  /**
+   * Redacted input arguments for the tool call (e.g. `{ command, description }`
+   * for Bash, `{ path }` for Read, `{ pattern, path }` for Grep, `{ description,
+   * subagent_type }` for OpenCode `task`). Forwarded by the bridge through
+   * `tool.call.created` / `tool.call.updated` as `raw_input_redacted`. Used by
+   * `ToolCallCard` to render a one-line argument summary instead of leaving the
+   * card body empty during a streaming tool run.
+   */
+  rawInput?: unknown;
+  /**
+   * Redacted, byte-capped output for the tool call (terminal stdout, file read
+   * preview, etc.). Forwarded by the bridge as `raw_output_redacted`. Used by
+   * `ToolCallCard` to render a compact output preview for non-Execute kinds
+   * (Execute already renders via `TerminalCard`).
+   */
+  rawOutput?: unknown;
+  /**
+   * X.5h.1 — Trae-style nested sub-agent rendering.
+   *
+   * `parentToolCallId` is the bridge-snapshotted parent task tool_call_id when
+   * this tool was dispatched inside an OpenCode-style sub-agent `task`. The
+   * `ToolCallCard` uses it to build a parent→children map and render child
+   * tool calls indented under the task card.
+   */
+  parentToolCallId?: string | null;
+  /**
+   * X.5h.1 — Sub-agent kind for the OpenCode `task` tool shape
+   * (`{ description, subagent_type, prompt }`). Mirrors `raw_input.subagent_type`.
+   * Used to render the per-task badge (e.g. "Sub Explore Agent",
+   * "Sub Code Agent", "Sub Search Agent").
+   */
+  subagentType?: string | null;
   updatedAt: string;
 }
 
@@ -537,7 +582,25 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
       const id = agentToolKey(tool.sessionId, tool.toolCallId);
       const tools = new Map(s.tools);
       const existing = tools.get(id);
-      tools.set(id, { ...existing, ...tool, id });
+      // X.5f.3 Patch A defensive: sticky-preserve rawShape across
+      // subsequent tool.call.updated frames that don't repeat the hint.
+      tools.set(id, {
+        ...existing,
+        ...tool,
+        rawShape: tool.rawShape ?? existing?.rawShape ?? null,
+        // Sticky-preserve rawInput/rawOutput across update frames that don't
+        // repeat them (OpenCode emits the inputs on the initial tool_call and
+        // only sends `status: completed` + content[] on the follow-up).
+        rawInput: tool.rawInput ?? existing?.rawInput,
+        rawOutput: tool.rawOutput ?? existing?.rawOutput,
+        // X.5h.1 sticky-preserve: parent linkage and subagent kind only arrive
+        // on the initial tool_call frame (or the first update that carries
+        // raw_input). Keep them across subsequent status-only updates so the
+        // tree doesn't collapse mid-run.
+        parentToolCallId: tool.parentToolCallId ?? existing?.parentToolCallId ?? null,
+        subagentType: tool.subagentType ?? existing?.subagentType ?? null,
+        id,
+      });
       const itemResult = appendOrder(s.items, s.order, {
         id,
         sessionId: tool.sessionId,

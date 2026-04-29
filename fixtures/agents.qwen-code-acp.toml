@@ -1,0 +1,29 @@
+# Qwen Code CLI ACP fixture (Alibaba).
+#
+# Qwen Code is listed in the official ACP agent registry
+# (https://agentclientprotocol.com/get-started/agents). Source:
+# https://github.com/QwenLM/qwen-code
+#
+# The canonical ACP launch command is `qwen-code acp`. Install via:
+#   npm install -g @qwen-code/qwen-code
+# or build from source per the README.
+#
+# Auth: needs Alibaba Cloud / DashScope credentials
+# (`DASHSCOPE_API_KEY` or `QWEN_API_KEY`). Bridge does NOT synthesize
+# terminal auth.
+default_agent = "qwen-code-acp"
+
+[agents.qwen-code-acp]
+kind = "acp"
+label = "Qwen Code"
+command = "qwen-code"
+args = ["acp"]
+dialect = "zed-acp"
+enabled = true
+permission_timeout_ms = 300000
+env_allow = [
+  "DASHSCOPE_*",
+  "QWEN_*",
+  "ALIBABA_*",
+]
+cwd_mode = "project-root"

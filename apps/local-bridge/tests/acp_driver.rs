@@ -1322,6 +1322,85 @@ async fn x5f1_execute_tool_emits_rich_terminal_event() {
     assert!(serialized.contains("REDACTED-SECRET"));
 }
 
+/// X.5f.3 Patch A end-to-end. Drive mock-acp with --gemini-shape so
+/// the wire frames carry snake_case `tool_call_id` and omit
+/// `kind`/`title`/`status` on create, exactly mirroring the live
+/// Gemini CLI ACP gap. The bridge must still emit
+/// `tool.call.created` + `tool.call.updated` with a normalized
+/// fallback DTO (`raw_shape="gemini"`, `kind="other"`,
+/// `title="Gemini tool call"`) and the *same* tool_call_id on
+/// both events so the FE can correlate the pair.
+#[tokio::test]
+async fn gemini_shape_tool_call_normalizes() {
+    let (url, _state) = start_bridge_with(build_acp_registry(vec![
+        "--gemini-shape".into(),
+        "--emit-edit-tool".into(),
+    ]))
+    .await;
+    let mut ws = connect_hello(&url).await;
+    let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
+    let cmd = json!({
+        "v": 1, "id": "cmd_msg", "type": "message.submit",
+        "session_id": session_id,
+        "payload": { "text": "gemini-shape probe" }
+    });
+    ws.send(Message::Text(cmd.to_string().into()))
+        .await
+        .unwrap();
+
+    let created = next_event_of_type(&mut ws, "tool.call.created").await;
+    let create_payload = &created["payload"];
+    let create_tool_call_id = create_payload["tool_call_id"]
+        .as_str()
+        .expect("tool.call.created must carry tool_call_id")
+        .to_string();
+    assert!(
+        !create_tool_call_id.is_empty(),
+        "tool_call_id must not be empty for gemini-shape create"
+    );
+    assert_eq!(
+        create_payload["raw_shape"],
+        json!("gemini"),
+        "gemini-shape create must be tagged raw_shape=gemini"
+    );
+    assert_eq!(
+        create_payload["kind"],
+        json!("other"),
+        "gemini-shape create must default kind=other when wire omits kind"
+    );
+    assert_eq!(
+        create_payload["title"],
+        json!("Gemini tool call"),
+        "gemini-shape create must default title to a non-empty fallback"
+    );
+    assert_eq!(
+        create_payload["status"],
+        json!("pending"),
+        "gemini-shape create without explicit status must default to pending"
+    );
+
+    let updated = next_event_of_type(&mut ws, "tool.call.updated").await;
+    let update_payload = &updated["payload"];
+    assert_eq!(
+        update_payload["tool_call_id"],
+        json!(create_tool_call_id),
+        "gemini-shape update must reuse the same tool_call_id as create"
+    );
+    assert_eq!(
+        update_payload["raw_shape"],
+        json!("gemini"),
+        "gemini-shape update must remain tagged raw_shape=gemini"
+    );
+    // mock-acp's --gemini-shape emits a final status (completed) on
+    // the update; the bridge must surface it verbatim and never
+    // silently downgrade it to in_progress / pending.
+    assert_eq!(
+        update_payload["status"],
+        json!("completed"),
+        "explicit status on the update must NOT be silently downgraded"
+    );
+}
+
 #[tokio::test]
 async fn x5c2_edit_tool_update_emits_review_candidate() {
     let (url, _state) =
