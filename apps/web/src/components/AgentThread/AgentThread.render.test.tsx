@@ -336,6 +336,99 @@ describe('AgentThread renderer', () => {
     expect(screen.getByTestId('agent-subagent-copy-description')).not.toBeDisabled();
   });
 
+  it('X.5h.4: tool dispatched before assistant text renders ABOVE the assistant message in the timeline', () => {
+    // Repro of the visual bug the user reported: when an agent dispatches a
+    // sub-agent and only afterwards writes its summary text, the timeline
+    // must place the tool card ABOVE the text (chronologically). Before
+    // X.5h.4 we rendered thoughts → assistants → plan → tools in fixed
+    // order so the sub-agent card always landed at the bottom regardless
+    // of when it actually arrived.
+    const s = useAgentSession.getState();
+    s.beginTurn({
+      sessionId: 'sess1',
+      userText: 'coba explore codebase saya dengan sub agents',
+      provider: 'opencode-acp',
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    // The agent first dispatches a sub-agent…
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_explore_subagent',
+      kind: 'other',
+      title: 'Explore vac-web codebase',
+      status: 'completed',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      subagentType: 'explore',
+      rawInput: { description: 'Explore vac-web codebase', subagent_type: 'explore' },
+      updatedAt: '2026-01-01T00:00:01.000Z',
+    });
+    // …and only later streams its summary text.
+    s.appendAssistantDelta(
+      'sess1',
+      '**vac-web** adalah end-to-end software delivery cockpit.',
+      '2026-01-01T00:00:05.000Z',
+    );
+    render(<AgentThread sessionId="sess1" />);
+
+    const timelineEl = screen.getByTestId('agent-turn-timeline');
+    const children = Array.from(timelineEl.children) as HTMLElement[];
+    // Pick out the indices of the tool card vs the assistant block.
+    const toolIdx = children.findIndex((el) =>
+      el.matches('details.agent-card.tool'),
+    );
+    const assistantIdx = children.findIndex((el) =>
+      el.getAttribute('data-testid') === 'agent-assistant-block',
+    );
+    expect(toolIdx).toBeGreaterThanOrEqual(0);
+    expect(assistantIdx).toBeGreaterThanOrEqual(0);
+    expect(toolIdx).toBeLessThan(assistantIdx);
+  });
+
+  it('X.5h.4: thinking block streamed AFTER an early tool call still renders below it', () => {
+    // Belt-and-braces: the chronological invariant must hold for thoughts too.
+    const s = useAgentSession.getState();
+    s.beginTurn({
+      sessionId: 'sess1',
+      userText: 'late-thinking turn',
+      provider: 'opencode-acp',
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_early',
+      kind: 'execute',
+      title: 'bash',
+      status: 'completed',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:01.000Z',
+    });
+    s.appendThoughtDelta(
+      'sess1',
+      'Now reflecting on the bash output…',
+      '2026-01-01T00:00:10.000Z',
+    );
+    render(<AgentThread sessionId="sess1" />);
+
+    const timelineEl = screen.getByTestId('agent-turn-timeline');
+    const children = Array.from(timelineEl.children) as HTMLElement[];
+    const toolIdx = children.findIndex((el) =>
+      el.matches('details.agent-card.tool'),
+    );
+    // ThinkingBlock renders a <details> with summary "Thinking".
+    const thinkingIdx = children.findIndex((el) =>
+      el.tagName === 'DETAILS' && el.textContent?.includes('Thinking'),
+    );
+    expect(toolIdx).toBeGreaterThanOrEqual(0);
+    expect(thinkingIdx).toBeGreaterThanOrEqual(0);
+    expect(toolIdx).toBeLessThan(thinkingIdx);
+  });
+
   it('X.5h.3: deep-nested sub-agent cards (depth >= 2) start collapsed by default', () => {
     // The FE's collapse threshold mirrors the bridge's MAX_SUBAGENT_DEPTH
     // policy: depth 0 + 1 stay open so the common one-level dispatch is

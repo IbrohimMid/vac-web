@@ -650,6 +650,51 @@ function AgentTurnCard({
     }
     return m;
   }, [tools]);
+  // X.5h.4 — chronological timeline.
+  //
+  // Before X.5h.4 the AgentTurnCard rendered thoughts → assistants →
+  // plan → tools in a fixed order regardless of when each item arrived.
+  // That made a sub-agent dispatch (which the agent typically issues
+  // BEFORE writing its summary text) appear UNDER the summary, which
+  // misrepresents causality and confuses the reader.
+  //
+  // We now build a single ordered list keyed by `createdAt` (ISO-8601
+  // strings, lexicographically sortable) so a tool that was created
+  // before the assistant's text block renders above it. Children of a
+  // top-level tool stay nested via `childrenByParent` and are NOT
+  // emitted at the top level (consistent with the X.5h.1 invariant).
+  type TimelineEntry =
+    | { kind: 'thought'; key: string; sortAt: string; ref: typeof thoughts[number] }
+    | { kind: 'assistant'; key: string; sortAt: string; ref: typeof assistants[number] }
+    | { kind: 'plan'; key: string; sortAt: string; ref: NonNullable<typeof plan> }
+    | { kind: 'tool'; key: string; sortAt: string; ref: AgentToolCall };
+  const timeline = useMemo<TimelineEntry[]>(() => {
+    const items: TimelineEntry[] = [];
+    for (const t of thoughts) {
+      if (!t) continue;
+      items.push({ kind: 'thought', key: `thought:${t.id}`, sortAt: t.createdAt, ref: t });
+    }
+    for (const a of assistants) {
+      if (!a) continue;
+      items.push({ kind: 'assistant', key: `assistant:${a.id}`, sortAt: a.createdAt, ref: a });
+    }
+    if (plan) {
+      items.push({ kind: 'plan', key: `plan:${plan.id}`, sortAt: plan.updatedAt, ref: plan });
+    }
+    for (const tool of topLevelTools) {
+      if (!tool) continue;
+      // `createdAt` is the X.5h.4 sticky-preserved first-observed timestamp.
+      // Fall back to `updatedAt` for legacy snapshots / fixtures that predate
+      // the field so the timeline still has a deterministic anchor.
+      const sortAt = tool.createdAt ?? tool.updatedAt;
+      items.push({ kind: 'tool', key: `tool:${tool.id}`, sortAt, ref: tool });
+    }
+    // Stable sort: ISO-8601 string compare gives chronological order;
+    // identical timestamps fall back to insertion order (which already
+    // matches the order each block was first observed by the store).
+    items.sort((a, b) => (a.sortAt < b.sortAt ? -1 : a.sortAt > b.sortAt ? 1 : 0));
+    return items;
+  }, [thoughts, assistants, plan, topLevelTools]);
   const meta = providerMeta(turn.provider);
   const isActive = turn.status === 'working' || turn.status === 'streaming';
   const emptyResponse = assistants.length === 0 && thoughts.length === 0 && tools.length === 0 && !plan;
@@ -727,36 +772,63 @@ function AgentTurnCard({
             </span>
           </div>
         )}
-        {thoughts.map((thought) => (
-          <ThinkingBlock key={thought!.id} content={thought!.content} active={isActive} />
-        ))}
-        {assistants.map((assistant) => (
-          <div key={assistant!.id} className={`agent-message ${isActive ? 'streaming' : ''}`}>
-            {assistant!.content}
-            {isActive && <span className="streaming-cursor">▍</span>}
-            {!isActive && assistant!.content && (
-              <div className="agent-card-actions" role="group" aria-label="Assistant actions">
-                <button
-                  type="button"
-                  className="agent-action"
-                  onClick={() => void copyToClipboard(assistant!.content)}
-                  title="Copy assistant response to clipboard"
+        {/* X.5h.4 — chronological render: each entry dispatches based
+            on its kind, but the outer order is sortAt-driven so a tool
+            call dispatched before the assistant text renders above it. */}
+        <div className="agent-turn-timeline" data-testid="agent-turn-timeline">
+          {timeline.map((entry) => {
+            if (entry.kind === 'thought') {
+              return (
+                <ThinkingBlock
+                  key={entry.key}
+                  content={entry.ref!.content}
+                  active={isActive}
+                />
+              );
+            }
+            if (entry.kind === 'assistant') {
+              const assistant = entry.ref!;
+              return (
+                <div
+                  key={entry.key}
+                  className={`agent-message ${isActive ? 'streaming' : ''}`}
+                  data-testid="agent-assistant-block"
                 >
-                  Copy response
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-        {plan && <PlanCard entries={plan.entries} />}
-        {topLevelTools.map((tool) => (
-          <ToolCallCard
-            key={tool!.id}
-            tool={tool!}
-            onOpenTab={onOpenTab}
-            childrenByParent={childrenByParent}
-          />
-        ))}
+                  {assistant.content}
+                  {isActive && <span className="streaming-cursor">▍</span>}
+                  {!isActive && assistant.content && (
+                    <div
+                      className="agent-card-actions"
+                      role="group"
+                      aria-label="Assistant actions"
+                    >
+                      <button
+                        type="button"
+                        className="agent-action"
+                        onClick={() => void copyToClipboard(assistant.content)}
+                        title="Copy assistant response to clipboard"
+                      >
+                        Copy response
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            if (entry.kind === 'plan') {
+              return <PlanCard key={entry.key} entries={entry.ref.entries} />;
+            }
+            // entry.kind === 'tool'
+            return (
+              <ToolCallCard
+                key={entry.key}
+                tool={entry.ref}
+                onOpenTab={onOpenTab}
+                childrenByParent={childrenByParent}
+              />
+            );
+          })}
+        </div>
         {/* X.5f.3 Patch D: when the provider streamed assistant text but
             emitted no rich (thinking/tool/diff/terminal/plan) events for
             this completed turn, surface a one-line explainer so the user

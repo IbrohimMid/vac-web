@@ -82,6 +82,23 @@ export interface AgentToolCall {
    * "Sub Code Agent", "Sub Search Agent").
    */
   subagentType?: string | null;
+  /**
+   * X.5h.4 — chronological timeline anchor.
+   *
+   * `createdAt` is the timestamp the tool was FIRST observed (i.e. the
+   * `updatedAt` of the first tool.call.created/updated frame the store
+   * saw for this tool_call_id). It is NEVER overwritten by subsequent
+   * status updates. AgentTurnCard uses this field to anchor the tool
+   * card at its dispatch position in the chronological timeline so a
+   * sub-agent dispatch keeps rendering ABOVE the assistant text the
+   * agent writes after the sub-agent completes — even though the
+   * tool's `updatedAt` keeps advancing as it cycles through
+   * queued → running → succeeded.
+   *
+   * Optional in the type so legacy fixtures and snapshots stay valid;
+   * `upsertToolCall` always sticky-preserves it from the first frame.
+   */
+  createdAt?: string;
   updatedAt: string;
 }
 
@@ -599,6 +616,9 @@ export const useAgentSession = create<AgentSessionSlice>((set) => ({
         // tree doesn't collapse mid-run.
         parentToolCallId: tool.parentToolCallId ?? existing?.parentToolCallId ?? null,
         subagentType: tool.subagentType ?? existing?.subagentType ?? null,
+        // X.5h.4 — anchor the tool card chronologically at its first-observed
+        // timestamp so the timeline ordering is stable across status updates.
+        createdAt: existing?.createdAt ?? tool.createdAt ?? tool.updatedAt,
         id,
       });
       const itemResult = appendOrder(s.items, s.order, {
