@@ -19,6 +19,19 @@
 //!                            path on `selected/allow_*`, failed
 //!                            `tool_call_update` on `selected/reject_*`
 //!                            or `cancelled`.
+//!   --request-fs-read <path>   Sprint 1 — every session/prompt issues
+//!                              an outbound `fs/read_text_file` call to
+//!                              the client (bridge), then emits a
+//!                              scripted `tool_call`/`tool_call_update`
+//!                              mirroring the read.
+//!   --request-fs-write <path>  Sprint 1 — every session/prompt issues
+//!                              an outbound `fs/write_text_file` call
+//!                              with `content = "hello from mock-acp\n"`.
+//!   --request-terminal <cmd>   Sprint 2 — every session/prompt issues
+//!                              an outbound `terminal/create` call with
+//!                              the supplied command and emits a
+//!                              scripted `tool_call_update`.
+//!
 //!
 //! Real `claude-agent-acp` is the production agent; mock-acp keeps the
 //! integration tests offline-friendly.
@@ -81,6 +94,22 @@ struct Args {
     /// dogfood gap where `debug discriminators` saw `tool_call`
     /// but live `telemetry.tool` was 0.
     gemini_shape: bool,
+    /// Sprint 1 — outbound `fs/read_text_file` round-trip. When set
+    /// to `Some(path)`, every `session/prompt` (after the optional
+    /// permission round-trip) issues `fs/read_text_file` to the
+    /// client (bridge), waits for the response, and then emits a
+    /// scripted `tool_call` / `tool_call_update` mirroring the read.
+    request_fs_read: Option<String>,
+    /// Sprint 1 — outbound `fs/write_text_file` round-trip. When set
+    /// to `Some(path)`, every `session/prompt` issues
+    /// `fs/write_text_file` with `content = "hello from mock-acp\n"`
+    /// before the regular echo stream.
+    request_fs_write: Option<String>,
+    /// Sprint 2 — outbound `terminal/create` round-trip. When set
+    /// to `Some(command)`, every `session/prompt` issues
+    /// `terminal/create` with `command = <flag value>` and emits a
+    /// scripted `tool_call_update` carrying the terminalId.
+    request_terminal: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -103,6 +132,9 @@ fn parse_args() -> Args {
             "--same-raw-input-different-tool" => a.same_raw_input_different_tool = true,
             "--auth-methods" => a.auth_methods_json = argv.next(),
             "--gemini-shape" => a.gemini_shape = true,
+            "--request-fs-read" => a.request_fs_read = argv.next(),
+            "--request-fs-write" => a.request_fs_write = argv.next(),
+            "--request-terminal" => a.request_terminal = argv.next(),
             "--profile" | "--session-id" | "--project" => {
                 let _ = argv.next();
                 a.cli_passthrough = true;
@@ -362,6 +394,113 @@ async fn main() -> Result<()> {
                         emit_thought_chunk(&stdout_emit, &session_id).await;
                     }
 
+                    // Sprint 1 — outbound `fs/read_text_file` round-trip.
+                    if let Some(path) = args_clone.request_fs_read.as_deref() {
+                        match request_fs_read_round_trip(
+                            &stdout_emit,
+                            &session_id,
+                            &pending_outbound_e,
+                            &outbound_next_id_e,
+                            path,
+                        )
+                        .await
+                        {
+                            Ok(content) => {
+                                emit_fs_read_observed(
+                                    &stdout_emit,
+                                    &session_id,
+                                    "tc_fs_read",
+                                    path,
+                                    &content,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                warn!(error=%e, path=%path, "fs/read_text_file round-trip failed");
+                                emit_fs_failed(
+                                    &stdout_emit,
+                                    &session_id,
+                                    "tc_fs_read",
+                                    "read",
+                                    &format!("fs/read_text_file: {e}"),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+
+                    // Sprint 1 — outbound `fs/write_text_file` round-trip.
+                    if let Some(path) = args_clone.request_fs_write.as_deref() {
+                        let content = "hello from mock-acp\n".to_string();
+                        match request_fs_write_round_trip(
+                            &stdout_emit,
+                            &session_id,
+                            &pending_outbound_e,
+                            &outbound_next_id_e,
+                            path,
+                            &content,
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                emit_fs_write_observed(
+                                    &stdout_emit,
+                                    &session_id,
+                                    "tc_fs_write",
+                                    path,
+                                    &content,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                warn!(error=%e, path=%path, "fs/write_text_file round-trip failed");
+                                emit_fs_failed(
+                                    &stdout_emit,
+                                    &session_id,
+                                    "tc_fs_write",
+                                    "edit",
+                                    &format!("fs/write_text_file: {e}"),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+
+                    // Sprint 2 — outbound `terminal/create` round-trip.
+                    if let Some(command) = args_clone.request_terminal.as_deref() {
+                        match request_terminal_create_round_trip(
+                            &stdout_emit,
+                            &session_id,
+                            &pending_outbound_e,
+                            &outbound_next_id_e,
+                            command,
+                        )
+                        .await
+                        {
+                            Ok(terminal_id) => {
+                                emit_terminal_observed(
+                                    &stdout_emit,
+                                    &session_id,
+                                    "tc_terminal",
+                                    command,
+                                    &terminal_id,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                warn!(error=%e, command=%command, "terminal/create round-trip failed");
+                                emit_fs_failed(
+                                    &stdout_emit,
+                                    &session_id,
+                                    "tc_terminal",
+                                    "execute",
+                                    &format!("terminal/create: {e}"),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+
                     // X.5c.2 — scripted tool_call sequences. Optional;
                     // emitted before the regular agent_message_chunk
                     // stream so tests can assert on the
@@ -468,6 +607,257 @@ async fn request_permission_round_trip(
     writeln_json(stdout, &req).await?;
     let outcome = tokio::time::timeout(Duration::from_secs(30), rx).await??;
     Ok(outcome)
+}
+
+/// Sprint 1 — issue `fs/read_text_file` to the client (bridge) and
+/// return the resolved `content` string from the response.
+async fn request_fs_read_round_trip(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    pending: &PendingOutbound,
+    next_id: &Arc<AtomicU32>,
+    path: &str,
+) -> Result<String> {
+    let id = next_id.fetch_add(1, Ordering::SeqCst) as u64;
+    let (tx, rx) = oneshot::channel();
+    pending.lock().await.insert(id, tx);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "fs/read_text_file",
+        "params": { "sessionId": session_id, "path": path }
+    });
+    writeln_json(stdout, &req).await?;
+    let response = tokio::time::timeout(Duration::from_secs(30), rx).await??;
+    if let Some(err) = response.get("error") {
+        anyhow::bail!("fs/read_text_file error: {err}");
+    }
+    let content = response
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(content)
+}
+
+/// Sprint 1 — issue `fs/write_text_file` to the client (bridge) and
+/// wait for the empty success response.
+async fn request_fs_write_round_trip(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    pending: &PendingOutbound,
+    next_id: &Arc<AtomicU32>,
+    path: &str,
+    content: &str,
+) -> Result<()> {
+    let id = next_id.fetch_add(1, Ordering::SeqCst) as u64;
+    let (tx, rx) = oneshot::channel();
+    pending.lock().await.insert(id, tx);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "fs/write_text_file",
+        "params": {
+            "sessionId": session_id,
+            "path": path,
+            "content": content
+        }
+    });
+    writeln_json(stdout, &req).await?;
+    let response = tokio::time::timeout(Duration::from_secs(30), rx).await??;
+    if let Some(err) = response.get("error") {
+        anyhow::bail!("fs/write_text_file error: {err}");
+    }
+    Ok(())
+}
+
+/// Sprint 2 — issue `terminal/create` to the client (bridge) and return
+/// the resolved `terminalId` from the response.
+async fn request_terminal_create_round_trip(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    pending: &PendingOutbound,
+    next_id: &Arc<AtomicU32>,
+    command: &str,
+) -> Result<String> {
+    let id = next_id.fetch_add(1, Ordering::SeqCst) as u64;
+    let (tx, rx) = oneshot::channel();
+    pending.lock().await.insert(id, tx);
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "terminal/create",
+        "params": {
+            "sessionId": session_id,
+            "command": command,
+            "args": []
+        }
+    });
+    writeln_json(stdout, &req).await?;
+    let response = tokio::time::timeout(Duration::from_secs(30), rx).await??;
+    if let Some(err) = response.get("error") {
+        anyhow::bail!("terminal/create error: {err}");
+    }
+    let terminal_id = response
+        .get("result")
+        .and_then(|r| r.get("terminalId"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(terminal_id)
+}
+
+/// Sprint 1 — emit a `tool_call` + `tool_call_update` pair mirroring a
+/// successful `fs/read_text_file` round-trip so frontend tests can
+/// observe the operation in `ToolActivityLane`.
+async fn emit_fs_read_observed(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    path: &str,
+    content: &str,
+) {
+    let pending = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "kind": "read",
+                "title": "Read via fs/read_text_file",
+                "status": "pending",
+                "content": [],
+                "locations": [{ "path": path }]
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &pending).await;
+    let completed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "read",
+                "status": "completed",
+                "locations": [{ "path": path }],
+                "rawInput": { "path": path },
+                "rawOutput": content
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &completed).await;
+}
+
+/// Sprint 1 — emit a `tool_call` + `tool_call_update` pair mirroring a
+/// successful `fs/write_text_file` round-trip.
+async fn emit_fs_write_observed(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    path: &str,
+    content: &str,
+) {
+    let pending = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "kind": "edit",
+                "title": "Write via fs/write_text_file",
+                "status": "pending",
+                "content": [],
+                "locations": [{ "path": path }]
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &pending).await;
+    let completed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": "edit",
+                "status": "completed",
+                "locations": [{ "path": path }],
+                "content": [{
+                    "type": "diff",
+                    "path": path,
+                    "newText": content,
+                    "oldText": null
+                }],
+                "rawInput": { "path": path, "content": content },
+                "rawOutput": "File written"
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &completed).await;
+}
+
+/// Sprint 2 — emit a scripted `tool_call_update` for an executed
+/// `terminal/create` round-trip.
+async fn emit_terminal_observed(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    command: &str,
+    terminal_id: &str,
+) {
+    let completed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_call_id,
+                "kind": "execute",
+                "title": "Spawn via terminal/create",
+                "status": "completed",
+                "locations": [],
+                "rawInput": { "command": command },
+                "rawOutput": format!("terminalId={terminal_id}")
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &completed).await;
+}
+
+/// Sprint 1/2 — emit a failed `tool_call_update` when an outbound
+/// fs/terminal request returns an error or times out.
+async fn emit_fs_failed(
+    stdout: &Arc<Mutex<tokio::io::Stdout>>,
+    session_id: &str,
+    tool_call_id: &str,
+    kind: &str,
+    message: &str,
+) {
+    let failed = json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": tool_call_id,
+                "kind": kind,
+                "status": "failed",
+                "rawOutput": message
+            }
+        }
+    });
+    let _ = writeln_json(stdout, &failed).await;
 }
 
 async fn emit_thought_chunk(stdout: &Arc<Mutex<tokio::io::Stdout>>, session_id: &str) {
