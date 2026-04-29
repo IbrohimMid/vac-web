@@ -21,6 +21,8 @@ interface SessionSlice {
   agentId: string | null;
   agentKind: string | null;
   authMethods: AcpAuthMethod[];
+  agentCapabilities: Record<string, unknown> | null;
+  agentInfo: Record<string, unknown> | null;
   // Stage X.5d — bridge-owned reauth status. Driven by `session.auth_*`
   // ServerEvents in `domain/sessions/handlers.ts`. The cockpit reads
   // these to render explicit reauth diagnostics rather than a generic
@@ -33,6 +35,8 @@ interface SessionSlice {
   setWorkflowMeta(workflowId: string | null, workflowName: string | null): void;
   setAgentInfo(agentId: string | null, agentKind: string | null): void;
   setAuthMethods(authMethods: AcpAuthMethod[]): void;
+  setAgentCapabilities(caps: Record<string, unknown> | null): void;
+  setAgentInfoMeta(info: Record<string, unknown> | null): void;
   setAuthStatus(status: AcpAuthStatus): void;
   setAuthError(error: AcpAuthError | null): void;
   setLastAuthMethodId(id: string | null): void;
@@ -48,6 +52,8 @@ export const useSession = create<SessionSlice>((set) => ({
   agentId: null,
   agentKind: null,
   authMethods: [],
+  agentCapabilities: null,
+  agentInfo: null,
   authStatus: 'idle',
   authError: null,
   lastAuthMethodId: null,
@@ -65,6 +71,12 @@ export const useSession = create<SessionSlice>((set) => ({
   },
   setAuthMethods(authMethods) {
     set({ authMethods });
+  },
+  setAgentCapabilities(caps) {
+    set({ agentCapabilities: caps });
+  },
+  setAgentInfoMeta(info) {
+    set({ agentInfo: info });
   },
   setAuthStatus(authStatus) {
     set({ authStatus });
@@ -85,6 +97,8 @@ export const useSession = create<SessionSlice>((set) => ({
       agentId: null,
       agentKind: null,
       authMethods: [],
+      agentCapabilities: null,
+      agentInfo: null,
       authStatus: 'idle',
       authError: null,
       lastAuthMethodId: null,

@@ -84,6 +84,7 @@ fn build_acp_registry_with_auth_methods(auth_methods: Value) -> AgentRuntimeRegi
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
         install_hint: None,
+        mcp_servers: vec![],
     };
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),
@@ -652,6 +653,7 @@ fn build_acp_registry_with_id_and_auth_methods(
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
         install_hint: None,
+        mcp_servers: vec![],
     };
     let cfg = AgentsConfig {
         default_agent_id: agent.id.clone(),

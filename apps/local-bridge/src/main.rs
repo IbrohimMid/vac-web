@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let audit = Arc::new(AuditFacility::new(audit_dir));
     let handoff = Arc::new(HandoffService::new());
-    let sessions = SessionRegistry::with_runtime(agents);
+    let sessions = SessionRegistry::with_runtime_and_profiles(agents, profile_root.clone());
     sessions.attach_audit(Arc::clone(&audit));
     let state = Arc::new(AppState {
         started_at: Instant::now(),

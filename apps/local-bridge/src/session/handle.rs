@@ -66,6 +66,16 @@ pub struct AcpRuntime {
     /// Auth methods advertised by initialize. Surfaced to the web so
     /// the cockpit can show a Zed-style reauth affordance.
     pub(crate) auth_methods: serde_json::Value,
+    /// Agent capabilities from initialize response. Forwarded in
+    /// session.ready so the frontend can adapt UI.
+    pub(crate) agent_capabilities: serde_json::Value,
+    /// Agent info from initialize response.
+    pub(crate) agent_info: serde_json::Value,
+    /// Active terminal handles for ACP terminal/* methods.
+    #[allow(dead_code)]
+    pub(crate) terminals: Arc<
+        dashmap::DashMap<String, Arc<crate::agent_runtime::acp::terminal_handler::TerminalHandle>>,
+    >,
     /// In-flight `session/request_permission` requests keyed by the
     /// VAC approval id (ULID generated on inbound). X.5c.1.
     pub pending_approvals: dashmap::DashMap<String, PendingApproval>,
@@ -413,6 +423,9 @@ pub struct SpawnOptions {
     /// Workflow spec id to use for this session's WorkflowProcess.
     /// When `None`, the registry default is used.
     pub workflow_id: Option<String>,
+    /// Path to capability profile YAMLs. Used by the ACP spawn path to
+    /// load the profile for fs/terminal capability enforcement.
+    pub profile_root: PathBuf,
 }
 
 /// Allowlist of agent ids that may use bridge-driven terminal auth.
@@ -1609,17 +1622,46 @@ impl SessionHandle {
             Some(Arc::clone(&debug)),
         )?;
 
-        // Handshake.
+        // Load the capability profile for fs/terminal advertisement.
+        let profile = profile_core::profile::CapabilityProfile::load(
+            &opts.profile_id,
+            &opts.profile_root,
+        )
+        .unwrap_or_else(|e| {
+            warn!(profile = %opts.profile_id, error = %e, "profile load failed for caps; defaulting to restrictive");
+            profile_core::profile::CapabilityProfile {
+                id: opts.profile_id.clone(),
+                class: profile_core::profile::Class::Assessor,
+                version: "0.0.0".into(),
+                description: None,
+                inherits_from: None,
+                tool_allow: vec![],
+                tool_deny: vec![],
+                shell_allowlist: vec![],
+                fs: Default::default(),
+                git: Default::default(),
+                connectors: Default::default(),
+                network_egress: Default::default(),
+                approval_required_for: vec![],
+                allowed_agent_kinds: vec!["acp".into()],
+                resource_limits: None,
+                audit: None,
+            }
+        });
+
+        let fs_read_enabled = profile.fs.read != "none";
+        let fs_write_enabled = profile.fs.write != "none";
+        let terminal_enabled = profile.class == profile_core::profile::Class::Executor
+            && !profile.shell_allowlist.is_empty();
+
         let init_req = InitializeRequest {
             protocol_version: 1,
             client_capabilities: ClientCapabilities {
                 fs: FsClientCapabilities {
-                    // X.5c will flip these to true and serve the requests
-                    // through profile_layer enforcement.
-                    read_text_file: false,
-                    write_text_file: false,
+                    read_text_file: fs_read_enabled,
+                    write_text_file: fs_write_enabled,
                 },
-                terminal: false,
+                terminal: terminal_enabled,
                 auth: Some(AuthClientCapabilities { terminal: true }),
                 meta: Some(serde_json::json!({ "terminal-auth": true })),
             },
@@ -1633,7 +1675,7 @@ impl SessionHandle {
                 .to_str()
                 .ok_or_else(|| anyhow::anyhow!("project_root not utf-8"))?
                 .to_string(),
-            mcp_servers: vec![],
+            mcp_servers: opts.agent.mcp_servers.clone(),
         };
         let new_resp = client.new_session(new_req).await?;
         let acp_session_id = new_resp.session_id.clone();
@@ -1645,6 +1687,8 @@ impl SessionHandle {
 
         let mut update_rx = client.subscribe_updates();
         let permission_rx = client.take_permission_receiver().await;
+        let fs_rx = client.take_fs_receiver().await;
+        let terminal_rx = client.take_terminal_receiver().await;
         // Patch B — Gemini CLI doesn't advertise an ACP-style auth
         // method (it uses an interactive `/auth` flow), so the bridge
         // synthesizes a Zed-style `spawn-gemini-cli` terminal auth
@@ -1663,6 +1707,9 @@ impl SessionHandle {
             client,
             acp_session_id: acp_session_id.clone(),
             auth_methods,
+            agent_capabilities: init.agent_capabilities.clone(),
+            agent_info: init.agent_info.clone(),
+            terminals: Arc::new(dashmap::DashMap::new()),
             pending_approvals: dashmap::DashMap::new(),
             permission_timeout_ms: opts.agent.permission_timeout_ms,
             approval_by_tool_call_id: dashmap::DashMap::new(),
@@ -1806,6 +1853,112 @@ impl SessionHandle {
                     handle_permission_request(&perm_handle, req).await;
                 }
                 info!(session = %perm_handle.id, "ACP permission channel closed");
+            });
+        }
+
+        // Stage X.5c.3 — fs handler task.
+        if let Some(mut fs_rx) = fs_rx {
+            let fs_ctx = crate::agent_runtime::acp::fs_handler::build_fs_context(
+                &profile,
+                &opts.project_root,
+                &opts.session_id,
+                &opts.agent.id,
+                opts.audit.clone(),
+            );
+            let fs_acp = Arc::clone(&acp_runtime);
+            let fs_handle = Arc::clone(&handle);
+            tokio::spawn(async move {
+                use crate::agent_runtime::acp::fs_handler::{handle_fs_read, handle_fs_write};
+                while let Some(req) = fs_rx.recv().await {
+                    match req.method.as_str() {
+                        "fs/read_text_file" => match handle_fs_read(&fs_ctx, &req.params).await {
+                            Ok(result) => {
+                                let _ = fs_acp.client.respond_result(req.id, result);
+                            }
+                            Err(e) => {
+                                let _ = fs_acp.client.respond_error(
+                                    req.id,
+                                    e.jsonrpc_code(),
+                                    e.to_string(),
+                                    e.jsonrpc_data(),
+                                );
+                            }
+                        },
+                        "fs/write_text_file" => match handle_fs_write(&fs_ctx, &req.params).await {
+                            Ok((result, _meta)) => {
+                                let _ = fs_acp.client.respond_result(req.id, result);
+                            }
+                            Err(e) => {
+                                let _ = fs_acp.client.respond_error(
+                                    req.id,
+                                    e.jsonrpc_code(),
+                                    e.to_string(),
+                                    e.jsonrpc_data(),
+                                );
+                            }
+                        },
+                        _ => {
+                            let _ = fs_acp.client.respond_error(
+                                req.id,
+                                -32601,
+                                format!("unknown fs method: {}", req.method),
+                                serde_json::json!({}),
+                            );
+                        }
+                    }
+                }
+                info!(session = %fs_handle.id, "ACP fs channel closed");
+            });
+        }
+
+        // Stage X.5c.3 — terminal handler task.
+        if let Some(mut terminal_rx) = terminal_rx {
+            let term_ctx = crate::agent_runtime::acp::terminal_handler::build_terminal_context(
+                &profile,
+                &opts.project_root,
+                &opts.session_id,
+                &opts.agent.id,
+                opts.audit.clone(),
+            );
+            let term_acp = Arc::clone(&acp_runtime);
+            let term_handle = Arc::clone(&handle);
+            tokio::spawn(async move {
+                use crate::agent_runtime::acp::terminal_handler::*;
+                while let Some(req) = terminal_rx.recv().await {
+                    let result = match req.method.as_str() {
+                        "terminal/create" => handle_terminal_create(&term_ctx, &req.params)
+                            .await
+                            .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
+                        "terminal/output" => handle_terminal_output(&term_ctx, &req.params)
+                            .await
+                            .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
+                        "terminal/wait_for_exit" => {
+                            handle_terminal_wait_for_exit(&term_ctx, &req.params)
+                                .await
+                                .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data()))
+                        }
+                        "terminal/kill" => handle_terminal_kill(&term_ctx, &req.params)
+                            .await
+                            .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
+                        "terminal/release" => handle_terminal_release(&term_ctx, &req.params)
+                            .await
+                            .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
+                        _ => Err((
+                            -32601,
+                            format!("unknown terminal method: {}", req.method),
+                            serde_json::json!({}),
+                        )),
+                    };
+                    match result {
+                        Ok(value) => {
+                            let _ = term_acp.client.respond_result(req.id, value);
+                        }
+                        Err((code, msg, data)) => {
+                            let _ = term_acp.client.respond_error(req.id, code, msg, data);
+                        }
+                    }
+                }
+                info!(session = %term_handle.id, "ACP terminal channel closed");
             });
         }
 

@@ -18,6 +18,15 @@ const BUILD_WORKFLOWS = [
 ] as const;
 
 const DEFAULT_WORKFLOW_ID = 'build.observe-tools';
+// Sprint 4 (MCP pass-through): hoisted out so the JSX `style={mcpAdvertStyle}`
+// reference uses single-brace form. The sandbox edit tooling strips literal
+// double-brace JSX object expressions (`style="... { object } ..."`), so we
+// keep the object outside JSX.
+const MCP_ADVERT_STYLE: React.CSSProperties = {
+  marginTop: 4,
+  fontSize: 11,
+  color: '#555',
+};
 const DEFAULT_PROJECT_ROOT =
   import.meta.env.VITE_VAC_WEB_DEFAULT_PROJECT_ROOT ?? '/tmp/demo-project';
 
@@ -184,6 +193,22 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
       ) : (
         <div role="alert" style={{color: 'crimson', marginBottom: 8}}>
           No agents advertised by bridge. Restart bridge with fixtures/agents.multi.toml.
+        </div>
+      )}
+      {selectedAgent && (selectedAgent.mcp_servers?.length ?? 0) > 0 && (
+        // Sprint 4 (MCP pass-through): show the operator which MCP
+        // servers will be wired into the ACP session for the selected
+        // agent. Informational only — the bridge passes mcp_servers
+        // through to `session/new` regardless of whether the cockpit
+        // renders them. We deliberately keep this minimal (names only)
+        // so an agent with many MCPs doesn't blow up the picker chrome.
+        <div
+          aria-label="MCP servers attached to agent"
+          data-testid="agent-mcp-servers"
+          style={MCP_ADVERT_STYLE}
+        >
+          <strong>MCP servers ({selectedAgent.mcp_servers?.length ?? 0}):</strong>{' '}
+          {selectedAgent.mcp_servers?.map((m) => m.name).join(', ')}
         </div>
       )}
       {selectedNotInstalled && (

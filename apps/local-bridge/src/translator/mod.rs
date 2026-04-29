@@ -15,7 +15,7 @@ use tracing::warn;
 use ulid::Ulid;
 
 fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
-    json!({
+    let mut payload = json!({
         "id": handle.id,
         "session_id": handle.id,
         "profile_id": handle.profile_id,
@@ -29,7 +29,13 @@ fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
             .as_ref()
             .map(|a| a.auth_methods.clone())
             .unwrap_or_else(|| json!([])),
-    })
+    });
+    if let Some(acp) = handle.acp.as_ref() {
+        let obj = payload.as_object_mut().unwrap();
+        obj.insert("agent_capabilities".into(), acp.agent_capabilities.clone());
+        obj.insert("agent_info".into(), acp.agent_info.clone());
+    }
+    payload
 }
 
 fn session_ready_event(handle: &SessionHandleRef, ts: String) -> ServerEvent {

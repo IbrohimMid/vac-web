@@ -1,8 +1,7 @@
-//! ACP client actor — Stage X.5b.
+//! ACP client actor — Stage X.5b + X.5c.
 //!
 //! Owns the JSON-RPC 2.0 over ndjson transport for a spawned ACP Agent
-//! child (e.g. `claude-agent-acp`). Exposes a small typed API for the
-//! Stage X.5b scope:
+//! child (e.g. `claude-agent-acp`). Exposes a small typed API:
 //!
 //! - `initialize`
 //! - `new_session`
@@ -10,11 +9,9 @@
 //! - `cancel`
 //! - `subscribe_updates()` for incoming `session/update` notifications
 //!
-//! Permission / fs / terminal envelopes are X.5c scope and are NOT
-//! handled here. Inbound requests for those methods receive a typed
-//! JSON-RPC error response.
-//!
-//! The actor is one task per spawned child:
+//! Inbound agent requests (permissions, fs, terminal) are dispatched via
+//! typed channels in [`DispatchChannels`] to handler tasks that have
+//! access to the session profile and project root.
 //!
 //! ```text
 //! +----------+ stdin  (Vec<u8> via mpsc)  +-----------------+
@@ -79,6 +76,34 @@ pub struct PermissionRequest {
     pub params: Value,
 }
 
+/// Inbound `fs/read_text_file` or `fs/write_text_file` request from
+/// the agent. Routed to a handler task that has access to the session
+/// profile for enforcement.
+#[derive(Debug)]
+pub struct FsRequest {
+    pub id: u64,
+    pub method: String,
+    pub params: Value,
+}
+
+/// Inbound `terminal/*` request from the agent. Routed to a handler
+/// task that manages terminal lifecycle with shell enforcement.
+#[derive(Debug)]
+pub struct TerminalRequest {
+    pub id: u64,
+    pub method: String,
+    pub params: Value,
+}
+
+/// All inbound request channels grouped for `dispatch_line`. Each
+/// channel routes a category of agent requests to the handler task
+/// that owns the session/profile context for that category.
+pub(crate) struct DispatchChannels {
+    pub permission_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
+    pub fs_tx: tokio::sync::mpsc::UnboundedSender<FsRequest>,
+    pub terminal_tx: tokio::sync::mpsc::UnboundedSender<TerminalRequest>,
+}
+
 pub struct AcpClient {
     next_id: Arc<Mutex<u64>>,
     pending: Pending,
@@ -90,6 +115,10 @@ pub struct AcpClient {
     /// requests. SessionHandle's ACP path takes this once at spawn
     /// time. Stage X.5c.1 hook.
     permission_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>>>,
+    /// Single-consumer receiver for `fs/*` inbound requests.
+    fs_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<FsRequest>>>,
+    /// Single-consumer receiver for `terminal/*` inbound requests.
+    terminal_rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<TerminalRequest>>>,
 }
 
 impl AcpClient {
@@ -124,22 +153,27 @@ impl AcpClient {
 
         let (stdin_tx, stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::unbounded_channel::<FsRequest>();
+        let (terminal_tx, terminal_rx) = tokio::sync::mpsc::unbounded_channel::<TerminalRequest>();
 
         // Writer task — owns stdin, receives ndjson lines from a channel.
         spawn_writer(stdin, stdin_rx, debug.clone());
 
+        let channels = DispatchChannels {
+            permission_tx: perm_tx,
+            fs_tx,
+            terminal_tx,
+        };
+
         // Reader task — owns stdout, dispatches responses/notifications.
-        // Hand the reader a clone of the writer channel so it can answer
-        // inbound JSON-RPC requests without going through AcpClient,
-        // plus the permission_request sender so it can surface
-        // session/request_permission to SessionHandle for the X.5c.1
-        // approval bridge.
+        // Inbound agent requests are routed via DispatchChannels to
+        // handler tasks that have session/profile context.
         spawn_reader(
             stdout,
             Arc::clone(&pending),
             updates_tx.clone(),
             stdin_tx.clone(),
-            perm_tx,
+            channels,
             debug.clone(),
         );
 
@@ -160,6 +194,8 @@ impl AcpClient {
             stdin_tx,
             updates: updates_tx,
             permission_rx: Mutex::new(Some(perm_rx)),
+            fs_rx: Mutex::new(Some(fs_rx)),
+            terminal_rx: Mutex::new(Some(terminal_rx)),
         };
         Ok((client, child))
     }
@@ -176,6 +212,22 @@ impl AcpClient {
         self.permission_rx.lock().await.take()
     }
 
+    /// Take the fs-request receiver. Single-consumer; the session's fs
+    /// handler task takes this once at spawn time.
+    pub async fn take_fs_receiver(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<FsRequest>> {
+        self.fs_rx.lock().await.take()
+    }
+
+    /// Take the terminal-request receiver. Single-consumer; the
+    /// session's terminal handler task takes this once at spawn time.
+    pub async fn take_terminal_receiver(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<TerminalRequest>> {
+        self.terminal_rx.lock().await.take()
+    }
+
     /// Resolve a pending `session/request_permission` request by its
     /// JSON-RPC `id` with the given `outcome` value. Used by the X.5c.1
     /// approval bridge once the user (or policy) decides.
@@ -188,6 +240,32 @@ impl AcpClient {
             "jsonrpc": "2.0",
             "id": id,
             "result": outcome,
+        });
+        let mut bytes = serde_json::to_vec(&frame)?;
+        bytes.push(b'\n');
+        self.write_line(bytes)
+    }
+
+    /// Send a successful JSON-RPC response for an inbound fs or
+    /// terminal request.
+    pub fn respond_result(&self, id: u64, result: Value) -> Result<()> {
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        });
+        let mut bytes = serde_json::to_vec(&frame)?;
+        bytes.push(b'\n');
+        self.write_line(bytes)
+    }
+
+    /// Send an error JSON-RPC response for an inbound fs or terminal
+    /// request.
+    pub fn respond_error(&self, id: u64, code: i64, message: String, data: Value) -> Result<()> {
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message, "data": data },
         });
         let mut bytes = serde_json::to_vec(&frame)?;
         bytes.push(b'\n');
@@ -327,7 +405,7 @@ fn spawn_reader(
     pending: Pending,
     updates: broadcast::Sender<SessionNotification>,
     writer_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    permission_tx: tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
+    channels: DispatchChannels,
     debug: Option<Arc<AcpDebugLog>>,
 ) {
     tokio::spawn(async move {
@@ -341,14 +419,13 @@ fn spawn_reader(
                             .await;
                     }
                     if let Err(e) =
-                        dispatch_line(&line, &pending, &updates, &writer_tx, &permission_tx).await
+                        dispatch_line(&line, &pending, &updates, &writer_tx, &channels).await
                     {
                         warn!(error=%e, line=%line, "acp reader: dispatch failed");
                     }
                 }
                 Ok(None) => {
                     info!("acp reader: stdout EOF");
-                    // Drain pending with errors so callers don't hang.
                     let mut p = pending.lock().await;
                     for (_, tx) in p.drain() {
                         let _ = tx.send(Err(JsonRpcError {
@@ -373,7 +450,7 @@ async fn dispatch_line(
     pending: &Pending,
     updates: &broadcast::Sender<SessionNotification>,
     writer_tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    permission_tx: &tokio::sync::mpsc::UnboundedSender<PermissionRequest>,
+    channels: &DispatchChannels,
 ) -> Result<()> {
     let v: Value = serde_json::from_str(line).context("non-JSON line on ACP stdout")?;
 
@@ -390,21 +467,19 @@ async fn dispatch_line(
             let _ = updates.send(notif);
             return Ok(());
         }
-        // Other notifications (e.g. cancellations) ignored at X.5b scope.
-        debug!(target: "acp", method, "notification ignored at X.5b scope");
+        debug!(target: "acp", method, "notification ignored");
         return Ok(());
     }
 
     // Inbound request from the agent.
     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
         // Stage X.5c.1 — surface session/request_permission to the
-        // approval bridge. Don't write a response here; the bridge
-        // calls AcpClient::respond_permission once the user (or
-        // policy) decides. The numeric id is required.
+        // approval bridge.
         if method == "session/request_permission" {
             if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
                 let params = v.get("params").cloned().unwrap_or(Value::Null);
-                if permission_tx
+                if channels
+                    .permission_tx
                     .send(PermissionRequest { id, params })
                     .is_err()
                 {
@@ -427,26 +502,80 @@ async fn dispatch_line(
             return Ok(());
         }
 
-        // Other inbound methods (fs/*, terminal/*, future…) — Stage
-        // X.5b fallback: typed -32601 so the agent doesn't hang.
-        // X.5c.2/X.5c.3 will replace per-method as handlers ship.
+        // Stage X.5c.3 — route fs/* requests to the fs handler task.
+        if method == "fs/read_text_file" || method == "fs/write_text_file" {
+            if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
+                let params = v.get("params").cloned().unwrap_or(Value::Null);
+                if channels
+                    .fs_tx
+                    .send(FsRequest {
+                        id,
+                        method: method.to_string(),
+                        params,
+                    })
+                    .is_err()
+                {
+                    warn!(id, method, "fs request: handler unavailable");
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32603, "message": "fs handler unavailable", "data": { "method": method } }
+                    });
+                    let mut bytes = serde_json::to_vec(&resp)?;
+                    bytes.push(b'\n');
+                    let _ = writer_tx.send(bytes);
+                }
+                return Ok(());
+            }
+            warn!(method, "fs request without numeric id; ignoring");
+            return Ok(());
+        }
+
+        // Stage X.5c.3 — route terminal/* requests to the terminal
+        // handler task.
+        if method.starts_with("terminal/") {
+            if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
+                let params = v.get("params").cloned().unwrap_or(Value::Null);
+                if channels
+                    .terminal_tx
+                    .send(TerminalRequest {
+                        id,
+                        method: method.to_string(),
+                        params,
+                    })
+                    .is_err()
+                {
+                    warn!(id, method, "terminal request: handler unavailable");
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32603, "message": "terminal handler unavailable", "data": { "method": method } }
+                    });
+                    let mut bytes = serde_json::to_vec(&resp)?;
+                    bytes.push(b'\n');
+                    let _ = writer_tx.send(bytes);
+                }
+                return Ok(());
+            }
+            warn!(method, "terminal request without numeric id; ignoring");
+            return Ok(());
+        }
+
+        // Fallback for unknown inbound methods.
         let id = v.get("id").cloned().unwrap_or(Value::Null);
         let resp = json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {
                 "code": -32601,
-                "message": format!("Method not handled by bridge X.5b scope: {method}"),
+                "message": format!("Method not handled by bridge: {method}"),
                 "data": { "method": method }
             }
         });
         let mut bytes = serde_json::to_vec(&resp)?;
         bytes.push(b'\n');
         if writer_tx.send(bytes).is_err() {
-            warn!(
-                method,
-                "ACP inbound request: writer channel closed; cannot respond"
-            );
+            warn!(method, "ACP inbound request: writer channel closed");
         } else {
             debug!(target: "acp", method, "ACP inbound request answered with -32601");
         }
@@ -541,28 +670,46 @@ mod tests {
         assert_eq!(classify_jsonrpc_error(&e), "agent.internal");
     }
 
+    fn test_channels() -> (
+        DispatchChannels,
+        tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>,
+        tokio::sync::mpsc::UnboundedReceiver<FsRequest>,
+        tokio::sync::mpsc::UnboundedReceiver<TerminalRequest>,
+    ) {
+        let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        let (fs_tx, fs_rx) = tokio::sync::mpsc::unbounded_channel::<FsRequest>();
+        let (term_tx, term_rx) = tokio::sync::mpsc::unbounded_channel::<TerminalRequest>();
+        (
+            DispatchChannels {
+                permission_tx: perm_tx,
+                fs_tx,
+                terminal_tx: term_tx,
+            },
+            perm_rx,
+            fs_rx,
+            term_rx,
+        )
+    }
+
     #[tokio::test]
-    async fn inbound_request_receives_method_not_handled_response() {
-        // dispatch_line's inbound-request branch must answer with a
-        // JSON-RPC -32601 envelope so the agent doesn't hang waiting
-        // for X.5c handlers (fs / terminal / permission).
+    async fn inbound_unknown_method_receives_32601() {
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-        let (perm_tx, _perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        let (channels, _perm_rx, _fs_rx, _term_rx) = test_channels();
 
         let inbound = json!({
             "jsonrpc": "2.0",
             "id": 17,
-            "method": "fs/read_text_file",
-            "params": { "sessionId": "sid", "path": "/tmp/x" }
+            "method": "some/unknown_method",
+            "params": {}
         });
         super::dispatch_line(
             &inbound.to_string(),
             &pending,
             &updates_tx,
             &writer_tx,
-            &perm_tx,
+            &channels,
         )
         .await
         .expect("dispatch ok");
@@ -572,18 +719,133 @@ mod tests {
         assert_eq!(resp["jsonrpc"], json!("2.0"));
         assert_eq!(resp["id"], json!(17));
         assert_eq!(resp["error"]["code"], json!(-32601));
-        assert_eq!(resp["error"]["data"]["method"], json!("fs/read_text_file"));
+    }
+
+    #[tokio::test]
+    async fn fs_read_request_routes_to_fs_channel() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (channels, _perm_rx, mut fs_rx, _term_rx) = test_channels();
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 42,
+            "method": "fs/read_text_file",
+            "params": { "sessionId": "sid", "path": "/tmp/x" }
+        });
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &channels,
+        )
+        .await
+        .expect("dispatch ok");
+
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "fs request must be held open for handler"
+        );
+        let req = fs_rx.try_recv().expect("fs request on channel");
+        assert_eq!(req.id, 42);
+        assert_eq!(req.method, "fs/read_text_file");
+        assert_eq!(req.params["path"], json!("/tmp/x"));
+    }
+
+    #[tokio::test]
+    async fn fs_write_request_routes_to_fs_channel() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, _writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (channels, _perm_rx, mut fs_rx, _term_rx) = test_channels();
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 43,
+            "method": "fs/write_text_file",
+            "params": { "sessionId": "sid", "path": "/tmp/x", "content": "hello" }
+        });
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &channels,
+        )
+        .await
+        .expect("dispatch ok");
+
+        let req = fs_rx.try_recv().expect("fs write request on channel");
+        assert_eq!(req.id, 43);
+        assert_eq!(req.method, "fs/write_text_file");
+    }
+
+    #[tokio::test]
+    async fn terminal_request_routes_to_terminal_channel() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, _writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (channels, _perm_rx, _fs_rx, mut term_rx) = test_channels();
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 50,
+            "method": "terminal/create",
+            "params": { "sessionId": "sid", "command": "echo", "args": ["hello"] }
+        });
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &channels,
+        )
+        .await
+        .expect("dispatch ok");
+
+        let req = term_rx.try_recv().expect("terminal request on channel");
+        assert_eq!(req.id, 50);
+        assert_eq!(req.method, "terminal/create");
+    }
+
+    #[tokio::test]
+    async fn fs_request_auto_errors_when_handler_dropped() {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (channels, _perm_rx, fs_rx, _term_rx) = test_channels();
+        drop(fs_rx);
+
+        let inbound = json!({
+            "jsonrpc": "2.0",
+            "id": 44,
+            "method": "fs/read_text_file",
+            "params": { "path": "/tmp/x" }
+        });
+        super::dispatch_line(
+            &inbound.to_string(),
+            &pending,
+            &updates_tx,
+            &writer_tx,
+            &channels,
+        )
+        .await
+        .expect("dispatch ok");
+
+        let bytes = writer_rx.try_recv().expect("auto-error response");
+        let resp: Value = serde_json::from_slice(bytes.trim_ascii_end()).unwrap();
+        assert_eq!(resp["id"], json!(44));
+        assert_eq!(resp["error"]["code"], json!(-32603));
     }
 
     #[tokio::test]
     async fn inbound_session_request_permission_routes_to_permission_channel() {
-        // X.5c.1: session/request_permission is no longer answered with
-        // -32601. It surfaces on the permission channel so the bridge
-        // can hold the JSON-RPC id open until approval.approve/reject.
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-        let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        let (channels, mut perm_rx, _fs_rx, _term_rx) = test_channels();
 
         let inbound = json!({
             "jsonrpc": "2.0",
@@ -603,18 +865,16 @@ mod tests {
             &pending,
             &updates_tx,
             &writer_tx,
-            &perm_tx,
+            &channels,
         )
         .await
         .expect("dispatch ok");
 
-        // Writer must NOT receive an immediate response.
         assert!(
             writer_rx.try_recv().is_err(),
             "session/request_permission must be held open, not auto-replied"
         );
 
-        // Permission channel must carry the request with its id.
         let req = perm_rx.try_recv().expect("permission request on channel");
         assert_eq!(req.id, 5);
         assert_eq!(req.params["sessionId"], json!("sid"));
@@ -623,13 +883,13 @@ mod tests {
 
     #[tokio::test]
     async fn permission_request_auto_cancels_when_receiver_dropped() {
-        // If the bridge has no consumer (closed receiver), dispatch_line
-        // must not leak the request — auto-cancel so the agent unblocks.
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (updates_tx, _updates_rx) = broadcast::channel::<SessionNotification>(8);
         let (writer_tx, mut writer_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-        let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        let (channels, perm_rx, _fs_rx, _term_rx) = test_channels();
         drop(perm_rx);
+        // Also need to keep channels alive for other senders
+        let _keep_channels = &channels;
 
         let inbound = json!({
             "jsonrpc": "2.0",
@@ -642,7 +902,7 @@ mod tests {
             &pending,
             &updates_tx,
             &writer_tx,
-            &perm_tx,
+            &channels,
         )
         .await
         .expect("dispatch ok");

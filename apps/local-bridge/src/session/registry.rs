@@ -19,15 +19,14 @@ pub struct SessionRegistry {
     /// can write `tool.observed` / `tool.updated` / `tool.failed` rows
     /// without piping through the translator.
     audit: Arc<OnceLock<Arc<AuditFacility>>>,
+    /// Path to capability profile YAMLs. Threaded into SpawnOptions so
+    /// the ACP spawn path can load the profile for fs/terminal enforcement.
+    profile_root: PathBuf,
 }
 
 impl SessionRegistry {
     /// Back-compat constructor preserved for existing callers (tests +
     /// older embeddings) that still hand a single engine binary path.
-    /// Delegates to [`agent_runtime::synth_legacy_registry`], which
-    /// infers the kind from the binary file name (e.g. `mock-engine`
-    /// → `Mock`) so the spawn path is identical to pre-X.1 *and* the
-    /// kind metadata is accurate for upcoming X.2 policy enforcement.
     pub fn new(engine_bin: PathBuf) -> Self {
         Self::with_runtime(Arc::new(synth_legacy_registry(engine_bin)))
     }
@@ -35,10 +34,18 @@ impl SessionRegistry {
     /// Stage X.1 constructor: bridge owns an `AgentRuntimeRegistry`
     /// loaded from config, and SessionRegistry just borrows it.
     pub fn with_runtime(agents: Arc<AgentRuntimeRegistry>) -> Self {
+        Self::with_runtime_and_profiles(agents, PathBuf::from("packages/protocol/v1/profiles"))
+    }
+
+    pub fn with_runtime_and_profiles(
+        agents: Arc<AgentRuntimeRegistry>,
+        profile_root: PathBuf,
+    ) -> Self {
         let reg = Self {
             inner: Arc::new(DashMap::new()),
             agents,
             audit: Arc::new(OnceLock::new()),
+            profile_root,
         };
         reg.spawn_reaper();
         reg
@@ -112,6 +119,7 @@ impl SessionRegistry {
             agent,
             audit: self.audit.get().cloned(),
             workflow_id,
+            profile_root: self.profile_root.clone(),
         };
         let handle = SessionHandle::spawn(opts).await?;
         self.inner.insert(session_id.clone(), Arc::clone(&handle));

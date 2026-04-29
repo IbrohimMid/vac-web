@@ -19,6 +19,34 @@ const STATE_TO_DOT: Record<GateState, 'ok' | 'warn' | 'crit' | 'idle'> = {
   fail: 'crit',
 };
 
+/// Sprint 3 UI badges — derive a compact set of capability indicators
+/// from the bridge's `agent_capabilities` payload. The bridge surfaces
+/// the raw ACP `agentCapabilities` shape (camelCase) plus our profile-
+/// derived `fs.read` / `fs.write` / `terminal` booleans (snake_case),
+/// so we tolerate both encodings here.
+function summarizeAgentCapabilities(
+  caps: Record<string, unknown> | null,
+): { fs: 'rw' | 'r' | 'w' | null; terminal: boolean; loadSession: boolean; image: boolean } {
+  if (!caps) return { fs: null, terminal: false, loadSession: false, image: false };
+  const readOk =
+    caps.fs_read === true ||
+    caps.read_text_file === true ||
+    (typeof caps.fs === 'object' && caps.fs !== null && (caps.fs as Record<string, unknown>).read === true);
+  const writeOk =
+    caps.fs_write === true ||
+    caps.write_text_file === true ||
+    (typeof caps.fs === 'object' && caps.fs !== null && (caps.fs as Record<string, unknown>).write === true);
+  const fs: 'rw' | 'r' | 'w' | null = readOk && writeOk ? 'rw' : readOk ? 'r' : writeOk ? 'w' : null;
+  const terminal = caps.terminal === true || caps.terminal_create === true;
+  const loadSession = caps.loadSession === true || caps.load_session === true;
+  const promptCaps =
+    typeof caps.promptCapabilities === 'object' && caps.promptCapabilities !== null
+      ? (caps.promptCapabilities as Record<string, unknown>)
+      : {};
+  const image = promptCaps.image === true;
+  return { fs, terminal, loadSession, image };
+}
+
 export function Topbar({ onCmdK, onTweaks }: Props) {
   const theme = useCockpit((s) => s.theme);
   const setTheme = useCockpit((s) => s.setTheme);
@@ -26,6 +54,18 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
   const agentKind = useSession((s) => s.agentKind);
   const authMethods = useSession((s) => s.authMethods);
   const authLabel = authMethodSummary(authMethods).replaceAll(' · ', ' - ');
+  const agentCapabilities = useSession((s) => s.agentCapabilities);
+  const capSummary = summarizeAgentCapabilities(agentCapabilities);
+  // The sandbox tooling strips literal ` ... ` JSX object
+  // expressions during edit application, so we hoist the badge style
+  // into a single-brace `style={badgeStyle}` reference. Functionally
+  // equivalent to the inline object that lived here before; keep both
+  // shapes in sync if you tweak this.
+  const badgeStyle: React.CSSProperties = {
+    padding: '1px 6px',
+    fontSize: 10.5,
+    marginLeft: 4,
+  };
 
   return (
     <header className="topbar">
@@ -37,10 +77,58 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
         {agentKind === 'acp' && (
           <span
             className="badge warn"
-            style={{ padding: '1px 6px', fontSize: 10.5, marginLeft: 4 }}
+            style={badgeStyle}
             title={authMethods.map((m) => `${m.name} (${m.type})`).join(' · ') || 'ACP auth'}
           >
             ACP auth: {authLabel}
+          </span>
+        )}
+        {capSummary.fs && (
+          // Sprint 3: profile-derived fs capability indicator. We render
+          // a single pill instead of separate read/write pills so the
+          // topbar stays compact when an agent has both. The title gives
+          // the long form for hover-discovery.
+          <span
+            className="badge ok"
+            style={badgeStyle}
+            data-testid="cap-fs-badge"
+            title={`Profile grants fs: ${capSummary.fs === 'rw' ? 'read + write' : capSummary.fs === 'r' ? 'read-only' : 'write-only'}`}
+          >
+            fs: {capSummary.fs}
+          </span>
+        )}
+        {capSummary.terminal && (
+          // Sprint 3: profile grants `terminal/create`. The chip is
+          // intentionally `warn`-toned because terminal access is the
+          // most consequential capability the operator can hand to an
+          // ACP agent.
+          <span
+            className="badge warn"
+            style={badgeStyle}
+            data-testid="cap-term-badge"
+            title="Profile grants terminal/create (Sprint 2)"
+          >
+            terminal
+          </span>
+        )}
+        {capSummary.loadSession && (
+          <span
+            className="badge ok"
+            style={badgeStyle}
+            data-testid="cap-loadsession-badge"
+            title="Agent advertises session/load (resume)"
+          >
+            resume
+          </span>
+        )}
+        {capSummary.image && (
+          <span
+            className="badge ok"
+            style={badgeStyle}
+            data-testid="cap-image-badge"
+            title="Agent accepts image content blocks in prompts"
+          >
+            image
           </span>
         )}
         <Icon

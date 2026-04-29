@@ -176,6 +176,7 @@ pub fn synth_legacy_registry(engine_bin: PathBuf) -> AgentRuntimeRegistry {
         enabled: true,
         permission_timeout_ms: DEFAULT_PERMISSION_TIMEOUT_MS,
         install_hint: None,
+        mcp_servers: vec![],
     };
     let cfg = AgentsConfig {
         default_agent_id: id,

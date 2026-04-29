@@ -53,6 +53,10 @@ pub struct AgentDefinition {
     /// in the cockpit when the binary isn't on PATH. Free-form one-liner;
     /// the cockpit renders it verbatim next to the "not installed" badge.
     pub install_hint: Option<String>,
+    /// MCP servers to pass to the agent's `session/new` request.
+    /// Defined in agents.toml; agents that support MCP will connect to
+    /// these servers for tool/context access.
+    pub mcp_servers: Vec<serde_json::Value>,
 }
 
 /// Raw on-disk shape (toml). Kept separate from `AgentDefinition` so
@@ -83,6 +87,8 @@ struct AgentEntryRaw {
     /// agent's `command` isn't found on PATH.
     #[serde(default)]
     install_hint: Option<String>,
+    #[serde(default)]
+    mcp_servers: Vec<serde_json::Value>,
 }
 
 fn default_enabled() -> bool {
@@ -158,6 +164,7 @@ impl AgentsConfig {
                 enabled: entry.enabled,
                 permission_timeout_ms,
                 install_hint: entry.install_hint,
+                mcp_servers: entry.mcp_servers,
             });
         }
 

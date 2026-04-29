@@ -36,6 +36,10 @@ interface SessionReadyLike {
   workflowName?: unknown;
   auth_methods?: unknown;
   authMethods?: unknown;
+  agent_capabilities?: unknown;
+  agentCapabilities?: unknown;
+  agent_info?: unknown;
+  agentInfo?: unknown;
 }
 
 export interface SessionActivationFallback {
@@ -92,6 +96,17 @@ export function activateSessionFromReady(
   const workflowName = stringField(src, 'workflow_name', 'workflowName');
   const authMethods = normalizeAuthMethods(src.auth_methods ?? src.authMethods);
 
+  const rawCaps = src.agent_capabilities ?? src.agentCapabilities;
+  const agentCapabilities =
+    rawCaps && typeof rawCaps === 'object' && !Array.isArray(rawCaps)
+      ? (rawCaps as Record<string, unknown>)
+      : null;
+  const rawInfo = src.agent_info ?? src.agentInfo;
+  const agentInfoMeta =
+    rawInfo && typeof rawInfo === 'object' && !Array.isArray(rawInfo)
+      ? (rawInfo as Record<string, unknown>)
+      : null;
+
   clearSessionBoundStores();
 
   const session = useSession.getState();
@@ -103,6 +118,12 @@ export function activateSessionFromReady(
   }
   if (workflowId || workflowName) {
     session.setWorkflowMeta(workflowId, workflowName);
+  }
+  if (agentCapabilities) {
+    session.setAgentCapabilities(agentCapabilities);
+  }
+  if (agentInfoMeta) {
+    session.setAgentInfoMeta(agentInfoMeta);
   }
 
   useCockpit.getState().setRoute('build');

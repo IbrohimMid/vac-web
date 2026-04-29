@@ -47,6 +47,20 @@ export interface AvailableAgent {
   /// Free-form install/auth hint surfaced by the bridge fixture.
   /// Rendered verbatim by the cockpit when `installed === false`.
   install_hint?: string;
+  /// Sprint 4 (MCP pass-through). Per-agent MCP server advertisement.
+  /// Bridge skips the field entirely when no MCP servers are configured
+  /// for the agent, so older bridges that pre-date the field send
+  /// `mcp_servers === undefined` — consumers must default to an empty
+  /// list rather than null-pun.
+  mcp_servers?: AvailableAgentMcpServer[];
+}
+
+/// Sprint 4 frontend summary of one MCP server attached to an agent.
+/// Mirrors `apps/local-bridge/src/ws/envelope.rs::McpServerAdvert` 1:1
+/// — name-only for now; command/args/env are deliberately not surfaced
+/// on the wire to keep the registry payload small.
+export interface AvailableAgentMcpServer {
+  name: string;
 }
 
 export interface WelcomeFrame {

@@ -7,13 +7,19 @@
 
 pub mod client;
 pub mod debug;
+pub mod fs_handler;
 pub mod hash;
+pub mod terminal_handler;
 pub mod tool_activity;
 pub mod types;
 
-pub use client::{classify_jsonrpc_error, AcpClient, JsonRpcError, PermissionRequest};
+pub use client::{
+    classify_jsonrpc_error, AcpClient, FsRequest, JsonRpcError, PermissionRequest, TerminalRequest,
+};
 pub use debug::{AcpDebugDirection, AcpDebugLog, AcpDebugMessage, AcpDebugMessageType};
+pub use fs_handler::{FsError, FsHandlerContext};
 pub use hash::{sha256_hex_canonical, sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS};
+pub use terminal_handler::{TerminalError, TerminalHandlerContext};
 pub use tool_activity::{
     bound_raw_output, extract_observed_tool_activity, redact_raw_input, redact_raw_output,
     ObservedToolActivity, ToolDiff, ToolKind, ToolLocation, ToolStatus,
