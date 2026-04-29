@@ -595,6 +595,31 @@
 	   compresses without losing the lifecycle / args row */
 	padding: 6px 8px;
 }
+/* X.5h.3 — deep-nested cards (depth >= 2) start collapsed and get a
+   subtle muted treatment so a runaway sub-agent tree visually de-
+   emphasizes itself until the user opts in by expanding. The hard
+   cap is enforced on the bridge side (MAX_SUBAGENT_DEPTH = 4). */
+.agent-card.tool[data-depth="2"],
+.agent-card.tool[data-depth="3"],
+.agent-card.tool[data-depth="4"] {
+	background: var(--bg-elev, transparent);
+	opacity: 0.92;
+}
+.agent-card.tool[data-depth="2"]:not([open]) > summary,
+.agent-card.tool[data-depth="3"]:not([open]) > summary,
+.agent-card.tool[data-depth="4"]:not([open]) > summary {
+	color: var(--ink-2, inherit);
+}
+/* X.5h.3 — per-node sub-agent action row sits just below the generic
+   action row. Reduced top margin so the two rows read as a single
+   action group, and disabled buttons get a clearer affordance. */
+.agent-subagent-actions {
+	margin-top: 0;
+}
+.agent-subagent-actions .agent-action[disabled] {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
 .agent-subagent-badge {
 	display: inline-flex;
 	align-items: center;

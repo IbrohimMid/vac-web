@@ -299,4 +299,101 @@ describe('AgentThread renderer', () => {
     const meta = screen.getByTestId('tool-raw-shape');
     expect(meta.textContent).toContain('normalized from gemini shape');
   });
+
+  it('X.5h.3: renders per-node sub-agent action row on a task tool card with cancel/retry disabled and copy enabled', () => {
+    // The bridge marks a sub-agent dispatch by setting `subagent_type` on
+    // the tool_call_update payload. The card should surface a Cancel/Retry
+    // affordance for that node specifically (in addition to the turn-level
+    // ones), with both buttons disabled until the bridge wires per-task
+    // abort + re-dispatch. "Copy task description" works whenever the
+    // input summary has been extracted.
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'dispatch a sub-agent', provider: 'opencode-acp' });
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_task_root',
+      kind: 'other',
+      title: 'task',
+      status: 'in_progress',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      subagentType: 'general',
+      rawInput: { description: 'Investigate the failing test', subagent_type: 'general' },
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    render(<AgentThread sessionId="sess1" />);
+
+    const actionsRow = screen.getByTestId('agent-subagent-actions');
+    expect(actionsRow).toBeInTheDocument();
+    expect(actionsRow.getAttribute('data-subagent-type')).toBe('general');
+    expect(actionsRow.getAttribute('data-tool-call-id')).toBe('tc_task_root');
+
+    expect(screen.getByTestId('agent-subagent-cancel')).toBeDisabled();
+    expect(screen.getByTestId('agent-subagent-retry')).toBeDisabled();
+    // Copy is enabled because inputSummary derives from raw_input.description.
+    expect(screen.getByTestId('agent-subagent-copy-description')).not.toBeDisabled();
+  });
+
+  it('X.5h.3: deep-nested sub-agent cards (depth >= 2) start collapsed by default', () => {
+    // The FE's collapse threshold mirrors the bridge's MAX_SUBAGENT_DEPTH
+    // policy: depth 0 + 1 stay open so the common one-level dispatch is
+    // visible at a glance, but anything from depth 2 onward is closed by
+    // default so a runaway 4-level tree doesn't dominate the timeline.
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'multi-level dispatch', provider: 'opencode-acp' });
+    // Root task (depth 0).
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_d0',
+      kind: 'other',
+      title: 'task',
+      status: 'in_progress',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      subagentType: 'general',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    // Direct child (depth 1) — still open by default.
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_d1',
+      kind: 'other',
+      title: 'task',
+      status: 'in_progress',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      subagentType: 'helper',
+      parentToolCallId: 'tc_d0',
+      updatedAt: '2026-01-01T00:00:01Z',
+    });
+    // Depth 2 — default-collapsed.
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_d2',
+      kind: 'execute',
+      title: 'bash',
+      status: 'in_progress',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      parentToolCallId: 'tc_d1',
+      rawShape: 'opencode_serve',
+      updatedAt: '2026-01-01T00:00:02Z',
+    });
+    render(<AgentThread sessionId="sess1" />);
+
+    const depth1 = screen.getByTestId('agent-tool-card-depth-1');
+    const depth2 = screen.getByTestId('agent-tool-card-depth-2');
+    expect(depth1.getAttribute('data-depth')).toBe('1');
+    expect(depth1).toHaveAttribute('open');
+    expect(depth2.getAttribute('data-depth')).toBe('2');
+    expect(depth2).not.toHaveAttribute('open');
+  });
 });

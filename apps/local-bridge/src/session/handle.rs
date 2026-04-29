@@ -103,6 +103,71 @@ pub struct AcpRuntime {
 
 const APPROVAL_CORRELATION_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// X.5h.3 — hard cap on how deep a sub-agent task chain can nest. We
+/// chose 4 because it covers the realistic workflow surface (root →
+/// dispatched sub-agent → nested helper → helper-of-helper) without
+/// letting a runaway recursion blow up the timeline. Anything beyond
+/// this cap surfaces flat under the depth-4 ancestor; the bridge
+/// emits a `tracing::warn!` for each refused push so dogfood can
+/// spot misbehaving adapters.
+pub(crate) const MAX_SUBAGENT_DEPTH: usize = 4;
+
+/// X.5h.3 — outcome of [`AcpRuntime::enter_task_scope`]. Lets the
+/// caller distinguish between "new task pushed" (the common case),
+/// "already present" (idempotent re-entry from repeated
+/// in_progress frames), and "refused because depth cap was hit".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EnterTaskScopeResult {
+    /// The task was pushed; `new_depth` is the resulting stack depth
+    /// (1-indexed, so the very first push yields `new_depth = 1`).
+    Pushed { new_depth: usize },
+    /// The task was already on the stack; nothing changed.
+    AlreadyPresent,
+    /// The stack was already at [`MAX_SUBAGENT_DEPTH`] entries; the
+    /// task was **not** pushed. `current_depth` is the unchanged
+    /// stack depth, `max_depth` is the cap.
+    RefusedDepthExceeded {
+        current_depth: usize,
+        max_depth: usize,
+    },
+}
+
+/// X.5h.3 — pure helper that owns the depth-cap + idempotency rules
+/// for the sub-agent task scope stack. Lifted out of
+/// [`AcpRuntime::enter_task_scope`] so unit tests can drive it without
+/// constructing a full `AcpRuntime` (which requires a spawned ACP
+/// child). The runtime method just locks the mutex and delegates.
+pub(crate) fn try_push_task_scope(
+    stack: &mut Vec<String>,
+    tool_call_id: &str,
+) -> EnterTaskScopeResult {
+    if stack.iter().any(|id| id.as_str() == tool_call_id) {
+        return EnterTaskScopeResult::AlreadyPresent;
+    }
+    if stack.len() >= MAX_SUBAGENT_DEPTH {
+        return EnterTaskScopeResult::RefusedDepthExceeded {
+            current_depth: stack.len(),
+            max_depth: MAX_SUBAGENT_DEPTH,
+        };
+    }
+    stack.push(tool_call_id.to_string());
+    EnterTaskScopeResult::Pushed {
+        new_depth: stack.len(),
+    }
+}
+
+/// X.5h.3 — pure mirror of `AcpRuntime::current_task_parent` that
+/// operates on a borrowed slice. Used by the unit tests to assert
+/// what a descendant would snapshot, without faking a runtime.
+#[cfg(test)]
+pub(crate) fn current_task_parent_in(stack: &[String], self_tool_call_id: &str) -> Option<String> {
+    stack
+        .iter()
+        .rev()
+        .find(|id| id.as_str() != self_tool_call_id)
+        .cloned()
+}
+
 impl AcpRuntime {
     /// Insert a freshly-resolved approval into both correlation maps.
     /// Called from `SessionHandle::resolve_approval` on success.
@@ -137,12 +202,27 @@ impl AcpRuntime {
     /// X.5h.1 — push a parent task onto the scope stack. Idempotent:
     /// repeated pending/in_progress frames for the same task do not
     /// double-push.
-    pub(crate) fn enter_task_scope(&self, tool_call_id: &str) {
+    ///
+    /// X.5h.3 — also enforce a **depth cap** so a buggy or adversarial
+    /// adapter cannot fork-bomb the timeline by recursively dispatching
+    /// sub-agents forever. When the stack is already at
+    /// [`MAX_SUBAGENT_DEPTH`] tasks deep, the new task is **not** pushed:
+    /// it (and any of its children) will surface under the
+    /// depth-cap-ancestor instead of nesting further. The caller is
+    /// expected to log the refusal so dogfood can spot pathological
+    /// providers.
+    ///
+    /// The depth-cap logic itself lives in the pure helper
+    /// [`try_push_task_scope`] so it can be unit tested without
+    /// constructing a whole `AcpRuntime`.
+    pub(crate) fn enter_task_scope(&self, tool_call_id: &str) -> EnterTaskScopeResult {
         if let Ok(mut stack) = self.task_scope.lock() {
-            if !stack.iter().any(|id| id.as_str() == tool_call_id) {
-                stack.push(tool_call_id.to_string());
-            }
+            return try_push_task_scope(&mut stack, tool_call_id);
         }
+        // Lock poisoned — conservative no-op; treat as already-present
+        // so the caller doesn't double-emit a depth-exceeded warning
+        // for what is really a panic-recovery edge case.
+        EnterTaskScopeResult::AlreadyPresent
     }
 
     /// X.5h.1 — remove a finished task from the scope stack. Removes
@@ -2035,7 +2115,30 @@ async fn map_tool_activity(handle: &SessionHandleRef, notif: &SessionNotificatio
         if is_subagent_task {
             match activity.status {
                 ToolStatus::Pending | ToolStatus::InProgress => {
-                    acp.enter_task_scope(&activity.tool_call_id);
+                    // X.5h.3 — honor the depth cap. When the stack is
+                    // already at MAX_SUBAGENT_DEPTH, the new task is
+                    // refused and falls through to surface under the
+                    // depth-cap-ancestor (snapshotted by
+                    // `current_task_parent` below). We emit a
+                    // structured warning so adapters that fork-bomb
+                    // the timeline are visible in operator logs.
+                    match acp.enter_task_scope(&activity.tool_call_id) {
+                        EnterTaskScopeResult::Pushed { .. }
+                        | EnterTaskScopeResult::AlreadyPresent => {}
+                        EnterTaskScopeResult::RefusedDepthExceeded {
+                            current_depth,
+                            max_depth,
+                        } => {
+                            warn!(
+                                session = %handle.id,
+                                tool_call_id = %activity.tool_call_id,
+                                subagent_type = ?activity.subagent_type,
+                                current_depth,
+                                max_depth,
+                                "sub-agent task scope refused: depth cap reached; child will surface under depth-cap-ancestor"
+                            );
+                        }
+                    }
                 }
                 ToolStatus::Completed | ToolStatus::Failed => {
                     acp.exit_task_scope(&activity.tool_call_id);
@@ -2767,5 +2870,170 @@ mod gemini_terminal_auth_tests {
         assert_eq!(err.method_type(), Some("terminal"));
         assert_eq!(err.method_id(), Some("x"));
         assert!(err.message().contains("some-agent"));
+    }
+}
+
+#[cfg(test)]
+mod task_scope_depth_tests {
+    //! X.5h.3 — the bridge must push the parent task tool_call_id onto a
+    //! per-session stack so child events can attach `parent_tool_call_id`,
+    //! and it must refuse pushes beyond `MAX_SUBAGENT_DEPTH` so a
+    //! pathological provider can't fork-bomb the timeline by recursively
+    //! dispatching sub-agents.
+    //!
+    //! These tests exercise the pure helpers (`try_push_task_scope`,
+    //! `current_task_parent_in`) so we don't need to spawn an ACP child
+    //! to assert the depth-cap contract. The wire-up between
+    //! `AcpRuntime::enter_task_scope` and `try_push_task_scope` is a
+    //! one-line lock-then-delegate, covered by the existing integration
+    //! suite that drives a real session.
+
+    use super::{
+        current_task_parent_in, try_push_task_scope, EnterTaskScopeResult, MAX_SUBAGENT_DEPTH,
+    };
+
+    /// Mirror of `AcpRuntime::exit_task_scope` for the pure helpers.
+    fn exit_in(stack: &mut Vec<String>, tool_call_id: &str) {
+        stack.retain(|id| id.as_str() != tool_call_id);
+    }
+
+    #[test]
+    fn first_push_returns_pushed_with_depth_one() {
+        let mut stack: Vec<String> = Vec::new();
+        let r = try_push_task_scope(&mut stack, "tc_a");
+        assert_eq!(r, EnterTaskScopeResult::Pushed { new_depth: 1 });
+        assert_eq!(
+            current_task_parent_in(&stack, "").as_deref(),
+            Some("tc_a"),
+            "the only entry on the stack is the parent for any non-self lookup"
+        );
+    }
+
+    #[test]
+    fn duplicate_push_is_idempotent_and_reports_already_present() {
+        let mut stack: Vec<String> = Vec::new();
+        assert_eq!(
+            try_push_task_scope(&mut stack, "tc_a"),
+            EnterTaskScopeResult::Pushed { new_depth: 1 }
+        );
+        assert_eq!(
+            try_push_task_scope(&mut stack, "tc_a"),
+            EnterTaskScopeResult::AlreadyPresent
+        );
+        // Stack tip is still tc_a; idempotent push did not double-stack.
+        assert_eq!(current_task_parent_in(&stack, "").as_deref(), Some("tc_a"));
+        assert_eq!(stack.len(), 1, "idempotent push must not grow the stack");
+    }
+
+    #[test]
+    fn pushes_up_to_max_depth_succeed() {
+        let mut stack: Vec<String> = Vec::new();
+        for i in 0..MAX_SUBAGENT_DEPTH {
+            let id = format!("tc_{i}");
+            assert_eq!(
+                try_push_task_scope(&mut stack, &id),
+                EnterTaskScopeResult::Pushed { new_depth: i + 1 },
+                "push at depth {} should succeed",
+                i + 1
+            );
+        }
+        assert_eq!(stack.len(), MAX_SUBAGENT_DEPTH);
+    }
+
+    #[test]
+    fn push_beyond_max_depth_is_refused() {
+        let mut stack: Vec<String> = Vec::new();
+        for i in 0..MAX_SUBAGENT_DEPTH {
+            assert!(matches!(
+                try_push_task_scope(&mut stack, &format!("tc_{i}")),
+                EnterTaskScopeResult::Pushed { .. }
+            ));
+        }
+        let refused = try_push_task_scope(&mut stack, "tc_overflow");
+        assert_eq!(
+            refused,
+            EnterTaskScopeResult::RefusedDepthExceeded {
+                current_depth: MAX_SUBAGENT_DEPTH,
+                max_depth: MAX_SUBAGENT_DEPTH,
+            }
+        );
+        assert_eq!(
+            stack.len(),
+            MAX_SUBAGENT_DEPTH,
+            "refused push must not grow the stack"
+        );
+    }
+
+    #[test]
+    fn refused_overflow_does_not_appear_in_parent_lookup() {
+        let mut stack: Vec<String> = Vec::new();
+        for i in 0..MAX_SUBAGENT_DEPTH {
+            try_push_task_scope(&mut stack, &format!("tc_{i}"));
+        }
+        try_push_task_scope(&mut stack, "tc_overflow");
+        // The overflow id MUST NOT show up as a parent for any
+        // descendant; descendants instead snapshot the depth-cap
+        // ancestor (the last successfully pushed task).
+        let parent = current_task_parent_in(&stack, "tc_child_of_overflow");
+        let expected = format!("tc_{}", MAX_SUBAGENT_DEPTH - 1);
+        assert_eq!(
+            parent.as_deref(),
+            Some(expected.as_str()),
+            "refused overflow must surface children under the depth-cap ancestor"
+        );
+    }
+
+    #[test]
+    fn exit_pops_anywhere_in_stack_to_tolerate_parallel_completion() {
+        let mut stack: Vec<String> = Vec::new();
+        try_push_task_scope(&mut stack, "tc_a");
+        try_push_task_scope(&mut stack, "tc_b");
+        try_push_task_scope(&mut stack, "tc_c");
+        // Middle task completes first (parallel sub-agents).
+        exit_in(&mut stack, "tc_b");
+        assert_eq!(current_task_parent_in(&stack, "").as_deref(), Some("tc_c"));
+        // After tc_c also completes, tc_a remains.
+        exit_in(&mut stack, "tc_c");
+        assert_eq!(current_task_parent_in(&stack, "").as_deref(), Some("tc_a"));
+    }
+
+    #[test]
+    fn exit_creates_room_for_a_new_push_after_overflow() {
+        let mut stack: Vec<String> = Vec::new();
+        for i in 0..MAX_SUBAGENT_DEPTH {
+            try_push_task_scope(&mut stack, &format!("tc_{i}"));
+        }
+        assert!(matches!(
+            try_push_task_scope(&mut stack, "tc_refused"),
+            EnterTaskScopeResult::RefusedDepthExceeded { .. }
+        ));
+        exit_in(&mut stack, "tc_0");
+        // After freeing a slot, a new push succeeds and lands at the top.
+        assert!(matches!(
+            try_push_task_scope(&mut stack, "tc_after_pop"),
+            EnterTaskScopeResult::Pushed { .. }
+        ));
+        assert_eq!(
+            current_task_parent_in(&stack, "").as_deref(),
+            Some("tc_after_pop")
+        );
+    }
+
+    #[test]
+    fn current_task_parent_skips_self() {
+        let mut stack: Vec<String> = Vec::new();
+        try_push_task_scope(&mut stack, "tc_outer");
+        try_push_task_scope(&mut stack, "tc_inner");
+        // The inner task itself must not parent itself — the helper
+        // walks the stack from tip to root and skips a matching id.
+        assert_eq!(
+            current_task_parent_in(&stack, "tc_inner").as_deref(),
+            Some("tc_outer")
+        );
+        // A non-task descendant snapshots the tip.
+        assert_eq!(
+            current_task_parent_in(&stack, "tc_some_child").as_deref(),
+            Some("tc_inner")
+        );
     }
 }

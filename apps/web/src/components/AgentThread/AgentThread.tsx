@@ -266,10 +266,19 @@ function summarizeToolOutput(rawOutput: unknown): string | null {
   }
 }
 
+// X.5h.3 — default-collapse threshold for the nested sub-agent tree.
+// Top-level (depth 0) and direct children (depth 1) stay open by default
+// so the most common shape (one sub-agent dispatch) is fully visible at
+// a glance. Deeper nesting starts collapsed so a runaway 4-level tree
+// (the bridge's hard cap, see MAX_SUBAGENT_DEPTH on the Rust side)
+// doesn't push the rest of the timeline below the fold.
+const SUBAGENT_DEFAULT_OPEN_DEPTH = 2;
+
 export function ToolCallCard({
   tool,
   onOpenTab,
   childrenByParent,
+  depth = 0,
 }: {
   tool: AgentToolCall;
   onOpenTab?: AgentThreadActions['onOpenTab'];
@@ -278,9 +287,14 @@ export function ToolCallCard({
   // entire tools store. When omitted (e.g. AgentThreadItemRow path), the
   // card renders as before with no nested children.
   childrenByParent?: Map<string, AgentToolCall[]> | undefined;
+  // X.5h.3 — nesting depth for collapse heuristics + the per-node action
+  // row's data attributes. Top-level cards pass 0 (or omit); each
+  // recursive render passes depth + 1.
+  depth?: number;
 }) {
   const primaryPath = tool.locations[0]?.path ?? null;
   const children = childrenByParent?.get(tool.toolCallId) ?? [];
+  const isSubagentTask = Boolean(tool.subagentType);
   const subagentLabel = tool.subagentType
     ? `Sub ${tool.subagentType.charAt(0).toUpperCase()}${tool.subagentType.slice(1)} Agent`
     : null;
@@ -302,8 +316,21 @@ export function ToolCallCard({
     const args = inputSummary ? ` · ${inputSummary}` : '';
     return `${title} (${tool.kind}, ${tool.status})${path}${args} [tool_call_id=${tool.toolCallId}]`;
   }, [tool.title, tool.kind, tool.status, tool.toolCallId, primaryPath, inputSummary]);
+  // X.5h.3 — deep-nested cards start collapsed so a long sub-agent
+  // chain doesn't dominate the timeline. The user can still expand
+  // them manually; depth is also exposed via data-depth so styles
+  // and tests can target it.
+  const startsOpen =
+    (tool.status === 'in_progress' || tool.status === 'completed')
+    && depth < SUBAGENT_DEFAULT_OPEN_DEPTH;
   return (
-    <details className="agent-card tool" aria-label={`Tool call ${tool.toolCallId}`} open={tool.status === 'in_progress' || tool.status === 'completed'}>
+    <details
+      className="agent-card tool"
+      aria-label={`Tool call ${tool.toolCallId}`}
+      open={startsOpen}
+      data-depth={depth}
+      data-testid={depth > 0 ? `agent-tool-card-depth-${depth}` : undefined}
+    >
       <summary className="agent-card-title">
         <span className="agent-tool-name"><strong>{displayTitle}</strong>{tool.title && tool.title !== displayTitle && <span className="agent-card-meta"> · {tool.kind}</span>}</span>
         {subagentLabel && (
@@ -375,6 +402,61 @@ export function ToolCallCard({
           Open ACP Debug
         </button>
       </div>
+      {/* X.5h.3 — per-node sub-agent actions. Surface Cancel / Retry as
+          first-class buttons on each task tool card so the user has a
+          place to act on a specific sub-agent rather than only at the
+          turn level. The actual cancel/retry wiring lives on the bridge
+          side (per-task abort against the OpenCode HTTP API + retry
+          via re-dispatch); the buttons stay disabled with explicit
+          tooltips until that surface lands so the affordance is
+          honest about what is and isn't currently available. The
+          "Copy task description" affordance always works since the
+          description is in `inputSummary`. */}
+      {isSubagentTask && (
+        <div
+          className="agent-card-actions agent-subagent-actions"
+          role="group"
+          aria-label="Sub-agent task actions"
+          data-testid="agent-subagent-actions"
+          data-subagent-type={tool.subagentType ?? ''}
+          data-tool-call-id={tool.toolCallId}
+        >
+          <button
+            type="button"
+            className="agent-action"
+            disabled
+            data-testid="agent-subagent-cancel"
+            title="Per-task cancel is not yet wired through the bridge. Use the turn-level Cancel above to abort the whole turn."
+          >
+            Cancel sub-task
+          </button>
+          <button
+            type="button"
+            className="agent-action"
+            disabled
+            data-testid="agent-subagent-retry"
+            title="Per-task retry is not yet wired through the bridge. Use the turn-level Retry above to resubmit the original prompt."
+          >
+            Retry sub-task
+          </button>
+          <button
+            type="button"
+            className="agent-action"
+            data-testid="agent-subagent-copy-description"
+            disabled={!inputSummary}
+            onClick={() => {
+              if (inputSummary) void navigator.clipboard?.writeText(inputSummary);
+            }}
+            title={
+              inputSummary
+                ? 'Copy the sub-agent task description to the clipboard'
+                : 'No task description was extracted from the tool call input'
+            }
+          >
+            Copy task description
+          </button>
+        </div>
+      )}
       <DiffCard sessionId={tool.sessionId} toolCallId={tool.toolCallId} onOpenTab={onOpenTab} />
       <TerminalCard sessionId={tool.sessionId} toolCallId={tool.toolCallId} onOpenTab={onOpenTab} />
       {children.length > 0 && (
@@ -383,6 +465,7 @@ export function ToolCallCard({
           role="group"
           aria-label={`Sub-agent activity for ${displayTitle}`}
           data-testid="agent-tool-children"
+          data-parent-depth={depth}
         >
           {children.map((child) => (
             <ToolCallCard
@@ -390,6 +473,7 @@ export function ToolCallCard({
               tool={child}
               onOpenTab={onOpenTab}
               childrenByParent={childrenByParent}
+              depth={depth + 1}
             />
           ))}
         </div>
