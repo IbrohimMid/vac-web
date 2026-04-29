@@ -1386,6 +1386,7 @@ pub async fn dispatch_command(
         }
         "registry.sync" => dispatch_registry_sync(&cmd, &state).await,
         "registry.add" => dispatch_registry_add(&cmd, &state).await,
+        "registry.reload" => dispatch_registry_reload(&cmd, &state).await,
         _ => {
             // Forward to engine via session handle.
             let Some(handle) = state.sessions.get(&cmd.session_id) else {
@@ -1920,7 +1921,8 @@ async fn dispatch_registry_sync(
         .source_path()
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf());
-    let result = crate::agent_runtime::sync_registry(source, registry, cache_dir.as_deref()).await;
+    let result =
+        crate::agent_runtime::sync_registry(source, registry.as_ref(), cache_dir.as_deref()).await;
     match result {
         Ok(snap) => {
             let payload = json!({
@@ -2057,6 +2059,64 @@ async fn dispatch_registry_add(
                 ok: false,
                 error: Some(ErrorInfo {
                     code: "registry.append_failed".into(),
+                    message: format!("{err:#}"),
+                }),
+            },
+            vec![],
+        ),
+    }
+}
+
+/// Audit P3 — re-read `agents.toml` from the same source the bridge
+/// originally loaded and atomically swap it in. New `session.create`
+/// calls see the fresh registry on the very next dispatch; in-flight
+/// sessions keep the snapshot they captured. Errors:
+/// - `registry.reload_failed` — load() / parse failure (the previous
+///   registry stays installed).
+async fn dispatch_registry_reload(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    match state.sessions.reload_agents() {
+        Ok(fresh) => {
+            let agents: Vec<serde_json::Value> = fresh
+                .list_enabled()
+                .iter()
+                .map(|a| {
+                    json!({
+                        "id": a.id,
+                        "label": a.label,
+                        "kind": a.kind.as_str(),
+                    })
+                })
+                .collect();
+            let payload = json!({
+                "source": fresh.source().describe(),
+                "defaultAgentId": fresh.default_agent().id,
+                "agents": agents,
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                vec![ServerEvent {
+                    seq: 0,
+                    session_id: String::new(),
+                    event_type: "registry.reloaded".into(),
+                    payload,
+                    v: 1,
+                    ts: chrono::Utc::now().to_rfc3339(),
+                }],
+            )
+        }
+        Err(err) => (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "registry.reload_failed".into(),
                     message: format!("{err:#}"),
                 }),
             },

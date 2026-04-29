@@ -95,7 +95,8 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
     // cockpit can render a provider picker and route `session.create`
     // with an explicit `agent_id` (avoiding the legacy default-agent clobber
     // when multiple ACP fixtures are loaded).
-    let welcome = serde_json::to_string(&WelcomeFrame::with_registry(state.sessions.agents()))
+    let agents_snapshot = state.sessions.agents();
+    let welcome = serde_json::to_string(&WelcomeFrame::with_registry(agents_snapshot.as_ref()))
         .expect("serialize WelcomeFrame");
     if tx.send(Message::Text(welcome.into())).await.is_err() {
         return;

@@ -7,13 +7,19 @@ use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 use tracing::info;
 
 #[derive(Clone)]
 pub struct SessionRegistry {
     inner: Arc<DashMap<String, SessionHandleRef>>,
-    agents: Arc<AgentRuntimeRegistry>,
+    /// Audit P3: wrapped in `RwLock` so `registry.reload` can
+    /// atomically swap in a freshly-parsed `AgentRuntimeRegistry`
+    /// without restarting the bridge. Reads clone the inner `Arc`
+    /// under a brief shared lock, so existing in-flight calls keep
+    /// the snapshot they captured.
+    agents: Arc<RwLock<Arc<AgentRuntimeRegistry>>>,
     /// Optional audit sink. Set once via [`attach_audit`] after AppState
     /// constructs the AuditFacility, so the X.5c.2 tool-activity path
     /// can write `tool.observed` / `tool.updated` / `tool.failed` rows
@@ -43,7 +49,7 @@ impl SessionRegistry {
     ) -> Self {
         let reg = Self {
             inner: Arc::new(DashMap::new()),
-            agents,
+            agents: Arc::new(RwLock::new(agents)),
             audit: Arc::new(OnceLock::new()),
             profile_root,
         };
@@ -59,8 +65,41 @@ impl SessionRegistry {
         let _ = self.audit.set(audit);
     }
 
-    pub fn agents(&self) -> &AgentRuntimeRegistry {
-        &self.agents
+    /// Snapshot the active agent registry as an `Arc`. Cheap: takes a
+    /// shared lock briefly, clones the inner `Arc`, drops the lock.
+    /// Existing snapshots remain valid even after `reload_agents`
+    /// swaps in a fresh registry.
+    pub fn agents(&self) -> Arc<AgentRuntimeRegistry> {
+        Arc::clone(&*self.agents.read().expect("agents RwLock poisoned"))
+    }
+
+    /// Audit P3: re-read the on-disk `agents.toml` and atomically swap
+    /// the live registry. Errors propagate from
+    /// `AgentRuntimeRegistry::load`; on success the previous snapshot
+    /// continues to work for any caller that already cloned it.
+    /// Returns the freshly-installed registry for the caller to inspect
+    /// (e.g. to re-broadcast a welcome frame).
+    pub fn reload_agents(
+        &self,
+    ) -> crate::agent_runtime::AgentRuntimeResult<Arc<AgentRuntimeRegistry>> {
+        let fresh = Arc::new(AgentRuntimeRegistry::load()?);
+        let mut slot = self.agents.write().expect("agents RwLock poisoned");
+        *slot = Arc::clone(&fresh);
+        info!(
+            source = %fresh.source().describe(),
+            default_agent = %fresh.default_agent().id,
+            "agent runtime registry hot-reloaded"
+        );
+        Ok(fresh)
+    }
+
+    /// Test-only hook: install an arbitrary registry without going
+    /// through `AgentRuntimeRegistry::load`. Lets unit tests verify
+    /// snapshot semantics without touching the filesystem.
+    #[cfg(test)]
+    pub fn replace_agents_for_test(&self, fresh: Arc<AgentRuntimeRegistry>) {
+        let mut slot = self.agents.write().expect("agents RwLock poisoned");
+        *slot = fresh;
     }
 
     pub async fn create(
@@ -98,13 +137,13 @@ impl SessionRegistry {
         workflow_id: Option<String>,
     ) -> anyhow::Result<SessionHandleRef> {
         let session_id = format!("sess_{}", ulid::Ulid::new());
+        let snapshot = self.agents();
         let agent = match agent_id {
-            Some(id) => self
-                .agents
+            Some(id) => snapshot
                 .get(id)
                 .cloned()
                 .map_err(|e| anyhow::anyhow!("{e}"))?,
-            None => self.agents.default_agent().clone(),
+            None => snapshot.default_agent().clone(),
         };
         // Lower-level guard: even if a future caller bypasses the
         // translator's `agent.disabled` ack, the registry itself must
@@ -171,5 +210,88 @@ impl SessionRegistry {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_runtime::{AgentsConfig, ConfigSource};
+    use std::path::Path;
+
+    fn registry_from(toml_src: &str) -> Arc<AgentRuntimeRegistry> {
+        let cfg = AgentsConfig::from_toml_str(toml_src, Path::new("<test>")).unwrap();
+        Arc::new(AgentRuntimeRegistry::from_config(
+            cfg,
+            ConfigSource::Embedded,
+        ))
+    }
+
+    /// Audit P3: snapshots taken before `replace_agents_for_test` keep
+    /// pointing at the original registry, while a fresh `agents()` call
+    /// returns the swapped-in one.
+    #[tokio::test]
+    async fn agents_snapshot_outlives_swap() {
+        let initial = registry_from(
+            r#"
+            default_agent_id = "alpha"
+            [agents.alpha]
+            label = "Alpha"
+            kind = "mock"
+            command = "/bin/true"
+            "#,
+        );
+        let registry = SessionRegistry::with_runtime(Arc::clone(&initial));
+
+        let snap_before = registry.agents();
+        assert_eq!(snap_before.default_agent().id, "alpha");
+
+        let updated = registry_from(
+            r#"
+            default_agent_id = "beta"
+            [agents.beta]
+            label = "Beta"
+            kind = "mock"
+            command = "/bin/true"
+            "#,
+        );
+        registry.replace_agents_for_test(Arc::clone(&updated));
+
+        // Snapshot taken before the swap still resolves the original.
+        assert_eq!(snap_before.default_agent().id, "alpha");
+        // Fresh snapshot reflects the swap.
+        let snap_after = registry.agents();
+        assert_eq!(snap_after.default_agent().id, "beta");
+    }
+
+    /// Audit P3: clones of `SessionRegistry` share the same `RwLock`,
+    /// so a swap on one clone is visible to the other (matches how
+    /// `AppState` hands the registry around).
+    #[tokio::test]
+    async fn agents_swap_is_visible_through_clones() {
+        let initial = registry_from(
+            r#"
+            default_agent_id = "alpha"
+            [agents.alpha]
+            label = "Alpha"
+            kind = "mock"
+            command = "/bin/true"
+            "#,
+        );
+        let registry = SessionRegistry::with_runtime(Arc::clone(&initial));
+        let cloned = registry.clone();
+
+        let updated = registry_from(
+            r#"
+            default_agent_id = "gamma"
+            [agents.gamma]
+            label = "Gamma"
+            kind = "mock"
+            command = "/bin/true"
+            "#,
+        );
+        registry.replace_agents_for_test(updated);
+
+        assert_eq!(cloned.agents().default_agent().id, "gamma");
     }
 }
