@@ -6,19 +6,43 @@ use profile_core::enforce::{enforce_shell, Decision};
 use profile_core::profile::CapabilityProfile;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
 
 const MAX_OUTPUT_READ_BYTES: usize = 64 * 1024;
 
+/// Per-terminal state shared between the wait/kill task and the
+/// `terminal/output` / `terminal/wait_for_exit` / `terminal/kill`
+/// handlers.
+///
+/// Audit Sprint 2 P1 fix: previously `child` lived in `Mutex<Option<Child>>`
+/// but was always `None` because the wait task owned the real `Child`.
+/// `kill` therefore returned `success` without actually killing the
+/// process. Now a single owner-task holds the `Child` and listens on
+/// `kill_rx` for kill requests, calling `Child::start_kill()` from
+/// inside the same task. Handlers signal kill via `kill_tx`.
 pub struct TerminalHandle {
-    child: Mutex<Option<tokio::process::Child>>,
+    /// Send `()` to request the owner-task SIGKILL the child. The
+    /// channel is unbounded but we only ever push at most a handful of
+    /// kill signals per terminal, so this is fine.
+    kill_tx: mpsc::UnboundedSender<()>,
     stdout_buf: Arc<Mutex<Vec<u8>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
     exit_notify: Arc<tokio::sync::Notify>,
+    /// Set to `true` once the owner-task has observed a kill signal.
+    /// Used so `wait_for_exit` can surface a sentinel non-zero exit
+    /// code (137 — SIGKILL semantics) when the OS doesn't report a
+    /// signal-derived code.
+    // Held only so the wait task's Arc clone keeps the flag
+    // alive for the lifetime of the handle. Read from the wait
+    // task only; clippy's dead_code lint flags struct-side reads
+    // separately.
+    #[allow(dead_code)]
+    killed: Arc<AtomicBool>,
 }
 
 /// Context for terminal request handling.
@@ -120,6 +144,7 @@ pub async fn handle_terminal_create(
     let stdout_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_notify = Arc::new(tokio::sync::Notify::new());
+    let killed = Arc::new(AtomicBool::new(false));
 
     let buf_clone = Arc::clone(&stdout_buf);
     if let Some(mut out) = stdout {
@@ -161,62 +186,89 @@ pub async fn handle_terminal_create(
         });
     }
 
+    let (kill_tx, mut kill_rx) = mpsc::unbounded_channel::<()>();
     let exit_code_clone = Arc::clone(&exit_code);
     let exit_notify_clone = Arc::clone(&exit_notify);
-    let child_mutex = Mutex::new(Some(child));
+    let killed_clone = Arc::clone(&killed);
 
-    {
-        let child_ref = Arc::new(child_mutex);
-        let child_ref2 = Arc::clone(&child_ref);
-        tokio::spawn(async move {
-            let mut guard = child_ref2.lock().await;
-            if let Some(ref mut c) = *guard {
-                match c.wait().await {
-                    Ok(status) => {
-                        *exit_code_clone.lock().await = status.code();
+    // Single owner-task: holds the `Child`, polls `wait()`, and handles
+    // kill signals via `tokio::select!`. Dropping the half-completed
+    // `wait()` future on a kill branch is safe — the OS-level child
+    // state lives on `Child` itself, so we just re-await on the next
+    // loop iteration after `start_kill()`.
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                res = child.wait() => {
+                    match res {
+                        Ok(status) => {
+                            let raw = status.code();
+                            let code = match raw {
+                                Some(c) => c,
+                                None => {
+                                    // Killed by signal — surface 137
+                                    // (SIGKILL convention) when we
+                                    // requested it, otherwise -1.
+                                    if killed_clone.load(Ordering::SeqCst) { 137 } else { -1 }
+                                }
+                            };
+                            *exit_code_clone.lock().await = Some(code);
+                        }
+                        Err(e) => {
+                            warn!(error=%e, "terminal child wait failed");
+                            *exit_code_clone.lock().await = Some(-1);
+                        }
                     }
-                    Err(e) => {
-                        warn!(error=%e, "terminal child wait failed");
+                    exit_notify_clone.notify_waiters();
+                    break;
+                }
+                Some(()) = kill_rx.recv() => {
+                    killed_clone.store(true, Ordering::SeqCst);
+                    if let Err(e) = child.start_kill() {
+                        warn!(error=%e, "terminal start_kill failed");
                     }
+                    // Loop continues; next iteration awaits wait()
+                    // which should return promptly now that SIGKILL
+                    // has been delivered.
                 }
             }
-            exit_notify_clone.notify_waiters();
-        });
-
-        let terminal_id = ulid::Ulid::new().to_string();
-
-        let handle = Arc::new(TerminalHandle {
-            child: Mutex::new(None), // child is owned by wait task above
-            stdout_buf,
-            exit_code,
-            exit_notify,
-        });
-
-        ctx.terminals.insert(terminal_id.clone(), handle);
-
-        if let Some(audit) = &ctx.audit {
-            audit.log(
-                &ctx.session_id,
-                "terminal.create",
-                bridge_core::AuditSeverity::Info,
-                json!({
-                    "agent_id": ctx.agent_id,
-                    "terminal_id": terminal_id,
-                    "command": command,
-                    "args": args,
-                }),
-            );
         }
+    });
 
-        info!(
-            session = %ctx.session_id,
-            terminal_id = %terminal_id,
-            command = command,
-            "terminal/create served"
+    let terminal_id = ulid::Ulid::new().to_string();
+
+    let handle = Arc::new(TerminalHandle {
+        kill_tx,
+        stdout_buf,
+        exit_code,
+        exit_notify,
+        killed,
+    });
+
+    ctx.terminals.insert(terminal_id.clone(), handle);
+
+    if let Some(audit) = &ctx.audit {
+        audit.log(
+            &ctx.session_id,
+            "terminal.create",
+            bridge_core::AuditSeverity::Info,
+            json!({
+                "agent_id": ctx.agent_id,
+                "terminal_id": terminal_id,
+                "command": command,
+                "args": args,
+            }),
         );
-
-        Ok(json!({ "terminalId": terminal_id }))
     }
+
+    info!(
+        session = %ctx.session_id,
+        terminal_id = %terminal_id,
+        command = command,
+        "terminal/create served"
+    );
+
+    Ok(json!({ "terminalId": terminal_id }))
 }
 
 pub async fn handle_terminal_output(
@@ -260,6 +312,15 @@ pub async fn handle_terminal_wait_for_exit(
         .and_then(|v| v.as_u64())
         .unwrap_or(30_000);
 
+    // Fast path: if the owner-task already recorded an exit code, skip
+    // the notify wait — `Notify::notify_waiters()` only wakes current
+    // waiters, so a late `wait_for_exit` could otherwise hang for the
+    // full timeout against an already-finished child.
+    if handle.exit_code.lock().await.is_some() {
+        let code = handle.exit_code.lock().await;
+        return Ok(json!({ "exitCode": code.unwrap_or(-1) }));
+    }
+
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms),
         handle.exit_notify.notified(),
@@ -289,10 +350,11 @@ pub async fn handle_terminal_kill(
         .map(|r| Arc::clone(r.value()))
         .ok_or_else(|| TerminalError::NotFound(terminal_id.to_string()))?;
 
-    let mut child_guard = handle.child.lock().await;
-    if let Some(ref mut child) = *child_guard {
-        let _ = child.kill().await;
-    }
+    // Audit-Sprint-2 P1 fix: signal the owner-task to actually SIGKILL
+    // the child. If `send` fails the owner-task has already exited,
+    // which means the child has already terminated; treat that as
+    // success.
+    let _ = handle.kill_tx.send(());
 
     if let Some(audit) = &ctx.audit {
         audit.log(
@@ -399,21 +461,22 @@ mod tests {
         }
     }
 
+    fn allow(bin: &str) -> ShellAllowEntry {
+        ShellAllowEntry {
+            bin: bin.into(),
+            args_pattern: None,
+            max_args: 10,
+            cwd_scope: None,
+            timeout_ms: 60_000,
+            env_allowlist: vec![],
+            output_cap_bytes: 2_097_152,
+        }
+    }
+
     #[tokio::test]
     async fn create_allowed_command_succeeds() {
         let dir = TempDir::new().unwrap();
-        let ctx = test_ctx(
-            dir.path(),
-            vec![ShellAllowEntry {
-                bin: "echo".into(),
-                args_pattern: None,
-                max_args: 10,
-                cwd_scope: None,
-                timeout_ms: 15000,
-                env_allowlist: vec![],
-                output_cap_bytes: 2_097_152,
-            }],
-        );
+        let ctx = test_ctx(dir.path(), vec![allow("echo")]);
         let params = json!({ "command": "echo", "args": ["hello"] });
         let result = handle_terminal_create(&ctx, &params).await.unwrap();
         assert!(result.get("terminalId").is_some());
@@ -440,18 +503,7 @@ mod tests {
     #[tokio::test]
     async fn release_removes_terminal() {
         let dir = TempDir::new().unwrap();
-        let ctx = test_ctx(
-            dir.path(),
-            vec![ShellAllowEntry {
-                bin: "echo".into(),
-                args_pattern: None,
-                max_args: 10,
-                cwd_scope: None,
-                timeout_ms: 15000,
-                env_allowlist: vec![],
-                output_cap_bytes: 2_097_152,
-            }],
-        );
+        let ctx = test_ctx(dir.path(), vec![allow("echo")]);
         let params = json!({ "command": "echo", "args": ["hi"] });
         let result = handle_terminal_create(&ctx, &params).await.unwrap();
         let tid = result["terminalId"].as_str().unwrap();
@@ -466,5 +518,44 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, TerminalError::NotFound(_)));
+    }
+
+    /// Audit Sprint 2 P1 regression test: spawn a long-running process,
+    /// kill it, and confirm `wait_for_exit` returns promptly (well
+    /// before the natural sleep duration) with a non-zero exit code.
+    /// Before the fix, kill was a no-op and this test would have
+    /// timed out at ~30s.
+    #[tokio::test]
+    async fn create_kill_long_running_process_completes_promptly() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(dir.path(), vec![allow("sleep")]);
+        let create_params = json!({ "command": "sleep", "args": ["30"] });
+        let created = handle_terminal_create(&ctx, &create_params).await.unwrap();
+        let tid = created["terminalId"].as_str().unwrap().to_string();
+
+        // Give the child a moment to actually start before we kill it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let kill_params = json!({ "terminalId": tid });
+        let kill_result = handle_terminal_kill(&ctx, &kill_params).await.unwrap();
+        assert_eq!(kill_result["success"], true);
+
+        // wait_for_exit must complete in well under the sleep 30s
+        // duration. Allow generous 5s slack for slow CI hosts.
+        let wait_params = json!({ "terminalId": tid, "timeoutMs": 5_000 });
+        let started = std::time::Instant::now();
+        let wait_result = handle_terminal_wait_for_exit(&ctx, &wait_params)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "wait_for_exit took {elapsed:?}; kill is likely a no-op"
+        );
+        let exit_code = wait_result["exitCode"].as_i64().unwrap();
+        assert_ne!(
+            exit_code, 0,
+            "killed sleep should not exit cleanly, got exit_code={exit_code}"
+        );
     }
 }

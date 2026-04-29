@@ -112,13 +112,20 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
           </span>
         )}
         {capSummary.loadSession && (
+          // Audit Sprint 3 P1/P2 fix: the agent advertises
+          // `session/load`, but the bridge does NOT yet implement
+          // the outbound ACP `session/load` call — resume still
+          // goes through the bridge's replay buffer. Avoid
+          // overpromising here so operators don't think the chip
+          // is actionable. The `muted` tone + explicit "advertised"
+          // label keeps it informational only.
           <span
-            className="badge ok"
+            className="badge muted"
             style={badgeStyle}
             data-testid="cap-loadsession-badge"
-            title="Agent advertises session/load (resume)"
+            title="Agent advertises session/load. Bridge resume currently uses the replay buffer; ACP-native session/load is not wired yet."
           >
-            resume
+            resume (advertised)
           </span>
         )}
         {capSummary.image && (

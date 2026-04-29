@@ -1885,8 +1885,46 @@ impl SessionHandle {
                             }
                         },
                         "fs/write_text_file" => match handle_fs_write(&fs_ctx, &req.params).await {
-                            Ok((result, _meta)) => {
+                            Ok((result, meta)) => {
                                 let _ = fs_acp.client.respond_result(req.id, result);
+                                // Audit Sprint 1 P1 fix: surface ACP
+                                // `fs/write_text_file` mutations to the
+                                // Review/changeset surface so the
+                                // operator sees the diff immediately.
+                                // The dispatcher previously discarded
+                                // `meta` and the cockpit had no idea a
+                                // write happened.
+                                if let Some(meta) = meta {
+                                    let ts = chrono::Utc::now().to_rfc3339();
+                                    let tool_call_id =
+                                        format!("acp-fs-write-{}", ulid::Ulid::new());
+                                    let review_payload = serde_json::json!({
+                                        "tool_call_id": tool_call_id,
+                                        "status": "completed",
+                                        "locations": [{
+                                            "path": meta.path,
+                                        }],
+                                        "diffs": [{
+                                            "path": meta.path,
+                                            "old_text": meta.old_content,
+                                            "new_text": meta.new_content,
+                                        }],
+                                        "raw_input_redacted": {},
+                                        "approved_by_approval_id": serde_json::Value::Null,
+                                        "agent_id": fs_ctx.agent_id.clone(),
+                                        "agent_kind": "acp",
+                                        "source_event_type": "acp.fs.write_text_file",
+                                    });
+                                    let review_event = ServerEvent {
+                                        seq: 0,
+                                        session_id: fs_handle.id.clone(),
+                                        event_type: "review.changeset_updated".into(),
+                                        payload: review_payload,
+                                        v: 1,
+                                        ts,
+                                    };
+                                    emit_event(&fs_handle, review_event).await;
+                                }
                             }
                             Err(e) => {
                                 let _ = fs_acp.client.respond_error(

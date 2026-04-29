@@ -1,10 +1,16 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { authMethodSummary } from '../../domain/sessions/auth';
 import { activateSessionFromReady } from '../../domain/sessions/activation';
 import { useSession } from '../../stores/session';
 import { ReauthAction } from '../cockpit/ReauthAction';
 import type { AvailableAgent, TransportHandle } from '../../transport';
-import { RegistryBrowser } from './RegistryBrowser';
+// Audit P2 fix: RegistryBrowser is opened on demand from a button
+// click, so we shouldn't pay its bundle cost in the eager main
+// chunk. `React.lazy` splits it into its own async chunk that
+// loads the first time the operator clicks "Browse registry".
+const RegistryBrowser = lazy(() =>
+  import('./RegistryBrowser').then((m) => ({ default: m.RegistryBrowser })),
+);
 
 /// Session-less commands (like session.create) are routed with a placeholder
 /// session_id that bridge ignores; the real session_id arrives via
@@ -259,10 +265,12 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
         </button>
       </p>
       {registryOpen && (
-        <RegistryBrowser
-          transport={transport}
-          onClose={() => setRegistryOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <RegistryBrowser
+            transport={transport}
+            onClose={() => setRegistryOpen(false)}
+          />
+        </Suspense>
       )}
       <label style={{ display: 'block', marginBottom: 8 }}>
         Project root:

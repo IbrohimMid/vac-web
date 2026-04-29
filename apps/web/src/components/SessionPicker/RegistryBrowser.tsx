@@ -12,7 +12,7 @@
 // `AgentRuntimeRegistry` which has implications for live ACP sessions
 // and is intentionally out of Sprint 5 scope.)
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { TransportHandle } from '../../transport';
 
 const REGISTRY_PLACEHOLDER_SESSION = 'sess_pending_registry';
@@ -152,7 +152,11 @@ export function RegistryBrowser({
     [entries],
   );
 
-  const sync = async () => {
+  // Audit fix: wrap `sync` in `useCallback` so we can list it as a
+  // dependency of the auto-sync `useEffect` without re-syncing every
+  // render. Stable across renders because `transport` is the only
+  // captured value and parents pass a stable handle.
+  const sync = useCallback(async () => {
     setSyncing(true);
     setError(null);
     setInfo(null);
@@ -182,14 +186,14 @@ export function RegistryBrowser({
     } finally {
       setSyncing(false);
     }
-  };
+  }, [transport]);
 
   // Auto-sync on first open so the operator doesn't have to click
-  // twice. Empty deps array — we want this exactly once per mount.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // twice. `sync` is stable via useCallback so this still fires once
+  // per mount in practice.
   useEffect(() => {
     void sync();
-  }, []);
+  }, [sync]);
 
   const addEntry = async (entry: RegistryAgentEntry) => {
     setAddingId(entry.id);
