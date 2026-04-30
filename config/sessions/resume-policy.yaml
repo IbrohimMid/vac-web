@@ -1,0 +1,19 @@
+# sessions/resume-policy.yaml — default resume policy (placeholder)
+# Real schema: schema/config/sessions.resume-policy.schema.json (TBD)
+
+version: 0
+# Default mode for client-initiated session.resume calls.
+# One of: replay_only | acp_load | native_or_replay.
+default_mode: replay_only
+
+retention:
+  # How long to keep persisted session metadata + events.
+  # ISO-8601 duration; null = indefinite.
+  ttl: null
+  # Maximum events per session before older events are evicted.
+  # null = no cap.
+  max_events: null
+
+redaction:
+  # standard | strict
+  mode: standard

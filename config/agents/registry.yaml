@@ -1,0 +1,12 @@
+# agents/registry.yaml — declarative agent registry (placeholder)
+# Real schema: schema/config/agents.registry.schema.json (TBD)
+
+version: 0
+agents: []
+# Example shape:
+# agents:
+#   - id: claude-code
+#     kind: claude_code
+#     command: ["claude-code", "--acp"]
+#     env: []
+#     capabilities_profile: claude-code-default

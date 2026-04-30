@@ -1,0 +1,12 @@
+# vac.yaml — top-level control plane manifest (placeholder)
+# Phase 1 skeleton: see config/README.md and schema/config/README.md.
+# Real schema will be defined in schema/config/vac.schema.json.
+
+version: 0
+# imports:
+#   - agents/registry.yaml
+#   - profiles/
+#   - workflows/
+#   - gates/
+#   - mcp/servers.yaml
+#   - sessions/resume-policy.yaml

@@ -1,0 +1,11 @@
+# mcp/servers.yaml — declarative MCP server registry (placeholder)
+# Real schema: schema/config/mcp.servers.schema.json (TBD)
+
+version: 0
+servers: []
+# Example shape:
+# servers:
+#   - id: vacweb
+#     transport: streamable_http
+#     url: https://example.invalid/mcp
+#     auth: { type: none }
