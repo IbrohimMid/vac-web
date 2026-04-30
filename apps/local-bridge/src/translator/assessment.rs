@@ -991,11 +991,70 @@ fn extract_json_slice(text: &str) -> Option<&str> {
     }
 }
 
-fn parse_acp_candidate_payload(text: &str) -> Result<Vec<Value>, String> {
-    match parse_acp_candidate_payload_full(text) {
-        Ok((candidates, _envelope_rejection)) => Ok(candidates),
-        Err(detail) => Err(detail),
-    }
+/// Maximum length of the `sample` field on `assessment.worker_output_rejected`
+/// events. Keep this small enough to fit comfortably in a UI banner and
+/// short enough that operators are nudged toward the Replay action for the
+/// full transcript instead of trusting the truncated copy.
+const WORKER_OUTPUT_SAMPLE_LIMIT: usize = 500;
+
+/// Redact obvious secrets out of a worker-output sample, then truncate to
+/// `WORKER_OUTPUT_SAMPLE_LIMIT` chars. Mirrors the token shapes used by
+/// `session::persistence::redact` so a sample published in the live event
+/// stream cannot leak credentials that the persistence redactor would
+/// have stripped from the JSONL log.
+fn redact_worker_sample(transcript: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static TOKEN_RE: OnceLock<Regex> = OnceLock::new();
+    let token_re = TOKEN_RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(bearer\s+|sk-|ghp_|xoxb-|xoxa-|xoxp-|aws[a-z0-9]*=)[A-Za-z0-9\-_=]{8,}")
+            .expect("worker sample redaction regex must compile")
+    });
+
+    let scrubbed = token_re.replace_all(transcript, "[REDACTED]");
+    let truncated: String = scrubbed.chars().take(WORKER_OUTPUT_SAMPLE_LIMIT).collect();
+    truncated
+}
+
+/// Emit `assessment.worker_output_rejected` on the controller session.
+/// Carries the full provenance triplet (worker_session_id, agent_id,
+/// agent_kind) so downstream consumers can correlate the rejection with
+/// the worker that produced it. The caller is expected to follow this
+/// with a terminal failure so the run also surfaces an
+/// `assessment.failed { reason: "invalid_worker_output" }`.
+#[allow(clippy::too_many_arguments)]
+async fn emit_worker_output_rejected(
+    controller: &SessionHandleRef,
+    run_id: &str,
+    worker: &SessionHandleRef,
+    pass: usize,
+    max_passes: usize,
+    code: &str,
+    detail: &str,
+    path: Option<&str>,
+    transcript: &str,
+) {
+    let sample = redact_worker_sample(transcript);
+    emit_controller_event(
+        controller,
+        "assessment.worker_output_rejected",
+        json!({
+            "run_id": run_id,
+            "worker_session_id": worker.id,
+            "agent_id": worker.agent_id,
+            "agent_kind": worker.agent_kind.as_str(),
+            "agent_role": "assessment-worker",
+            "reason": "schema_invalid",
+            "code": code,
+            "detail": detail,
+            "path": path,
+            "pass": pass,
+            "max_passes": max_passes,
+            "sample": sample,
+        }),
+    )
+    .await;
 }
 
 /// Like [`parse_acp_candidate_payload`] but also surfaces a structured
@@ -1948,8 +2007,50 @@ async fn run_assessment_task(
                     }
                 }
 
-                let candidates = parse_acp_candidate_payload(&transcript)
-                    .map_err(|detail| AssessmentFailure::failed("invalid_worker_output", detail))?;
+                let candidates = match parse_acp_candidate_payload_full(&transcript) {
+                    Ok((candidates, None)) => candidates,
+                    Ok((_, Some(rejection))) => {
+                        // The worker emitted a recognisable v1 envelope but it
+                        // failed validation. The contract is broken even if a
+                        // few candidates would have parsed via the heuristic;
+                        // emit assessment.worker_output_rejected so operators
+                        // can see the structured reason, then fail the run.
+                        emit_worker_output_rejected(
+                            controller,
+                            run_id,
+                            worker,
+                            pass,
+                            max_passes,
+                            &rejection.code,
+                            &rejection.message,
+                            rejection.path.as_deref(),
+                            &transcript,
+                        )
+                        .await;
+                        return Err(AssessmentFailure::failed(
+                            "invalid_worker_output",
+                            rejection.message.clone(),
+                        ));
+                    }
+                    Err(detail) => {
+                        // Worker output didn't even parse as JSON. Surface
+                        // it under the same channel so the cockpit gets a
+                        // single "worker output rejected" treatment.
+                        emit_worker_output_rejected(
+                            controller,
+                            run_id,
+                            worker,
+                            pass,
+                            max_passes,
+                            "unparseable",
+                            &detail,
+                            None,
+                            &transcript,
+                        )
+                        .await;
+                        return Err(AssessmentFailure::failed("invalid_worker_output", detail));
+                    }
+                };
                 let mut tracker = AssessmentValidationTracker::default();
                 let mut new_findings = 0usize;
                 for candidate in candidates {
