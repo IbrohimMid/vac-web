@@ -1,0 +1,46 @@
+{
+	"runs": [
+		{
+			"run_id": "run-001",
+			"swarm": "rtd",
+			"status": "completed",
+			"started_at": "2026-04-30T22:00:00Z",
+			"completed_at": "2026-04-30T22:01:30Z",
+			"verdict": "pass",
+			"findings": [
+				{
+					"finding_id": "fnd-001",
+					"title": "All RTD checks green",
+					"severity": "info",
+					"category": "release"
+				}
+			]
+		},
+		{
+			"run_id": "run-002",
+			"swarm": "security",
+			"status": "completed",
+			"started_at": "2026-04-30T23:30:00Z",
+			"completed_at": "2026-04-30T23:32:00Z",
+			"verdict": "warn",
+			"findings": [
+				{
+					"finding_id": "fnd-002",
+					"title": "TLS missing on staging endpoint",
+					"severity": "high",
+					"category": "security"
+				}
+			]
+		}
+	],
+	"sweeps": [
+		{
+			"sweep_id": "sw-001",
+			"families": ["rtd", "security"],
+			"status": "completed",
+			"started_at": "2026-04-30T22:00:00Z",
+			"completed_at": "2026-04-30T23:32:00Z",
+			"run_ids": ["run-001", "run-002"]
+		}
+	]
+}

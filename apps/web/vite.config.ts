@@ -1,8 +1,15 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // Vitest picks up its config from the same file; exclude the Playwright
+  // e2e suite so `pnpm -C apps/web test` (which is `vitest run`) does not
+  // try to load specs that import @playwright/test.
+  test: {
+    exclude: ['node_modules', 'dist', 'tests/e2e/**'],
+  },
   server: {
     port: 5173,
     strictPort: true,

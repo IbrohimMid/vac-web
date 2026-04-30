@@ -10,7 +10,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx",
-    "size": "size-limit"
+    "size": "size-limit",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium"
   },
   "size-limit": [
     {
@@ -69,6 +71,9 @@
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
-    "vitest": "^2.1.4"
+    "vitest": "^2.1.4",
+    "@playwright/test": "^1.49.0",
+    "@types/ws": "^8.5.13",
+    "ws": "^8.18.0"
   }
 }
