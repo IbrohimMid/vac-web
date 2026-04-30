@@ -17,6 +17,7 @@ use ulid::Ulid;
 
 mod assessment;
 mod assessment_query;
+pub mod assessment_schema;
 
 fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
     let mut payload = json!({

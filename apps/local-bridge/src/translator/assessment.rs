@@ -982,6 +982,27 @@ fn extract_json_slice(text: &str) -> Option<&str> {
 }
 
 fn parse_acp_candidate_payload(text: &str) -> Result<Vec<Value>, String> {
+    match parse_acp_candidate_payload_full(text) {
+        Ok((candidates, _envelope_rejection)) => Ok(candidates),
+        Err(detail) => Err(detail),
+    }
+}
+
+/// Like [`parse_acp_candidate_payload`] but also surfaces a structured
+/// envelope rejection when the worker emitted a recognisable v1 envelope
+/// that failed validation. The legacy heuristic is still consulted as a
+/// fallback so plain JSON-array workers keep flowing.
+fn parse_acp_candidate_payload_full(
+    text: &str,
+) -> Result<
+    (
+        Vec<Value>,
+        Option<crate::translator::assessment_schema::WorkerOutputRejection>,
+    ),
+    String,
+> {
+    use crate::translator::assessment_schema::{validate_worker_output, EnvelopeOutcome};
+
     let trimmed = text.trim();
     let candidates = [trimmed, extract_json_slice(trimmed).unwrap_or(trimmed)];
     for candidate in candidates {
@@ -989,7 +1010,19 @@ fn parse_acp_candidate_payload(text: &str) -> Result<Vec<Value>, String> {
             continue;
         }
         if let Ok(value) = serde_json::from_str::<Value>(candidate) {
-            return Ok(candidate_payloads_from_worker_event(&value));
+            return match validate_worker_output(&value) {
+                EnvelopeOutcome::Recognised(Ok(env)) => Ok((env.candidates, None)),
+                EnvelopeOutcome::Recognised(Err(rej)) => {
+                    // Fall back to the heuristic so we don't drop
+                    // already-valid findings just because the envelope
+                    // metadata was wrong, but bubble the rejection up so
+                    // the caller can emit assessment.worker_output_rejected.
+                    Ok((candidate_payloads_from_worker_event(&value), Some(rej)))
+                }
+                EnvelopeOutcome::NotEnvelope => {
+                    Ok((candidate_payloads_from_worker_event(&value), None))
+                }
+            };
         }
     }
     Err("worker output did not contain parseable JSON".to_string())
