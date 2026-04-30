@@ -1,11 +1,21 @@
 use crate::server::AppStateHandle;
 use crate::session::persistence::PersistedServerEvent;
+use crate::storage::AssessmentIndex;
 use crate::translator::emit_session_event_live;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// Pull the optional shared `AssessmentIndex` handle off the bridge state.
+/// Returning `None` means the bridge booted without a SQLite cache (e.g.
+/// because opening `assessment_index.db` failed) — every dispatcher must
+/// gracefully fall back to the JSONL event-log path in that case.
+fn index_handle(state: &AppStateHandle) -> Option<Arc<AssessmentIndex>> {
+    state.assessment_index.clone()
+}
 
 #[derive(Default)]
 struct AssessmentSnapshot {
@@ -20,6 +30,49 @@ pub async fn dispatch_assessment_list_runs(
     cmd: &ClientCommand,
     state: &AppStateHandle,
 ) -> (ServerAck, Vec<ServerEvent>) {
+    // Fast-path: if the SQLite index is available and has rows for this
+    // session, serve list_runs entirely from it. The index does not store
+    // evidence/event-counts, but list_runs only needs run / sweep summaries
+    // (id, swarm, status, started_at, completed_at, verdict) — all of which
+    // are columns on the row, so we can mark the response as
+    // `index_complete: true` here.
+    if let Some(index) = index_handle(state) {
+        let swarm_filter = cmd
+            .payload
+            .get("swarm")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let limit = cmd
+            .payload
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|v| v as usize);
+        match try_serve_list_runs_from_index(
+            cmd,
+            state,
+            index.as_ref(),
+            swarm_filter.as_deref(),
+            limit,
+        )
+        .await
+        {
+            IndexAttempt::Hit => {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: true,
+                        error: None,
+                    },
+                    vec![],
+                );
+            }
+            IndexAttempt::Miss(_) => {
+                // fall through to event_log path with the existing
+                // `source: "event_log"` marker on the response.
+            }
+        }
+    }
+
     let Some(persistence) = state.persistence.as_ref() else {
         return ack_error(
             &cmd.id,
@@ -131,7 +184,9 @@ pub async fn dispatch_assessment_list_runs(
                 &cmd.session_id,
                 "assessment.runs_listed",
                 json!({
-                    "source": "persistence",
+                    "source": "event_log",
+                    "index_complete": false,
+                    "fallback_reason": "index_unavailable",
                     "swarm": swarm_filter,
                     "limit": limit,
                     "active_run_id": active_run_id,
@@ -226,7 +281,9 @@ pub async fn dispatch_assessment_diff(
                 &cmd.session_id,
                 "assessment.diffed",
                 json!({
-                    "source": "persistence",
+                    "source": "event_log",
+                    "index_complete": false,
+                    "fallback_reason": "index_unavailable",
                     "base_run_id": base_run_id,
                     "next_run_id": next_run_id,
                     "base_run": base,
@@ -293,6 +350,9 @@ pub async fn dispatch_assessment_fetch_evidence_preview(
                 &cmd.session_id,
                 "assessment.evidence_preview",
                 json!({
+                    "source": "event_log",
+                    "index_complete": false,
+                    "fallback_reason": "evidence_not_indexed",
                     "id": evidence_id,
                     "preview": preview,
                 }),
@@ -353,8 +413,18 @@ async fn dispatch_assessment_report(
     let event_count = snapshot.run_event_counts.get(run_id).copied().unwrap_or(0);
 
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
+        // Reports/replays are always served from the JSONL event log because
+        // the index intentionally does not store evidence rows or per-run
+        // event counts (those are derived from the canonical event stream).
+        let fallback_reason = if event_type == "assessment.replayed" {
+            "replay_uses_canonical_event_log"
+        } else {
+            "report_requires_event_log"
+        };
         let payload = json!({
-            "source": "persistence",
+            "source": "event_log",
+            "index_complete": false,
+            "fallback_reason": fallback_reason,
             "run_id": run_id,
             "run": run,
             "findings": findings,
@@ -374,7 +444,9 @@ async fn dispatch_assessment_report(
                     &cmd.session_id,
                     "assessment.report_fetched",
                     json!({
-                        "source": "persistence",
+                        "source": "event_log",
+                        "index_complete": false,
+                        "fallback_reason": "report_requires_event_log",
                         "run_id": run_id,
                         "run": run,
                         "findings": findings,
@@ -1002,6 +1074,120 @@ fn build_evidence_preview(
 
 fn strip_file_uri(uri: &str) -> PathBuf {
     Path::new(uri.strip_prefix("file://").unwrap_or(uri)).to_path_buf()
+}
+
+/// Outcome of an attempt to serve a query from the SQLite index.
+#[derive(Debug)]
+enum IndexAttempt {
+    /// Index served the response and the dispatcher has already emitted
+    /// the corresponding `assessment.*` event. The dispatcher should
+    /// short-circuit and ack-ok.
+    Hit,
+    /// Index could not (or chose not to) serve the response. The string
+    /// argument carries a short, low-cardinality reason suitable for the
+    /// `fallback_reason` field on the JSONL response.
+    #[allow(dead_code)]
+    Miss(&'static str),
+}
+
+/// Try to answer `assessment.runs_listed` entirely from the SQLite index.
+/// Emits the response event and returns `IndexAttempt::Hit` on success.
+/// Returns `IndexAttempt::Miss(reason)` when the dispatcher must fall back
+/// to the JSONL event-log scan.
+async fn try_serve_list_runs_from_index(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+    index: &AssessmentIndex,
+    swarm_filter: Option<&str>,
+    limit: Option<usize>,
+) -> IndexAttempt {
+    let effective_limit = limit.unwrap_or(0);
+    let rows = match index.list_runs(Some(&cmd.session_id), swarm_filter, effective_limit) {
+        Ok(rows) => rows,
+        Err(_) => return IndexAttempt::Miss("index_query_failed"),
+    };
+    if rows.is_empty() {
+        return IndexAttempt::Miss("index_empty");
+    }
+
+    // The `list_runs` query orders newest-first; the existing event_log
+    // path orders oldest-first. Re-sort to match so the frontend doesn't
+    // need to know which path served the response.
+    let mut runs: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let mut entry = json!({
+                "id": row.run_id,
+                "swarm": row.swarm,
+                "status": row.status,
+                "started_at": row.started_at,
+            });
+            if let Some(ref completed_at) = row.completed_at {
+                entry["completed_at"] = json!(completed_at);
+            }
+            if let Some(ref verdict) = row.verdict {
+                entry["verdict"] = json!(verdict);
+            }
+            // Preserve any extra fields the writer mirrored into payload_json
+            // (sweep_id, started_by, depth, etc.). Existing columns win on
+            // conflict so a fresh terminal status cannot be undone by a stale
+            // payload_json from an out-of-order progress event.
+            if let Ok(payload) = serde_json::from_str::<Value>(&row.payload_json) {
+                if let (Value::Object(ref mut map), Value::Object(extras)) = (&mut entry, payload) {
+                    for (k, v) in extras {
+                        map.entry(k).or_insert(v);
+                    }
+                }
+            }
+            entry
+        })
+        .collect();
+    runs.sort_by(|a, b| {
+        let a_started = a.get("started_at").and_then(Value::as_str).unwrap_or("");
+        let b_started = b.get("started_at").and_then(Value::as_str).unwrap_or("");
+        a_started.cmp(b_started)
+    });
+
+    let active_run_id = runs
+        .iter()
+        .rev()
+        .find(|run| run.get("status").and_then(Value::as_str) == Some("running"))
+        .and_then(|run| run.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .or_else(|| {
+            runs.last()
+                .and_then(|run| run.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+        });
+
+    if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
+        emit_session_event_live(
+            &controller,
+            server_event(
+                &cmd.session_id,
+                "assessment.runs_listed",
+                json!({
+                    "source": "index",
+                    "index_complete": true,
+                    "fallback_reason": Value::Null,
+                    "swarm": swarm_filter,
+                    "limit": limit,
+                    "active_run_id": active_run_id,
+                    // Sweeps are intentionally empty on the index path:
+                    // list_runs only iterates the runs table, and the
+                    // `assessment_sweeps` table is not joined here. The
+                    // frontend treats an empty sweeps array as "no sweep
+                    // metadata available from this list call" and falls
+                    // back to per-sweep queries when needed.
+                    "active_sweep_id": Value::Null,
+                    "runs": runs,
+                    "sweeps": Vec::<Value>::new(),
+                }),
+            ),
+        )
+        .await;
+    }
+    IndexAttempt::Hit
 }
 
 #[cfg(test)]
