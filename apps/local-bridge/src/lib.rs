@@ -13,6 +13,7 @@ pub mod notify;
 pub mod profile_layer;
 pub mod server;
 pub mod session;
+pub mod storage;
 pub mod translator;
 pub mod tunnel;
 pub mod workflows;
