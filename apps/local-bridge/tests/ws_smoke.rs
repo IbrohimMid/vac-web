@@ -12,13 +12,15 @@ use local_bridge::server::{build_app, AppState};
 use local_bridge::session::persistence::PersistenceHealth;
 use local_bridge::session::SessionRegistry;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
 const T: Duration = Duration::from_secs(5);
+static VAC_CONFIG_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn mock_engine_bin() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -51,7 +53,9 @@ async fn start_bridge() -> (String, Arc<AppState>) {
         persistence: None,
         persistence_health: PersistenceHealth::default(),
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
-        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(local_bridge::config::ConfigSnapshot::default())),
+        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
+            local_bridge::config::ConfigSnapshot::default(),
+        )),
     });
     // Leak the tempdir so the audit dir survives the test run.
     std::mem::forget(tmp);
@@ -93,6 +97,220 @@ where
         Message::Text(t) => serde_json::from_str(&t).unwrap(),
         other => panic!("expected text frame, got {other:?}"),
     }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    old: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set_path(key: &'static str, value: &Path) -> Self {
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, old }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+fn write_file(root: &Path, rel: &str, body: &str) {
+    let p = root.join(rel);
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(p, body).unwrap();
+}
+
+fn write_valid_config(root: &Path, default_mode: &str) {
+    write_file(root, "vac.yaml", "version: 1\n");
+    write_file(
+        root,
+        "agents/registry.yaml",
+        "version: 1\nagents:\n  - id: mock\n    kind: generic\n    default: true\n",
+    );
+    write_file(
+        root,
+        "mcp/servers.yaml",
+        "version: 1\nservers:\n  - id: fs\n    transport: stdio\n    command: mock-mcp\n",
+    );
+    write_file(
+        root,
+        "sessions/resume-policy.yaml",
+        &format!(
+            "version: 1\nsession_resume:\n  default_mode: {default_mode}\n  native_fallback: replay_only\n  mcp_server_drift: warn\n  profile_class_mismatch: fail\n  retention_days: 21\n  max_events: 3000\n"
+        ),
+    );
+}
+
+async fn connect_ready(
+    url: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let mut ws = connect(url).await;
+    send_text(&mut ws, json!({ "type": "hello", "protocol_version": 1 })).await;
+    let welcome = recv_text(&mut ws).await;
+    assert_eq!(welcome["type"], "welcome");
+    ws
+}
+
+async fn drive_config_command(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    id: &str,
+    command_type: &str,
+) -> (Value, Vec<Value>) {
+    send_text(
+        ws,
+        json!({
+            "id": id,
+            "session_id": "",
+            "type": command_type,
+            "payload": {},
+            "v": 1,
+        }),
+    )
+    .await;
+
+    let mut ack: Option<Value> = None;
+    let mut events: Vec<Value> = Vec::new();
+    for _ in 0..6 {
+        let v = recv_text(ws).await;
+        if v.get("ackOf") == Some(&json!(id)) {
+            ack = Some(v);
+        } else if v
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .starts_with("config.")
+        {
+            events.push(v);
+        }
+        let has_terminal = events.iter().any(|e| {
+            matches!(
+                e.get("type").and_then(|t| t.as_str()),
+                Some("config.validated")
+                    | Some("config.validate.failed")
+                    | Some("config.reloaded")
+                    | Some("config.reload_failed")
+            )
+        });
+        if ack.is_some() && has_terminal {
+            break;
+        }
+    }
+    (ack.expect("expected ack"), events)
+}
+
+#[tokio::test]
+async fn config_validate_emits_live_snapshot_event() {
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_ready(&url).await;
+
+    let (ack, events) =
+        drive_config_command(&mut ws, "cmd_config_validate", "config.validate").await;
+    assert_eq!(ack["ok"], true);
+    let validated = events
+        .iter()
+        .find(|e| e["type"] == "config.validated")
+        .expect("config.validated event");
+    assert_eq!(validated["payload"]["ok"], true);
+    assert_eq!(validated["payload"]["active_snapshot_retained"], false);
+    assert!(validated["payload"]["policy"]["default_mode"].is_string());
+}
+
+#[tokio::test]
+async fn config_reload_success_emits_started_then_reloaded_snapshot() {
+    let _env_lock = VAC_CONFIG_ENV_LOCK.lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    write_valid_config(tmp.path(), "native_or_replay");
+    let _env = EnvVarGuard::set_path("VAC_CONFIG_DIR", tmp.path());
+
+    let (url, _state) = start_bridge().await;
+    let mut ws = connect_ready(&url).await;
+
+    let (ack, events) =
+        drive_config_command(&mut ws, "cmd_config_reload_ok", "config.reload").await;
+    assert_eq!(ack["ok"], true);
+    assert_eq!(
+        events.first().and_then(|e| e["type"].as_str()),
+        Some("config.reload.started")
+    );
+    let reloaded = events
+        .iter()
+        .find(|e| e["type"] == "config.reloaded")
+        .expect("config.reloaded event");
+    assert_eq!(reloaded["payload"]["ok"], true);
+    assert_eq!(reloaded["payload"]["active_snapshot_retained"], false);
+    assert_eq!(
+        reloaded["payload"]["policy"]["default_mode"],
+        "native_or_replay"
+    );
+    assert_eq!(reloaded["payload"]["agents"]["count"], 1);
+    assert_eq!(reloaded["payload"]["mcp"]["count"], 1);
+}
+
+#[tokio::test]
+async fn config_reload_failed_retains_previous_snapshot_contract() {
+    let _env_lock = VAC_CONFIG_ENV_LOCK.lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    write_valid_config(tmp.path(), "replay_only");
+    let _env = EnvVarGuard::set_path("VAC_CONFIG_DIR", tmp.path());
+
+    let (url, state) = start_bridge().await;
+    let mut ws = connect_ready(&url).await;
+
+    let (seed_ack, seed_events) =
+        drive_config_command(&mut ws, "cmd_config_reload_seed", "config.reload").await;
+    assert_eq!(seed_ack["ok"], true);
+    let seed_reloaded = seed_events
+        .iter()
+        .find(|e| e["type"] == "config.reloaded")
+        .expect("seed config.reloaded event");
+    assert_eq!(
+        seed_reloaded["payload"]["policy"]["default_mode"],
+        "replay_only"
+    );
+
+    fs::write(
+        tmp.path().join("agents/registry.yaml"),
+        "this is not: [valid yaml",
+    )
+    .unwrap();
+
+    let (ack, events) =
+        drive_config_command(&mut ws, "cmd_config_reload_bad", "config.reload").await;
+    assert_eq!(ack["ok"], false);
+    assert_eq!(ack["error"]["code"], "config.reload_failed");
+    assert_eq!(
+        events.first().and_then(|e| e["type"].as_str()),
+        Some("config.reload.started")
+    );
+    let failed = events
+        .iter()
+        .find(|e| e["type"] == "config.reload_failed")
+        .expect("config.reload_failed event");
+    assert_eq!(failed["payload"]["ok"], false);
+    assert_eq!(failed["payload"]["active_snapshot_retained"], true);
+    assert!(failed["payload"]["last_reload_failed_at"].is_string());
+    assert!(failed["payload"]["last_successful_loaded_at"].is_string());
+    assert!(!failed["payload"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let snap = state.config_snapshot.read().await;
+    assert!(!snap.ok);
+    assert!(snap.active_snapshot_retained);
+    assert_eq!(snap.resume_policy.default_mode.as_str(), "replay_only");
+    assert_eq!(snap.agents.count, 1, "previous agent summary retained");
 }
 
 #[tokio::test]

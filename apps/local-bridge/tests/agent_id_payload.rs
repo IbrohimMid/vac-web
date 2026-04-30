@@ -129,7 +129,9 @@ async fn start_bridge(registry: AgentRuntimeRegistry) -> (String, Arc<AppState>)
         persistence: None,
         persistence_health: PersistenceHealth::default(),
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
-        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(local_bridge::config::ConfigSnapshot::default())),
+        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
+            local_bridge::config::ConfigSnapshot::default(),
+        )),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));
