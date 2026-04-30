@@ -6,6 +6,7 @@ use crate::config::{ConfigSnapshot, SessionResumePolicy};
 use crate::handoff::HandoffService;
 use crate::session::persistence::{PersistenceHealth, SharedPersistence};
 use crate::session::SessionRegistry;
+use crate::storage::AssessmentIndex;
 use axum::{routing::get, routing::post, Json, Router};
 use serde_json::json;
 use std::sync::Arc;
@@ -35,6 +36,15 @@ pub struct AppState {
     /// flag here, and the translator's `session.history.list` arm can
     /// surface that as a `health` field on the listed payload.
     pub persistence_health: PersistenceHealth,
+    /// Phase N1 — optional SQLite cache index for assessment.* events.
+    /// `None` disables the SQLite double-write path (e.g. when the index
+    /// file couldn't be opened on the host filesystem). When `Some`, the
+    /// registry threads it into every spawned session via
+    /// [`SpawnOptions::assessment_index`] so the per-session
+    /// [`PersistenceSink`] can mirror assessment events to the index, and
+    /// the [`assessment_query`](crate::translator::assessment_query)
+    /// reader consults it before scanning the JSONL log (Phase N2).
+    pub assessment_index: Option<Arc<AssessmentIndex>>,
     /// Stage R3 — normalized session-resume policy. Cheap-clone
     /// `Arc` so the translator can read it without locking and the
     /// frontend preview surface can serialize it. The Rust struct is

@@ -105,9 +105,7 @@ pub fn validate_worker_output(value: &Value) -> EnvelopeOutcome {
     let Some(schema_version) = schema_field.as_u64() else {
         return EnvelopeOutcome::Recognised(Err(WorkerOutputRejection::new(
             "schema_version_invalid",
-            format!(
-                "schema_version must be an unsigned integer; got {schema_field}"
-            ),
+            format!("schema_version must be an unsigned integer; got {schema_field}"),
         )
         .at("schema_version")));
     };
@@ -166,10 +164,11 @@ pub fn validate_worker_output(value: &Value) -> EnvelopeOutcome {
 fn validate_candidate_v1(candidate: &Value, idx: usize) -> Result<(), WorkerOutputRejection> {
     let path = format!("candidates[{idx}]");
     let Some(obj) = candidate.as_object() else {
-        return Err(
-            WorkerOutputRejection::new("candidate_not_object", "candidate must be a JSON object")
-                .at(path),
-        );
+        return Err(WorkerOutputRejection::new(
+            "candidate_not_object",
+            "candidate must be a JSON object",
+        )
+        .at(path));
     };
 
     // Title is the only field we hard-require at the envelope layer; deeper
@@ -188,9 +187,7 @@ fn validate_candidate_v1(candidate: &Value, idx: usize) -> Result<(), WorkerOutp
         if !is_known_severity(sev) {
             return Err(WorkerOutputRejection::new(
                 "candidate_severity_invalid",
-                format!(
-                    "severity must be one of critical/high/medium/low/info; got `{sev}`"
-                ),
+                format!("severity must be one of critical/high/medium/low/info; got `{sev}`"),
             )
             .at(format!("{path}.severity")));
         }

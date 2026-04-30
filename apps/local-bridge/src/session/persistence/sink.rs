@@ -29,6 +29,7 @@ use std::sync::Arc;
 use super::model::{PersistedServerEvent, PersistedSessionStatus};
 use super::redact::{redact_event_payload, RedactionMode};
 use super::{PersistenceError, PersistenceHealth, SessionPersistence};
+use crate::storage::{record_event as record_assessment_event, AssessmentIndex, WriteOutcome};
 use crate::ws::envelope::ServerEvent;
 use tokio::sync::broadcast;
 
@@ -45,6 +46,15 @@ pub struct PersistenceSink {
     /// chip immediately, without waiting for the next
     /// `session.history.list` round-trip.
     bus: Option<broadcast::Sender<ServerEvent>>,
+    /// Phase N1 — optional SQLite cache index for assessment.* events.
+    /// When present, every persisted event whose `event_type` is in
+    /// [`crate::storage::MIRRORED_EVENT_TYPES`] is *also* written to
+    /// the index after the JSONL append succeeds. Index writes are
+    /// best-effort: a failure is recorded on [`PersistenceHealth`] under
+    /// the `"index_write_failed"` reason and never propagates back as
+    /// a JSONL append failure. JSONL stays the source of truth; the
+    /// index is a derived acceleration.
+    assessment_index: Option<Arc<AssessmentIndex>>,
 }
 
 impl PersistenceSink {
@@ -78,7 +88,18 @@ impl PersistenceSink {
             mode,
             health,
             bus,
+            assessment_index: None,
         }
+    }
+
+    /// Phase N1 — attach an [`AssessmentIndex`] handle so that every
+    /// persisted event whose type is in [`crate::storage::MIRRORED_EVENT_TYPES`]
+    /// is also written to the SQLite cache index. Consumes-self builder so
+    /// existing callers can keep their original construction site and only
+    /// add the index where it's plumbed in.
+    pub fn with_assessment_index(mut self, idx: Option<Arc<AssessmentIndex>>) -> Self {
+        self.assessment_index = idx;
+        self
     }
 
     /// Persist a single `ServerEvent`. The payload is redacted in
@@ -107,13 +128,52 @@ impl PersistenceSink {
             ts,
             redaction,
         };
-        if let Err(e) = self.inner.append_event(&self.vac_session_id, &pe) {
+        let appended = self.inner.append_event(&self.vac_session_id, &pe);
+        if let Err(e) = appended.as_ref() {
             tracing::warn!(
                 session = %self.vac_session_id,
                 error = %e,
                 "persistence.append_event failed; event dropped from durable log"
             );
-            self.signal_degraded("append_failed", &e);
+            self.signal_degraded("append_failed", e);
+        }
+        // Phase N1 — best-effort double-write to the SQLite cache index. The
+        // index write happens regardless of whether the JSONL append succeeded
+        // (a torn JSONL row should still surface in the cockpit), but a write
+        // failure here is *strictly non-fatal*: we log + record on the shared
+        // health handle under `"index_write_failed"` and never propagate.
+        if let Some(index) = self.assessment_index.as_ref() {
+            if crate::storage::is_mirrored(&pe.event_type) {
+                match record_assessment_event(index, &pe) {
+                    Ok(WriteOutcome::Mirrored) | Ok(WriteOutcome::NotMirrored) => {}
+                    Ok(WriteOutcome::Malformed) => {
+                        tracing::debug!(
+                            session = %self.vac_session_id,
+                            event_type = %pe.event_type,
+                            "assessment_index mirror skipped (malformed payload)"
+                        );
+                    }
+                    Err(err) => {
+                        let detail = err.to_string();
+                        tracing::warn!(
+                            session = %self.vac_session_id,
+                            event_type = %pe.event_type,
+                            error = %detail,
+                            "assessment_index mirror failed; JSONL append unaffected"
+                        );
+                        // Surface via the existing PersistenceHealth ring —
+                        // intentionally NOT broadcast as a ServerEvent: the
+                        // existing `session.persistence_degraded` channel
+                        // already covers index/append failures and adding a
+                        // second event type would be noisy on a flapping disk.
+                        self.health.record_failure(
+                            "index_write_failed",
+                            detail,
+                            Some(&self.vac_session_id),
+                        );
+                    }
+                }
+            }
         }
     }
 

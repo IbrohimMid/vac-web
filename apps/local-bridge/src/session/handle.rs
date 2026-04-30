@@ -465,6 +465,13 @@ pub struct SpawnOptions {
     /// `session/update` notifications aren't dropped. JSON-RPC kinds
     /// (`Mock`, `VacNative`) ignore this field.
     pub resume_native: Option<NativeResumeRequest>,
+    /// Phase N1 — optional SQLite cache index for assessment.* events.
+    /// When `Some`, the spawn path threads it into the per-session
+    /// [`PersistenceSink`] via [`PersistenceSink::with_assessment_index`]
+    /// so every persisted assessment event is also mirrored to the index.
+    /// Sourced from [`SessionRegistry::assessment_index`]; `None` keeps
+    /// the JSONL-only path that pre-N1 callers expect.
+    pub assessment_index: Option<Arc<crate::storage::AssessmentIndex>>,
 }
 
 /// Stage X6 4-4 — request a native ACP `session/load` resume instead
@@ -665,6 +672,7 @@ impl SessionHandle {
             opts.redaction_mode,
             opts.persistence_health.clone(),
             Some(bcast_tx.clone()),
+            opts.assessment_index.clone(),
         );
 
         let handle = Arc::new(Self {
@@ -1182,6 +1190,7 @@ fn build_persistence_sink(
     mode: RedactionMode,
     health: PersistenceHealth,
     bus: Option<broadcast::Sender<ServerEvent>>,
+    assessment_index: Option<Arc<crate::storage::AssessmentIndex>>,
 ) -> Option<PersistenceSink> {
     let inner = persistence?;
     let now = chrono::Utc::now();
@@ -1236,13 +1245,10 @@ fn build_persistence_sink(
         health.record_failure("meta_save_failed", e.to_string(), Some(session_id));
         return None;
     }
-    Some(PersistenceSink::with_health(
-        Arc::clone(inner),
-        session_id.to_string(),
-        mode,
-        health,
-        bus,
-    ))
+    Some(
+        PersistenceSink::with_health(Arc::clone(inner), session_id.to_string(), mode, health, bus)
+            .with_assessment_index(assessment_index),
+    )
 }
 
 /// Update the persisted `agent_session_id` + `agent_capabilities` on
@@ -2093,6 +2099,7 @@ impl SessionHandle {
             opts.redaction_mode,
             opts.persistence_health.clone(),
             Some(bcast_tx.clone()),
+            opts.assessment_index.clone(),
         );
         persist_acp_session_details(
             opts.persistence.as_ref(),

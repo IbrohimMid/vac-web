@@ -110,9 +110,7 @@ impl AssessmentIndex {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn
-            .lock()
-            .map_err(|_| AssessmentIndexError::Poisoned)
+        self.conn.lock().map_err(|_| AssessmentIndexError::Poisoned)
     }
 
     /// Apply migrations up to [`ASSESSMENT_INDEX_SCHEMA_VERSION`]. Re-running
@@ -428,11 +426,17 @@ mod tests {
     #[test]
     fn migrate_is_idempotent() {
         let idx = AssessmentIndex::open_in_memory().unwrap();
-        assert_eq!(idx.schema_version().unwrap(), ASSESSMENT_INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            idx.schema_version().unwrap(),
+            ASSESSMENT_INDEX_SCHEMA_VERSION
+        );
         // Re-running should not change the version or fail.
         idx.migrate().unwrap();
         idx.migrate().unwrap();
-        assert_eq!(idx.schema_version().unwrap(), ASSESSMENT_INDEX_SCHEMA_VERSION);
+        assert_eq!(
+            idx.schema_version().unwrap(),
+            ASSESSMENT_INDEX_SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -536,6 +540,9 @@ mod tests {
             .unwrap();
         }
         let err = idx.migrate().unwrap_err();
-        assert!(matches!(err, AssessmentIndexError::UnsupportedSchema { .. }));
+        assert!(matches!(
+            err,
+            AssessmentIndexError::UnsupportedSchema { .. }
+        ));
     }
 }

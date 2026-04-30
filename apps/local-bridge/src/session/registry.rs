@@ -158,6 +158,13 @@ pub struct SessionRegistry {
     /// `save_meta` failure flips the shared flag visible to the
     /// translator's `session.history.list` arm.
     persistence_health: Arc<OnceLock<PersistenceHealth>>,
+    /// Phase N1 — optional SQLite cache index for assessment.* events.
+    /// Threaded into every spawned [`SessionHandle`] via
+    /// [`SpawnOptions::assessment_index`] so the per-session
+    /// [`PersistenceSink`] can mirror assessment events to the index
+    /// after the JSONL append. Idempotent setter mirrors
+    /// `attach_persistence` / `attach_persistence_health`.
+    assessment_index: Arc<OnceLock<Arc<crate::storage::AssessmentIndex>>>,
 }
 
 impl SessionRegistry {
@@ -184,6 +191,7 @@ impl SessionRegistry {
             profile_root,
             persistence: Arc::new(OnceLock::new()),
             persistence_health: Arc::new(OnceLock::new()),
+            assessment_index: Arc::new(OnceLock::new()),
         };
         reg.spawn_reaper();
         reg
@@ -211,6 +219,26 @@ impl SessionRegistry {
     /// nothing has been attached. Cheap clone of the inner `Arc`.
     pub fn persistence_health(&self) -> PersistenceHealth {
         self.persistence_health.get().cloned().unwrap_or_default()
+    }
+
+    /// Phase N1 — attach the AppState's SQLite cache index for
+    /// assessment.* events. Idempotent: subsequent calls with different
+    /// values are silently ignored (mirrors `attach_persistence` /
+    /// `attach_persistence_health`). When unset (e.g. in tests, or when
+    /// the index couldn't be opened on the host filesystem), spawned
+    /// sessions skip the SQLite double-write entirely and rely on the
+    /// JSONL log alone.
+    pub fn attach_assessment_index(&self, index: Arc<crate::storage::AssessmentIndex>) {
+        let _ = self.assessment_index.set(index);
+    }
+
+    /// Snapshot the attached assessment index handle. Cheap clone of the
+    /// inner `Arc`. Returns `None` when no index has been attached —
+    /// callers thread that through `SpawnOptions::assessment_index` so
+    /// the per-session [`PersistenceSink`] knows to skip the
+    /// double-write path.
+    pub fn assessment_index(&self) -> Option<Arc<crate::storage::AssessmentIndex>> {
+        self.assessment_index.get().cloned()
     }
 
     /// Stage X.5c.2 — attach the AppState's audit handle so spawned
@@ -319,6 +347,7 @@ impl SessionRegistry {
             persistence_health: self.persistence_health(),
             redaction_mode: RedactionMode::Standard,
             resume_native: None,
+            assessment_index: self.assessment_index(),
         };
         let handle = SessionHandle::spawn(opts).await?;
         self.inner.insert(session_id.clone(), Arc::clone(&handle));
@@ -501,6 +530,7 @@ impl SessionRegistry {
                 agent_session_id,
                 mode,
             }),
+            assessment_index: self.assessment_index(),
         };
 
         match SessionHandle::spawn(opts).await {

@@ -162,6 +162,7 @@ async fn start_bridge_with_audit_dir(
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        assessment_index: None,
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
@@ -195,6 +196,7 @@ async fn start_bridge_with(registry: AgentRuntimeRegistry) -> (String, Arc<AppSt
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        assessment_index: None,
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),

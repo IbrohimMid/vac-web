@@ -105,7 +105,11 @@ pub async fn dispatch_assessment_list_runs(
         .find(|run| run.get("status").and_then(Value::as_str) == Some("running"))
         .and_then(|run| run.get("id").and_then(Value::as_str))
         .map(str::to_string)
-        .or_else(|| runs.last().and_then(|run| run.get("id").and_then(Value::as_str)).map(str::to_string));
+        .or_else(|| {
+            runs.last()
+                .and_then(|run| run.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+        });
 
     let active_sweep_id = sweeps
         .iter()
@@ -113,7 +117,12 @@ pub async fn dispatch_assessment_list_runs(
         .find(|sweep| sweep.get("status").and_then(Value::as_str) == Some("running"))
         .and_then(|sweep| sweep.get("id").and_then(Value::as_str))
         .map(str::to_string)
-        .or_else(|| sweeps.last().and_then(|sweep| sweep.get("id").and_then(Value::as_str)).map(str::to_string));
+        .or_else(|| {
+            sweeps
+                .last()
+                .and_then(|sweep| sweep.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+        });
 
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
         emit_session_event_live(
@@ -196,7 +205,11 @@ pub async fn dispatch_assessment_diff(
         );
     };
 
-    let prev = snapshot.findings_by_run.get(base_run_id).cloned().unwrap_or_default();
+    let prev = snapshot
+        .findings_by_run
+        .get(base_run_id)
+        .cloned()
+        .unwrap_or_default();
     let next_findings = snapshot
         .findings_by_run
         .get(next_run_id)
@@ -322,8 +335,16 @@ async fn dispatch_assessment_report(
             format!("assessment run {run_id} not found"),
         );
     };
-    let findings = snapshot.findings_by_run.get(run_id).cloned().unwrap_or_default();
-    let evidence = snapshot.evidence_by_run.get(run_id).cloned().unwrap_or_default();
+    let findings = snapshot
+        .findings_by_run
+        .get(run_id)
+        .cloned()
+        .unwrap_or_default();
+    let evidence = snapshot
+        .evidence_by_run
+        .get(run_id)
+        .cloned()
+        .unwrap_or_default();
     let sweep = run
         .get("sweep_id")
         .and_then(Value::as_str)
@@ -341,7 +362,11 @@ async fn dispatch_assessment_report(
             "sweep": sweep,
             "replayed_events": event_count,
         });
-        emit_session_event_live(&controller, server_event(&cmd.session_id, event_type, payload)).await;
+        emit_session_event_live(
+            &controller,
+            server_event(&cmd.session_id, event_type, payload),
+        )
+        .await;
         if include_report_mark {
             emit_session_event_live(
                 &controller,
@@ -453,7 +478,11 @@ fn compute_diff(prev: &[Value], next: &[Value]) -> Value {
 
 fn bump_count(counts: &mut Value, key: &str) {
     if let Some(obj) = counts.as_object_mut() {
-        let next = obj.get(key).and_then(Value::as_u64).unwrap_or(0).saturating_add(1);
+        let next = obj
+            .get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .saturating_add(1);
         obj.insert(key.to_string(), json!(next));
     }
 }
@@ -466,7 +495,9 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
                 if let Some(run_id) = string_field(&event.payload, &["run_id", "runId"]) {
                     let mut run = run_entry(
                         &run_id,
-                        string_field(&event.payload, &["swarm"]).as_deref().unwrap_or("rtd"),
+                        string_field(&event.payload, &["swarm"])
+                            .as_deref()
+                            .unwrap_or("rtd"),
                         "running",
                         string_field(&event.payload, &["started_at", "startedAt"])
                             .as_deref()
@@ -484,22 +515,32 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
                         attach_run_to_sweep(&mut snapshot, &sweep_id, &run_id);
                     }
                     snapshot.runs.insert(run_id, run);
-                    *snapshot.run_event_counts.entry(
-                        string_field(&event.payload, &["run_id", "runId"]).unwrap_or_default(),
-                    )
-                    .or_default() += 1;
+                    *snapshot
+                        .run_event_counts
+                        .entry(
+                            string_field(&event.payload, &["run_id", "runId"]).unwrap_or_default(),
+                        )
+                        .or_default() += 1;
                 }
             }
             "assessment.progress" => {
                 if let Some(run_id) = string_field(&event.payload, &["run_id", "runId"]) {
-                    let run = snapshot
-                        .runs
-                        .entry(run_id.clone())
-                        .or_insert_with(|| run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339()));
+                    let run = snapshot.runs.entry(run_id.clone()).or_insert_with(|| {
+                        run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = run.as_object_mut() {
                         let progress = obj.entry("progress").or_insert_with(|| json!({}));
                         if let Some(progress_obj) = progress.as_object_mut() {
-                            for key in ["completed", "total", "current", "phase", "reason", "pass", "max_passes", "elapsed_ms"] {
+                            for key in [
+                                "completed",
+                                "total",
+                                "current",
+                                "phase",
+                                "reason",
+                                "pass",
+                                "max_passes",
+                                "elapsed_ms",
+                            ] {
                                 if let Some(value) = event.payload.get(key).cloned() {
                                     progress_obj.insert(key.to_string(), value);
                                 }
@@ -512,10 +553,9 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
             }
             "assessment.candidate_received" => {
                 if let Some(run_id) = string_field(&event.payload, &["run_id", "runId"]) {
-                    let run = snapshot
-                        .runs
-                        .entry(run_id.clone())
-                        .or_insert_with(|| run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339()));
+                    let run = snapshot.runs.entry(run_id.clone()).or_insert_with(|| {
+                        run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = run.as_object_mut() {
                         let validation = obj.entry("validation").or_insert_with(|| {
                             json!({
@@ -526,7 +566,8 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
                         });
                         if let Some(v) = validation.as_object_mut() {
                             let received = v.get("received").and_then(Value::as_u64).unwrap_or(0)
-                                + event.payload
+                                + event
+                                    .payload
                                     .get("candidate_count")
                                     .and_then(Value::as_u64)
                                     .unwrap_or(1);
@@ -538,10 +579,9 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
             }
             "assessment.candidate_rejected" => {
                 if let Some(run_id) = string_field(&event.payload, &["run_id", "runId"]) {
-                    let run = snapshot
-                        .runs
-                        .entry(run_id.clone())
-                        .or_insert_with(|| run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339()));
+                    let run = snapshot.runs.entry(run_id.clone()).or_insert_with(|| {
+                        run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = run.as_object_mut() {
                         let validation = obj.entry("validation").or_insert_with(|| {
                             json!({
@@ -551,13 +591,12 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
                             })
                         });
                         if let Some(v) = validation.as_object_mut() {
-                            let rejected = v.get("rejected").and_then(Value::as_u64).unwrap_or(0) + 1;
+                            let rejected =
+                                v.get("rejected").and_then(Value::as_u64).unwrap_or(0) + 1;
                             v.insert("rejected".into(), json!(rejected));
                             let reason = string_field(&event.payload, &["reason", "summary"])
                                 .unwrap_or_else(|| "unknown".to_string());
-                            let reasons = v
-                                .entry("rejection_reasons")
-                                .or_insert_with(|| json!({}));
+                            let reasons = v.entry("rejection_reasons").or_insert_with(|| json!({}));
                             if let Some(reason_obj) = reasons.as_object_mut() {
                                 let count = reason_obj
                                     .get(&reason)
@@ -599,16 +638,12 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
             }
             "assessment.completed" => {
                 if let Some(run_id) = string_field(&event.payload, &["run_id", "runId"]) {
-                    let run = snapshot
-                        .runs
-                        .entry(run_id.clone())
-                        .or_insert_with(|| run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339()));
+                    let run = snapshot.runs.entry(run_id.clone()).or_insert_with(|| {
+                        run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = run.as_object_mut() {
                         obj.insert("status".into(), json!("completed"));
-                        obj.insert(
-                            "finished_at".into(),
-                            json!(event.ts.to_rfc3339()),
-                        );
+                        obj.insert("finished_at".into(), json!(event.ts.to_rfc3339()));
                         if let Some(verdict) = event.payload.get("verdict").cloned() {
                             obj.insert("verdict".into(), verdict);
                         }
@@ -629,11 +664,11 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
             }
             "assessment.failed" => {
                 if let Some(run_id) = string_field(&event.payload, &["run_id", "runId"]) {
-                    let status = string_field(&event.payload, &["status"]).unwrap_or_else(|| "failed".to_string());
-                    let run = snapshot
-                        .runs
-                        .entry(run_id.clone())
-                        .or_insert_with(|| run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339()));
+                    let status = string_field(&event.payload, &["status"])
+                        .unwrap_or_else(|| "failed".to_string());
+                    let run = snapshot.runs.entry(run_id.clone()).or_insert_with(|| {
+                        run_entry(&run_id, "rtd", "running", &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = run.as_object_mut() {
                         obj.insert("status".into(), json!(status));
                         obj.insert("finished_at".into(), json!(event.ts.to_rfc3339()));
@@ -681,14 +716,22 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
             }
             "assessment.sweep.progress" => {
                 if let Some(sweep_id) = string_field(&event.payload, &["sweep_id", "sweepId"]) {
-                    let sweep = snapshot
-                        .sweeps
-                        .entry(sweep_id)
-                        .or_insert_with(|| sweep_entry("unknown", vec![], "running", &event.ts.to_rfc3339()));
+                    let sweep = snapshot.sweeps.entry(sweep_id).or_insert_with(|| {
+                        sweep_entry("unknown", vec![], "running", &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = sweep.as_object_mut() {
                         let progress = obj.entry("progress").or_insert_with(|| json!({}));
                         if let Some(progress_obj) = progress.as_object_mut() {
-                            for key in ["completed", "total", "current", "phase", "reason", "pass", "max_passes", "elapsed_ms"] {
+                            for key in [
+                                "completed",
+                                "total",
+                                "current",
+                                "phase",
+                                "reason",
+                                "pass",
+                                "max_passes",
+                                "elapsed_ms",
+                            ] {
                                 if let Some(value) = event.payload.get(key).cloned() {
                                     progress_obj.insert(key.to_string(), value);
                                 }
@@ -707,10 +750,9 @@ fn build_snapshot(events: &[PersistedServerEvent]) -> AssessmentSnapshot {
                             "failed".to_string()
                         }
                     });
-                    let sweep = snapshot
-                        .sweeps
-                        .entry(sweep_id)
-                        .or_insert_with(|| sweep_entry("unknown", vec![], &status, &event.ts.to_rfc3339()));
+                    let sweep = snapshot.sweeps.entry(sweep_id).or_insert_with(|| {
+                        sweep_entry("unknown", vec![], &status, &event.ts.to_rfc3339())
+                    });
                     if let Some(obj) = sweep.as_object_mut() {
                         obj.insert("status".into(), json!(status.clone()));
                         obj.insert("finished_at".into(), json!(event.ts.to_rfc3339()));
@@ -824,7 +866,11 @@ fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-fn ack_error(ack_of: &str, code: &str, message: impl Into<String>) -> (ServerAck, Vec<ServerEvent>) {
+fn ack_error(
+    ack_of: &str,
+    code: &str,
+    message: impl Into<String>,
+) -> (ServerAck, Vec<ServerEvent>) {
     (
         ServerAck {
             ack_of: ack_of.to_string(),
@@ -906,11 +952,13 @@ fn build_evidence_preview(
         .map(|line| line as usize)
         .unwrap_or(1);
     let line_range = locator.and_then(|loc| {
-        loc.get("line_range").and_then(Value::as_array).and_then(|arr| {
-            let start = arr.first().and_then(Value::as_u64)?;
-            let end = arr.get(1).and_then(Value::as_u64)?;
-            Some((start as usize, end as usize))
-        })
+        loc.get("line_range")
+            .and_then(Value::as_array)
+            .and_then(|arr| {
+                let start = arr.first().and_then(Value::as_u64)?;
+                let end = arr.get(1).and_then(Value::as_u64)?;
+                Some((start as usize, end as usize))
+            })
     });
     if let Some((start, end)) = line_range {
         let start = start.max(1);
@@ -1065,7 +1113,10 @@ mod tests {
 
         assert_eq!(run.get("status").and_then(Value::as_str), Some("completed"));
         assert_eq!(run.get("verdict").and_then(Value::as_str), Some("warn"));
-        assert_eq!(sweep.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            sweep.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
         assert_eq!(sweep.get("verdict").and_then(Value::as_str), Some("warn"));
         assert_eq!(
             sweep
@@ -1106,6 +1157,9 @@ mod tests {
         let diff = compute_diff(&prev, &next);
         assert_eq!(diff["counts"]["regressed"].as_u64(), Some(1));
         assert_eq!(diff["counts"]["new"].as_u64(), Some(1));
-        assert_eq!(diff["entries"].as_array().map(|entries| entries.len()), Some(2));
+        assert_eq!(
+            diff["entries"].as_array().map(|entries| entries.len()),
+            Some(2)
+        );
     }
 }

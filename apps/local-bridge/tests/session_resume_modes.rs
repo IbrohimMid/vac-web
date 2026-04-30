@@ -60,6 +60,7 @@ async fn start_bridge() -> String {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        assessment_index: None,
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),

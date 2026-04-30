@@ -11,6 +11,7 @@ use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::persistence::{FilePersistence, PersistenceHealth, SharedPersistence};
 use local_bridge::session::SessionRegistry;
+use local_bridge::storage::AssessmentIndex;
 use local_bridge::tunnel::{run_tunnel_supervisor, TunnelConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -104,6 +105,45 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // Phase N1 — wire the SQLite cache index for assessment.* events.
+    // Lives next to the JSONL `sessions/` tree under
+    // `<data>/vac-web/bridge/assessment_index.db` (or under the
+    // `VAC_SESSIONS_DIR` override). On open failure we log + record a
+    // degraded-health beat under `"index_write_failed"`, then fall
+    // through with `None` so the bridge keeps booting on the
+    // JSONL-only path; the cockpit gracefully degrades to the
+    // pre-N1 event-log scan.
+    let assessment_index_path = sessions_dir
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| sessions_dir.clone())
+        .join("assessment_index.db");
+    let assessment_index: Option<Arc<AssessmentIndex>> =
+        match AssessmentIndex::open(&assessment_index_path) {
+            Ok(idx) => {
+                tracing::info!(
+                    path = %assessment_index_path.display(),
+                    "assessment index enabled"
+                );
+                let shared = Arc::new(idx);
+                sessions.attach_assessment_index(Arc::clone(&shared));
+                Some(shared)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %assessment_index_path.display(),
+                    error = %e,
+                    "assessment index disabled — AssessmentIndex::open failed"
+                );
+                persistence_health.record_failure(
+                    "index_write_failed",
+                    format!("AssessmentIndex::open: {e}"),
+                    None,
+                );
+                None
+            }
+        };
 
     // Stage R3 — load + normalize the declarative resume policy at
     // startup. The Rust runtime is the only enforcement point; if
@@ -201,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
         handoff,
         persistence,
         persistence_health,
+        assessment_index,
         resume_policy,
         config_snapshot,
     });

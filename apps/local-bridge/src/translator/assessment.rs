@@ -5,8 +5,8 @@ use crate::server::AppStateHandle;
 use crate::session::assessment_validation::{
     validate_candidate, AssessmentValidationTracker, CandidateRejection,
 };
-use crate::session::{SessionHandle, SessionHandleRef, SpawnOptions};
 use crate::session::persistence::RedactionMode;
+use crate::session::{SessionHandle, SessionHandleRef, SpawnOptions};
 use crate::translator::emit_session_event;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use dashmap::DashMap;
@@ -17,8 +17,8 @@ use std::sync::{
     Arc, Mutex as StdMutex, OnceLock,
 };
 use std::time::Duration;
-use tokio::sync::Notify;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::warn;
 use ulid::Ulid;
@@ -143,7 +143,12 @@ struct RunStats {
 }
 
 impl RunStats {
-    fn record_finding(&mut self, title: String, category: CategoryBucket, severity: SeverityBucket) {
+    fn record_finding(
+        &mut self,
+        title: String,
+        category: CategoryBucket,
+        severity: SeverityBucket,
+    ) {
         self.accepted += 1;
         self.findings.push(FindingMeta {
             title,
@@ -184,7 +189,10 @@ impl RunStats {
         let (info, low, medium, high, critical) = self.severity_counts();
         let has_release_or_ops_high = self.findings.iter().any(|finding| {
             matches!(finding.severity, SeverityBucket::High)
-                && matches!(finding.category, CategoryBucket::Release | CategoryBucket::Ops)
+                && matches!(
+                    finding.category,
+                    CategoryBucket::Release | CategoryBucket::Ops
+                )
         });
         let verdict = if critical > 0 || has_release_or_ops_high {
             "fail"
@@ -855,6 +863,12 @@ fn build_worker_spawn_options(
         persistence_health: state.persistence_health.clone(),
         redaction_mode: RedactionMode::Standard,
         resume_native: None,
+        // Phase N1 — worker spawns intentionally bypass the SQLite
+        // double-write path. Worker sessions don't carry persistence
+        // (see `persistence: None` above) so there's no JSONL append
+        // for the index to mirror; the parent assessment session is
+        // the one whose sink owns the cache index.
+        assessment_index: None,
     }
 }
 
@@ -931,11 +945,7 @@ fn augment_payload(payload: Value, fields: &[(&str, Value)]) -> Value {
     payload
 }
 
-async fn emit_controller_event(
-    controller: &SessionHandleRef,
-    event_type: &str,
-    payload: Value,
-) {
+async fn emit_controller_event(controller: &SessionHandleRef, event_type: &str, payload: Value) {
     emit_session_event(
         controller,
         ServerEvent {
@@ -1479,14 +1489,20 @@ fn parse_sweep_families(payload: &Value) -> Vec<String> {
     if let Some(swarm) = payload.get("swarm").and_then(Value::as_str) {
         let swarm = swarm.trim();
         if swarm.eq_ignore_ascii_case("all") || swarm.eq_ignore_ascii_case("all families") {
-            return SWEEP_FAMILIES.iter().map(|family| (*family).to_string()).collect();
+            return SWEEP_FAMILIES
+                .iter()
+                .map(|family| (*family).to_string())
+                .collect();
         }
         if !swarm.is_empty() {
             return vec![swarm.to_string()];
         }
     }
 
-    SWEEP_FAMILIES.iter().map(|family| (*family).to_string()).collect()
+    SWEEP_FAMILIES
+        .iter()
+        .map(|family| (*family).to_string())
+        .collect()
 }
 
 pub async fn dispatch_assessment_sweep_run(
@@ -1831,10 +1847,9 @@ async fn run_assessment_task(
 
     match worker_kind {
         AgentKind::Acp => {
-            let acp = worker
-                .acp
-                .as_ref()
-                .ok_or_else(|| AssessmentFailure::failed("worker_unavailable", "ACP runtime missing"))?;
+            let acp = worker.acp.as_ref().ok_or_else(|| {
+                AssessmentFailure::failed("worker_unavailable", "ACP runtime missing")
+            })?;
             let client = &acp.client;
             let acp_session_id = acp.acp_session_id.clone();
             let mut known_titles: Vec<String> = Vec::new();
@@ -2016,7 +2031,10 @@ async fn run_assessment_task(
                         v: 1,
                     };
                     let _ = worker.send_client_command(&cancel_cmd).await;
-                    return Err(AssessmentFailure::cancelled("cancelled", "user requested cancel"));
+                    return Err(AssessmentFailure::cancelled(
+                        "cancelled",
+                        "user requested cancel",
+                    ));
                 }
 
                 tokio::select! {

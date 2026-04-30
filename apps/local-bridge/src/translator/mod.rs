@@ -454,9 +454,15 @@ pub async fn dispatch_command(
         "assessment.run" => assessment::dispatch_assessment_run(&cmd, &state).await,
         "assessment.sweep.run" => assessment::dispatch_assessment_sweep_run(&cmd, &state).await,
         "assessment.cancel" => assessment::dispatch_assessment_cancel(&cmd, &state).await,
-        "assessment.sweep.cancel" => assessment::dispatch_assessment_sweep_cancel(&cmd, &state).await,
-        "assessment.list_runs" => assessment_query::dispatch_assessment_list_runs(&cmd, &state).await,
-        "assessment.fetch_report" => assessment_query::dispatch_assessment_fetch_report(&cmd, &state).await,
+        "assessment.sweep.cancel" => {
+            assessment::dispatch_assessment_sweep_cancel(&cmd, &state).await
+        }
+        "assessment.list_runs" => {
+            assessment_query::dispatch_assessment_list_runs(&cmd, &state).await
+        }
+        "assessment.fetch_report" => {
+            assessment_query::dispatch_assessment_fetch_report(&cmd, &state).await
+        }
         "assessment.replay" => assessment_query::dispatch_assessment_replay(&cmd, &state).await,
         "assessment.diff" => assessment_query::dispatch_assessment_diff(&cmd, &state).await,
         "assessment.fetch_evidence_preview" => {
@@ -2513,11 +2519,7 @@ pub async fn dispatch_command(
     }
 }
 
-async fn emit_session_event_inner(
-    handle: &SessionHandleRef,
-    event: ServerEvent,
-    persist: bool,
-) {
+async fn emit_session_event_inner(handle: &SessionHandleRef, event: ServerEvent, persist: bool) {
     if persist {
         if let Some(sink) = handle.persistence.as_ref() {
             sink.record(&event);

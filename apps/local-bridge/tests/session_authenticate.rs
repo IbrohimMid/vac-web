@@ -114,6 +114,7 @@ async fn start_bridge_acp(auth_methods: Value) -> (String, Arc<AppState>) {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        assessment_index: None,
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
@@ -144,6 +145,7 @@ async fn start_bridge_mock_engine() -> (String, Arc<AppState>) {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        assessment_index: None,
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
@@ -696,6 +698,7 @@ async fn start_bridge_with_id(agent_id: &str, auth_methods: Value) -> (String, A
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        assessment_index: None,
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
