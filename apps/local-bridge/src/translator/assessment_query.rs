@@ -177,7 +177,7 @@ pub async fn dispatch_assessment_diff(
             "assessment.diff requires next_run_id",
         );
     };
-    let snapshot = match load_snapshot(state, &cmd.session_id) {
+    let snapshot = match load_snapshot(cmd, state) {
         Ok(snapshot) => snapshot,
         Err(error) => return error,
     };
@@ -247,7 +247,7 @@ pub async fn dispatch_assessment_fetch_evidence_preview(
             "assessment.fetch_evidence_preview requires evidence_id",
         );
     };
-    let snapshot = match load_snapshot(state, &cmd.session_id) {
+    let snapshot = match load_snapshot(cmd, state) {
         Ok(snapshot) => snapshot,
         Err(error) => return error,
     };
@@ -311,7 +311,7 @@ async fn dispatch_assessment_report(
             format!("{event_type} requires run_id"),
         );
     };
-    let snapshot = match load_snapshot(state, &cmd.session_id) {
+    let snapshot = match load_snapshot(cmd, state) {
         Ok(snapshot) => snapshot,
         Err(error) => return error,
     };
@@ -852,30 +852,24 @@ fn server_event(session_id: &str, event_type: &str, payload: Value) -> ServerEve
 fn lookup_controller(
     state: &AppStateHandle,
     session_id: &str,
-) -> Result<crate::session::SessionHandleRef, (ServerAck, Vec<ServerEvent>)> {
-    state.sessions.get(session_id).ok_or_else(|| {
-        ack_error(
-            session_id,
-            "session.not_found",
-            format!("session {session_id} not found"),
-        )
-    })
+) -> Result<crate::session::SessionHandleRef, ()> {
+    state.sessions.get(session_id).ok_or(())
 }
 
 fn load_snapshot(
+    cmd: &ClientCommand,
     state: &AppStateHandle,
-    session_id: &str,
 ) -> Result<AssessmentSnapshot, (ServerAck, Vec<ServerEvent>)> {
     let Some(persistence) = state.persistence.as_ref() else {
         return Err(ack_error(
-            session_id,
+            &cmd.id,
             "persistence.disabled",
             "session persistence is not configured",
         ));
     };
-    let events = persistence.load_events(session_id, 0).map_err(|err| {
+    let events = persistence.load_events(&cmd.session_id, 0).map_err(|err| {
         ack_error(
-            session_id,
+            &cmd.id,
             "assessment.query_failed",
             format!("failed to load persisted assessment events: {err}"),
         )
