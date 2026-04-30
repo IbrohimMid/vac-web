@@ -57,3 +57,12 @@ logs/
 .clippy.done
 .cargotest.log
 .cargotest.done
+
+# transient local pid/log files for autonomous runs
+.clippy-*.pid
+.clippy-*.log
+.nextest-*.pid
+.nextest-*.log
+.webrest.done
+.web-build.pid
+.web-build.log
