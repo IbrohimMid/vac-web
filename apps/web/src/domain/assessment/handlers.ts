@@ -3,13 +3,20 @@
 // `assessment.*` / `evidence.*` ServerEvents.
 
 import {
+  ASSESSOR_FAMILIES,
   useAssessment,
+  type AssessorFamily,
   type Category,
+  type ConnectorSnapshot,
   type Finding,
   type Run,
+  type RunProgress,
+  type RunFailure,
   type Severity,
   type Verdict,
+  type Sweep,
 } from '../../stores/assessment';
+import type { DiffResult } from '../../stores/assessmentDiff';
 import type { TransportHandle } from '../../transport';
 
 function asSeverity(raw: string | undefined): Severity {
@@ -103,6 +110,7 @@ interface EvidencePayload {
   label: string;
   captured_at: string;
   ttl_seconds: number;
+  preview?: string;
   uri?: string;
   locator?: Record<string, unknown>;
   connector_id?: string;
@@ -202,6 +210,7 @@ function readEvidencePayload(ev: unknown): EvidencePayload | null {
         : typeof raw.ttlSeconds === 'number'
           ? raw.ttlSeconds
           : 0,
+    ...(typeof raw.preview === 'string' ? { preview: raw.preview } : {}),
     ...(typeof raw.uri === 'string' ? { uri: raw.uri } : {}),
     ...(raw.locator && typeof raw.locator === 'object' ? { locator: raw.locator as Record<string, unknown> } : {}),
     ...(typeof raw.connector_id === 'string' ? { connector_id: raw.connector_id } : {}),
@@ -226,6 +235,473 @@ function readCount(raw: Record<string, unknown>, keys: string[]): number {
   return 1;
 }
 
+function readOptionalNumber(raw: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  }
+  return undefined;
+}
+
+function readString(raw: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function readRunMeta(raw: Record<string, unknown>): {
+  agent_id?: string;
+  agent_kind?: string;
+  agent_role?: string;
+  worker_session_id?: string;
+  sweep_id?: string;
+} {
+  const meta: {
+    agent_id?: string;
+    agent_kind?: string;
+    agent_role?: string;
+    worker_session_id?: string;
+    sweep_id?: string;
+  } = {};
+  const agentId = readString(raw, ['agent_id', 'agentId']);
+  if (agentId) meta.agent_id = agentId;
+  const agentKind = readString(raw, ['agent_kind', 'agentKind']);
+  if (agentKind) meta.agent_kind = agentKind;
+  const agentRole = readString(raw, ['agent_role', 'agentRole']);
+  if (agentRole) meta.agent_role = agentRole;
+  const workerSessionId = readString(raw, ['worker_session_id', 'workerSessionId']);
+  if (workerSessionId) meta.worker_session_id = workerSessionId;
+  const sweepId = readString(raw, ['sweep_id', 'sweepId']);
+  if (sweepId) meta.sweep_id = sweepId;
+  return meta;
+}
+
+function readVerdictDetail(raw: Record<string, unknown>): {
+  status: string;
+  delivery_state?: string;
+  reason?: string;
+  counts?: Record<string, number>;
+} | undefined {
+  const detail = raw.verdict_detail ?? raw.verdictDetail;
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return undefined;
+  const d = detail as Record<string, unknown>;
+  const counts = d.counts;
+  const verdictDetail: {
+    status: string;
+    delivery_state?: string;
+    reason?: string;
+    counts?: Record<string, number>;
+  } = {
+    status: readString(d, ['status']) ?? 'UNKNOWN',
+  };
+  const deliveryState = readString(d, ['delivery_state', 'deliveryState']);
+  if (deliveryState) verdictDetail.delivery_state = deliveryState;
+  const reason = readString(d, ['reason']);
+  if (reason) verdictDetail.reason = reason;
+  if (counts && typeof counts === 'object' && !Array.isArray(counts)) {
+    verdictDetail.counts = counts as Record<string, number>;
+  }
+  return verdictDetail;
+}
+
+function readStringArray(raw: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = raw[key];
+    if (!Array.isArray(value)) continue;
+    return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  }
+  return [];
+}
+
+function asFamily(raw: string | undefined): AssessorFamily {
+  return raw && ASSESSOR_FAMILIES.includes(raw as AssessorFamily) ? (raw as AssessorFamily) : 'rtd';
+}
+
+function asRunStatus(raw: string | undefined): Run['status'] {
+  if (raw === 'queued' || raw === 'running' || raw === 'completed' || raw === 'cancelled' || raw === 'failed')
+    return raw;
+  return 'running';
+}
+
+function readValidationStats(raw: Record<string, unknown>): {
+  received: number;
+  rejected: number;
+  rejection_reasons: Record<string, number>;
+} {
+  const received = readOptionalNumber(raw, ['received']) ?? 0;
+  const rejected = readOptionalNumber(raw, ['rejected']) ?? 0;
+  const rejectionReasonsRaw = raw.rejection_reasons ?? raw.rejectionReasons;
+  const rejection_reasons: Record<string, number> = {};
+  if (rejectionReasonsRaw && typeof rejectionReasonsRaw === 'object' && !Array.isArray(rejectionReasonsRaw)) {
+    for (const [key, value] of Object.entries(rejectionReasonsRaw as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        rejection_reasons[key] = Math.max(0, Math.floor(value));
+      }
+    }
+  }
+  return { received, rejected, rejection_reasons };
+}
+
+function readProgressRecord(raw: Record<string, unknown>): RunProgress {
+  const progress: RunProgress = {
+    completed: readOptionalNumber(raw, ['completed']) ?? 0,
+    total: readOptionalNumber(raw, ['total']) ?? 0,
+  };
+  const current = readString(raw, ['current']);
+  if (current) progress.current = current;
+  const phase = readString(raw, ['phase']);
+  if (phase) progress.phase = phase;
+  const pass = readOptionalNumber(raw, ['pass']);
+  if (pass !== undefined) progress.pass = pass;
+  const maxPasses = readOptionalNumber(raw, ['max_passes', 'maxPasses']);
+  if (maxPasses !== undefined) progress.max_passes = maxPasses;
+  const reason = readString(raw, ['reason']);
+  if (reason) progress.reason = reason;
+  const elapsed = readOptionalNumber(raw, ['elapsed_ms', 'elapsedMs']);
+  if (elapsed !== undefined) progress.elapsed_ms = elapsed;
+  return progress;
+}
+
+function readFindingRecord(raw: unknown): Finding | null {
+  const p = readFindingPayload(raw);
+  if (!p) return null;
+  return {
+    id: p.finding_id,
+    identity_hash: p.identity_hash,
+    run_id: p.run_id,
+    category: asCategory(p.category),
+    subject: p.subject,
+    check: p.check,
+    severity: asSeverity(p.severity),
+    confidence: p.confidence ?? 0.8,
+    title: p.title,
+    summary: p.summary,
+    evidence_ids: p.evidence_ids ?? [],
+    emitted_at: p.emitted_at,
+  };
+}
+
+function readRunRecord(raw: unknown): Run | null {
+  const p = raw as Record<string, unknown> | null;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  const id = readString(p, ['id', 'run_id', 'runId']);
+  if (!id) return null;
+  const started_at = readString(p, ['started_at', 'startedAt']) ?? new Date().toISOString();
+  const meta = readRunMeta(p);
+  const progressRaw = p.progress as Record<string, unknown> | undefined;
+  const validationRaw = p.validation as Record<string, unknown> | undefined;
+  const scopeRaw = p.scope as Record<string, unknown> | undefined;
+  const scoreRaw = p.score as Record<string, unknown> | undefined;
+  const connectorSnapshotsRaw = Array.isArray(p.connector_snapshots)
+    ? p.connector_snapshots
+    : Array.isArray(p.connectorSnapshots)
+      ? p.connectorSnapshots
+      : [];
+  const failureRaw = p.failure as Record<string, unknown> | undefined;
+  const agentId = readString(p, ['agent_id', 'agentId']);
+  const agentKind = readString(p, ['agent_kind', 'agentKind']);
+  const agentRole = readString(p, ['agent_role', 'agentRole']);
+  const workerSessionId = readString(p, ['worker_session_id', 'workerSessionId']);
+  const failureDetail = failureRaw ? readString(failureRaw, ['detail']) : undefined;
+  const finishedAt = readString(p, ['finished_at', 'finishedAt']);
+  const verdict = readString(p, ['verdict']);
+  const verdictDetail = readVerdictDetail(p as Record<string, unknown>);
+  return {
+    id,
+    swarm: asFamily(readString(p, ['swarm'])),
+    status: asRunStatus(readString(p, ['status'])),
+    started_at,
+    ...(finishedAt !== undefined ? { finished_at: finishedAt } : {}),
+    ...(meta.sweep_id ? { sweep_id: meta.sweep_id } : {}),
+    progress: progressRaw ? readProgressRecord(progressRaw) : { completed: 0, total: 0 },
+    ...(verdict ? { verdict: asVerdict(verdict) } : {}),
+    ...(scoreRaw
+      ? {
+          score: {
+            technical: typeof scoreRaw.technical === 'number' ? scoreRaw.technical : 0,
+            product: typeof scoreRaw.product === 'number' ? scoreRaw.product : 0,
+            ux: typeof scoreRaw.ux === 'number' ? scoreRaw.ux : 0,
+            release: typeof scoreRaw.release === 'number' ? scoreRaw.release : 0,
+            ops: typeof scoreRaw.ops === 'number' ? scoreRaw.ops : 0,
+          },
+        }
+      : {}),
+    ...(validationRaw
+      ? {
+          validation: readValidationStats(validationRaw),
+        }
+      : {}),
+    ...(scopeRaw
+      ? {
+          scope: {
+            project_root: typeof scopeRaw.project_root === 'string' ? scopeRaw.project_root : '',
+            ...(typeof scopeRaw.repo_ref === 'string' ? { repo_ref: scopeRaw.repo_ref } : {}),
+            ...(typeof scopeRaw.base_commit_sha === 'string'
+              ? { base_commit_sha: scopeRaw.base_commit_sha }
+              : {}),
+            ...(typeof scopeRaw.diff_range === 'string' ? { diff_range: scopeRaw.diff_range } : {}),
+            ...(Array.isArray(scopeRaw.path_globs)
+              ? {
+                  path_globs: scopeRaw.path_globs.filter(
+                    (item): item is string => typeof item === 'string',
+                  ),
+                }
+              : {}),
+            ...(typeof scopeRaw.depth === 'string' ? { depth: scopeRaw.depth } : {}),
+          },
+        }
+      : {}),
+    ...(Array.isArray(connectorSnapshotsRaw)
+      ? {
+          connector_snapshots: connectorSnapshotsRaw
+            .map((snapshot): ConnectorSnapshot | null => {
+              if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+              const s = snapshot as Record<string, unknown>;
+              const connectorId = typeof s.connector_id === 'string' ? s.connector_id : '';
+              const kind = typeof s.kind === 'string' ? s.kind : '';
+              const snapshotId = typeof s.snapshot_id === 'string' ? s.snapshot_id : '';
+              const capturedAt = typeof s.captured_at === 'string' ? s.captured_at : '';
+              if (!connectorId || !kind || !snapshotId || !capturedAt) return null;
+              return {
+                connector_id: connectorId,
+                kind,
+                snapshot_id: snapshotId,
+                captured_at: capturedAt,
+                ...(typeof s.etag === 'string' ? { etag: s.etag } : {}),
+              };
+            })
+            .filter((item): item is ConnectorSnapshot => item !== null),
+        }
+      : {}),
+    ...(agentId !== undefined ? { agent_id: agentId } : {}),
+    ...(agentKind !== undefined ? { agent_kind: agentKind } : {}),
+    ...(agentRole !== undefined ? { agent_role: agentRole } : {}),
+    ...(workerSessionId !== undefined ? { worker_session_id: workerSessionId } : {}),
+    ...(failureRaw
+      ? {
+          failure: {
+            status: asRunFailureStatus(readString(failureRaw, ['status'])),
+            reason: readString(failureRaw, ['reason']) ?? 'assessment_failed',
+            ...(failureDetail !== undefined ? { detail: failureDetail } : {}),
+          },
+        }
+      : {}),
+    ...(verdictDetail ? { verdict_detail: verdictDetail } : {}),
+  };
+}
+
+function asRunFailureStatus(raw: string | undefined): RunFailure['status'] {
+  return raw === 'cancelled' ? 'cancelled' : 'failed';
+}
+
+function readSweepRecord(raw: unknown): Sweep | null {
+  const p = raw as Record<string, unknown> | null;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  const id = readString(p, ['id', 'sweep_id', 'sweepId']);
+  if (!id) return null;
+  const started_at = readString(p, ['started_at', 'startedAt']) ?? new Date().toISOString();
+  const progressRaw = p.progress as Record<string, unknown> | undefined;
+  const verdictDetail = readVerdictDetail(p);
+  const runIds = readStringArray(p, ['run_ids', 'runIds']);
+  const families = readStringArray(p, ['families']).map((family) => asFamily(family));
+  const failureRaw = p.failure as Record<string, unknown> | undefined;
+  const agentId = readString(p, ['agent_id', 'agentId']);
+  const agentKind = readString(p, ['agent_kind', 'agentKind']);
+  const agentRole = readString(p, ['agent_role', 'agentRole']);
+  const failureDetail = failureRaw ? readString(failureRaw, ['detail']) : undefined;
+  const countsRaw = p.counts as Record<string, unknown> | undefined;
+  const finishedAt = readString(p, ['finished_at', 'finishedAt']);
+  const counts: Record<string, number> | undefined = countsRaw
+    ? Object.fromEntries(
+        Object.entries(countsRaw)
+          .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+          .map(([key, value]) => [key, Math.max(0, Math.floor(value as number))]),
+      )
+    : undefined;
+  return {
+    id,
+    families,
+    status: asRunStatus(readString(p, ['status'])),
+    started_at,
+    ...(finishedAt !== undefined ? { finished_at: finishedAt } : {}),
+    progress: progressRaw ? readProgressRecord(progressRaw) : readProgressRecord(p),
+    ...(verdictDetail ? { verdict_detail: verdictDetail } : {}),
+    ...(counts ? { counts } : {}),
+    run_ids: runIds,
+    ...(p.scope && typeof p.scope === 'object' && !Array.isArray(p.scope)
+      ? {
+          scope: {
+            project_root: typeof (p.scope as Record<string, unknown>).project_root === 'string'
+              ? ((p.scope as Record<string, unknown>).project_root as string)
+              : '',
+            ...(typeof (p.scope as Record<string, unknown>).repo_ref === 'string'
+              ? { repo_ref: (p.scope as Record<string, unknown>).repo_ref as string }
+              : {}),
+            ...(typeof (p.scope as Record<string, unknown>).base_commit_sha === 'string'
+              ? {
+                  base_commit_sha: (p.scope as Record<string, unknown>).base_commit_sha as string,
+                }
+              : {}),
+            ...(typeof (p.scope as Record<string, unknown>).diff_range === 'string'
+              ? { diff_range: (p.scope as Record<string, unknown>).diff_range as string }
+              : {}),
+            ...(Array.isArray((p.scope as Record<string, unknown>).path_globs)
+              ? {
+                  path_globs: ((p.scope as Record<string, unknown>).path_globs as unknown[]).filter(
+                    (item): item is string => typeof item === 'string',
+                  ),
+                }
+              : {}),
+            ...(typeof (p.scope as Record<string, unknown>).depth === 'string'
+              ? { depth: (p.scope as Record<string, unknown>).depth as string }
+              : {}),
+          },
+        }
+      : {}),
+    ...(agentId !== undefined ? { agent_id: agentId } : {}),
+    ...(agentKind !== undefined ? { agent_kind: agentKind } : {}),
+    ...(agentRole !== undefined ? { agent_role: agentRole } : {}),
+    ...(failureRaw
+      ? {
+          failure: {
+            status: asRunFailureStatus(readString(failureRaw, ['status'])),
+            reason: readString(failureRaw, ['reason']) ?? 'sweep_failed',
+            ...(failureDetail !== undefined ? { detail: failureDetail } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function readNumberMap(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      out[key] = Math.max(0, Math.floor(value));
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function hydrateAssessmentList(payload: Record<string, unknown>): void {
+  const store = useAssessment.getState();
+  const runs = Array.isArray(payload.runs) ? payload.runs : [];
+  const sweeps = Array.isArray(payload.sweeps) ? payload.sweeps : [];
+  for (const raw of runs) {
+    const run = readRunRecord(raw);
+    if (run) store.upsertRun(run);
+  }
+  for (const raw of sweeps) {
+    const sweep = readSweepRecord(raw);
+    if (sweep) store.upsertSweep(sweep);
+  }
+  const activeRunId = readString(payload, ['active_run_id', 'activeRunId']);
+  if (activeRunId) store.setActive(activeRunId);
+  const activeSweepId = readString(payload, ['active_sweep_id', 'activeSweepId']);
+  if (activeSweepId) store.setActiveSweep(activeSweepId);
+}
+
+function hydrateAssessmentReport(payload: Record<string, unknown>): void {
+  const store = useAssessment.getState();
+  const run = readRunRecord(payload.run ?? payload);
+  if (run) {
+    store.upsertRun(run);
+    store.setActive(run.id);
+    if (run.sweep_id) store.setActiveSweep(run.sweep_id);
+  }
+  const findings = Array.isArray(payload.findings) ? payload.findings : [];
+  for (const raw of findings) {
+    const finding = readFindingRecord(raw);
+    if (finding) store.emitFinding(finding);
+  }
+  const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+  for (const raw of evidence) {
+    const ref = readEvidencePayload(raw);
+    if (!ref?.id) continue;
+    store.upsertEvidence({
+      id: ref.id,
+      connector: ref.connector,
+      kind: ref.kind,
+      label: ref.label,
+      captured_at: ref.captured_at,
+      ttl_seconds: ref.ttl_seconds,
+      ...(ref.preview !== undefined ? { preview: ref.preview } : {}),
+      ...(ref.uri !== undefined ? { uri: ref.uri } : {}),
+      ...(ref.locator !== undefined ? { locator: ref.locator } : {}),
+      ...(ref.connector_id !== undefined ? { connector_id: ref.connector_id } : {}),
+      ...(ref.snapshot_id !== undefined ? { snapshot_id: ref.snapshot_id } : {}),
+      ...(ref.digest !== undefined ? { digest: ref.digest } : {}),
+      ...(ref.source_etag !== undefined ? { source_etag: ref.source_etag } : {}),
+      ...(ref.observed_at !== undefined ? { observed_at: ref.observed_at } : {}),
+      ...(ref.fresh_until !== undefined ? { fresh_until: ref.fresh_until } : {}),
+      ...(ref.staleness_policy !== undefined
+        ? { staleness_policy: ref.staleness_policy as 'hard_expire' | 'warn_only' | 'immutable' }
+        : {}),
+      ...(ref.captured_by !== undefined ? { captured_by: ref.captured_by } : {}),
+      ...(ref.captured_snapshot_id !== undefined ? { captured_snapshot_id: ref.captured_snapshot_id } : {}),
+      ...(ref.size !== undefined ? { size: ref.size } : {}),
+      ...(ref.mime_type !== undefined ? { mime_type: ref.mime_type } : {}),
+    });
+  }
+  const sweep = readSweepRecord(payload.sweep);
+  if (sweep) {
+    store.upsertSweep(sweep);
+    store.setActiveSweep(sweep.id);
+  }
+}
+
+function hydrateAssessmentDiff(payload: Record<string, unknown>): void {
+  const baseRunId = readString(payload, ['base_run_id', 'baseRunId']);
+  const nextRunId = readString(payload, ['next_run_id', 'nextRunId']);
+  if (!baseRunId || !nextRunId) return;
+
+  const store = useAssessment.getState();
+  const baseRun = readRunRecord(payload.base_run ?? payload.baseRun);
+  const nextRun = readRunRecord(payload.next_run ?? payload.nextRun);
+  if (baseRun) store.upsertRun(baseRun);
+  if (nextRun) {
+    store.upsertRun(nextRun);
+    store.setActive(nextRun.id);
+  }
+
+  const entriesRaw = Array.isArray(payload.entries) ? payload.entries : [];
+  const entries = entriesRaw
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+      const raw = entry as Record<string, unknown>;
+      const identityHash = readString(raw, ['identity_hash', 'identityHash']);
+      if (!identityHash) return null;
+      const bucket = readString(raw, ['bucket']) ?? 'persistent';
+      const prev = readFindingRecord(raw.prev);
+      const next = readFindingRecord(raw.next);
+      return {
+        bucket,
+        identity_hash: identityHash,
+        ...(prev ? { prev } : {}),
+        ...(next ? { next } : {}),
+      };
+    })
+    .filter(
+      (entry): entry is {
+        bucket: string;
+        identity_hash: string;
+        prev?: Finding;
+        next?: Finding;
+      } => entry !== null,
+    );
+
+  const counts = readNumberMap(payload.counts) ?? {
+    resolved: 0,
+    persistent: 0,
+    regressed: 0,
+    new: 0,
+  };
+  store.upsertDiff(baseRunId, nextRunId, { entries, counts } as DiffResult);
+}
+
 export function registerAssessmentHandlers(transport: TransportHandle): () => void {
   const offs: Array<() => void> = [];
 
@@ -233,23 +709,8 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
     transport.on('assessment.started', (ev) => {
       const p = ev.payload as StartedPayload | null;
       if (!p?.run_id) return;
-      // Permissive: unknown family names still flow through as `rtd` so the
-      // UI doesn't drop events on family rollout.
-      const known = new Set([
-        'rtd',
-        'pm',
-        'ux',
-        'frontend',
-        'security',
-        'reliability',
-        'performance',
-        'qa',
-        'docs',
-        'launch',
-        'release',
-        'growth',
-      ]);
-      const swarm = (known.has(p.swarm) ? p.swarm : 'rtd') as Run['swarm'];
+      const swarm = asFamily(p.swarm) as Run['swarm'];
+      const meta = readRunMeta(p as unknown as Record<string, unknown>);
       const run: Run = {
         id: p.run_id,
         swarm,
@@ -261,6 +722,13 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
           rejected: 0,
           rejection_reasons: {},
         },
+        ...(meta.sweep_id !== undefined ? { sweep_id: meta.sweep_id } : {}),
+        ...(meta.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        ...(meta.worker_session_id !== undefined
+          ? { worker_session_id: meta.worker_session_id }
+          : {}),
         ...(p.scope
           ? {
               scope: {
@@ -295,10 +763,21 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
     transport.on('assessment.progress', (ev) => {
       const p = ev.payload as ProgressPayload | null;
       if (!p?.run_id) return;
+      const raw = p as unknown as Record<string, unknown>;
+      const phase = readString(raw, ['phase']);
+      const reason = readString(raw, ['reason']);
+      const pass = readOptionalNumber(raw, ['pass']);
+      const maxPasses = readOptionalNumber(raw, ['max_passes', 'maxPasses']);
+      const elapsedMs = readOptionalNumber(raw, ['elapsed_ms', 'elapsedMs']);
       useAssessment.getState().setProgress(p.run_id, {
         completed: p.completed,
         total: p.total,
         ...(p.current !== undefined ? { current: p.current } : {}),
+        ...(phase !== undefined ? { phase } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+        ...(pass !== undefined ? { pass } : {}),
+        ...(maxPasses !== undefined ? { max_passes: maxPasses } : {}),
+        ...(elapsedMs !== undefined ? { elapsed_ms: elapsedMs } : {}),
       });
     }),
   );
@@ -398,7 +877,119 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
         release: p.score?.release ?? 0,
         ops: p.score?.ops ?? 0,
       };
-      useAssessment.getState().completeRun(p.run_id, verdict, score);
+      const meta = readRunMeta(p as unknown as Record<string, unknown>);
+      const verdictDetail = readVerdictDetail(p as unknown as Record<string, unknown>);
+      useAssessment.getState().completeRun(p.run_id, verdict, score, {
+        ...(verdictDetail ? { verdict_detail: verdictDetail } : {}),
+        ...(meta.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        ...(meta.worker_session_id !== undefined
+          ? { worker_session_id: meta.worker_session_id }
+          : {}),
+      });
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.failed', (ev) => {
+      const p = ev.payload as
+        | (Record<string, unknown> & {
+            run_id?: string;
+            status?: string;
+            reason?: string;
+            detail?: string;
+          })
+        | null;
+      if (!p?.run_id) return;
+      const meta = readRunMeta(p);
+      const status = p.status === 'cancelled' ? 'cancelled' : 'failed';
+      useAssessment.getState().failRun(
+        p.run_id,
+        status,
+        readString(p, ['reason']) ?? 'assessment_failed',
+        readString(p, ['detail']),
+        {
+          ...(meta.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+          ...(meta.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+          ...(meta.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+          ...(meta.worker_session_id !== undefined
+            ? { worker_session_id: meta.worker_session_id }
+            : {}),
+        },
+      );
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.sweep.started', (ev) => {
+      const sweep = readSweepRecord(ev.payload);
+      if (!sweep) return;
+      useAssessment.getState().upsertSweep(sweep);
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.sweep.progress', (ev) => {
+      const payload = ev.payload as Record<string, unknown> | null;
+      if (!payload) return;
+      const sweepId = readString(payload, ['sweep_id', 'sweepId']);
+      if (!sweepId) return;
+      const progress = readProgressRecord(payload);
+      useAssessment.getState().setSweepProgress(sweepId, progress);
+      const verdict = readString(payload, ['verdict']);
+      if (verdict === 'pass' || verdict === 'warn' || verdict === 'fail') {
+        const sweep = readSweepRecord(payload);
+        if (sweep) useAssessment.getState().upsertSweep(sweep);
+      }
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.sweep.completed', (ev) => {
+      const sweep = readSweepRecord(ev.payload);
+      if (!sweep) return;
+      useAssessment.getState().upsertSweep(sweep);
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.sweep.failed', (ev) => {
+      const sweep = readSweepRecord(ev.payload);
+      if (!sweep) return;
+      useAssessment.getState().upsertSweep(sweep);
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.runs_listed', (ev) => {
+      const payload = ev.payload as Record<string, unknown> | null;
+      if (!payload) return;
+      hydrateAssessmentList(payload);
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.report_fetched', (ev) => {
+      const payload = ev.payload as Record<string, unknown> | null;
+      if (!payload) return;
+      hydrateAssessmentReport(payload);
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.replayed', (ev) => {
+      const payload = ev.payload as Record<string, unknown> | null;
+      if (!payload) return;
+      hydrateAssessmentReport(payload);
+    }),
+  );
+
+  offs.push(
+    transport.on('assessment.diffed', (ev) => {
+      const payload = ev.payload as Record<string, unknown> | null;
+      if (!payload) return;
+      hydrateAssessmentDiff(payload);
     }),
   );
 

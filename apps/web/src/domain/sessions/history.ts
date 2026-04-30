@@ -256,6 +256,8 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
           agents?: Partial<AgentRegistrySummary>;
           mcp?: Partial<McpServersSummary>;
           diagnostics?: Array<Partial<ConfigDiagnostic>>;
+          active_snapshot_retained?: boolean;
+          last_reload_failed_at?: string | null;
         }
       | null;
     if (!p) return;
@@ -312,6 +314,12 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
       agents,
       mcp,
       diagnostics,
+      ...(typeof p.active_snapshot_retained === 'boolean'
+        ? { active_snapshot_retained: p.active_snapshot_retained }
+        : {}),
+      ...(typeof p.last_reload_failed_at === 'string'
+        ? { last_reload_failed_at: p.last_reload_failed_at }
+        : {}),
     });
   };
   offs.push(transport.on('config.validated', onConfigSnapshot));
@@ -329,7 +337,11 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
   offs.push(
     transport.on('config.reload_failed', (ev) => {
       const p = ev.payload as
-        | { diagnostics?: Array<Partial<ConfigDiagnostic>> }
+        | {
+            diagnostics?: Array<Partial<ConfigDiagnostic>>;
+            active_snapshot_retained?: boolean;
+            last_reload_failed_at?: string;
+          }
         | null;
       const diags: ConfigDiagnostic[] = (p?.diagnostics ?? [])
         .filter(
@@ -345,7 +357,11 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
           ...(e.severity ? { severity: e.severity } : {}),
           ...(e.code ? { code: e.code } : {}),
         }));
-      useSessionHistory.getState().recordConfigReloadFailure(diags);
+      useSessionHistory.getState().recordConfigReloadFailure(diags, {
+        ...(typeof p?.last_reload_failed_at === 'string'
+          ? { last_reload_failed_at: p.last_reload_failed_at }
+          : {}),
+      });
     }),
   );
 

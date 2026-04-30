@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { freshnessTier, useAssessment, type EvidenceRef } from './assessment';
+import { freshnessTier, useAssessment, type EvidenceRef, type Sweep } from './assessment';
+import type { DiffResult } from './assessmentDiff';
 
 function reset() {
   useAssessment.getState().clear();
@@ -11,6 +12,15 @@ const baseRun = {
   status: 'running' as const,
   started_at: 't',
   progress: { completed: 0, total: 5 },
+};
+
+const baseSweep: Sweep = {
+  id: 's1',
+  families: ['rtd', 'security'],
+  status: 'running' as const,
+  started_at: 't',
+  progress: { completed: 0, total: 2 },
+  run_ids: [] as string[],
 };
 
 const baseFinding = {
@@ -50,6 +60,23 @@ describe('assessment store', () => {
     expect(r?.verdict).toBe('pass');
   });
 
+  it('failRun records failed status and failure metadata', () => {
+    useAssessment.getState().upsertRun(baseRun);
+    useAssessment.getState().failRun('r1', 'cancelled', 'user requested cancel', 'stop now', {
+      agent_id: 'agent-1',
+      agent_kind: 'acp',
+      agent_role: 'assessment-worker',
+      worker_session_id: 'worker-1',
+    });
+    const r = useAssessment.getState().runs.get('r1');
+    expect(r?.status).toBe('cancelled');
+    expect(r?.failure?.status).toBe('cancelled');
+    expect(r?.failure?.reason).toBe('user requested cancel');
+    expect(r?.failure?.detail).toBe('stop now');
+    expect(r?.agent_id).toBe('agent-1');
+    expect(r?.worker_session_id).toBe('worker-1');
+  });
+
   it('records candidate received/rejected counts and reasons', () => {
     useAssessment.getState().upsertRun(baseRun);
     useAssessment.getState().recordCandidateReceived('r1', 2);
@@ -68,6 +95,43 @@ describe('assessment store', () => {
     expect(s.findings.size).toBe(1);
     expect(s.findings.get('f2')?.title).toBe('newer');
     expect(s.findingsByHash.get('h1')).toBe('f2');
+  });
+
+  it('links runs into sweeps and tracks sweep state', () => {
+    useAssessment.getState().upsertSweep(baseSweep);
+    useAssessment.getState().upsertRun({ ...baseRun, sweep_id: 's1' });
+    useAssessment.getState().setSweepProgress('s1', {
+      completed: 1,
+      total: 2,
+      current: 'rtd',
+      phase: 'family_complete',
+    });
+    useAssessment.getState().completeSweep('s1', 'warn', {
+      completed: 1,
+      total: 2,
+    });
+
+    const sweep = useAssessment.getState().sweeps.get('s1');
+    expect(useAssessment.getState().activeSweepId).toBe('s1');
+    expect(sweep?.run_ids).toContain('r1');
+    expect(sweep?.progress.completed).toBe(1);
+    expect(sweep?.status).toBe('completed');
+    expect(sweep?.verdict).toBe('warn');
+  });
+
+  it('stores diff snapshots under run pairs', () => {
+    const diff: DiffResult = {
+      entries: [],
+      counts: {
+        resolved: 1,
+        persistent: 2,
+        regressed: 3,
+        new: 4,
+      },
+    };
+    useAssessment.getState().upsertDiff('base', 'next', diff);
+    expect(useAssessment.getState().diffs.get('base\x00next')?.counts.regressed).toBe(3);
+    expect(useAssessment.getState().diffOrder).toEqual(['base\x00next']);
   });
 
   it('setEvidencePreview merges preview onto existing evidence', () => {

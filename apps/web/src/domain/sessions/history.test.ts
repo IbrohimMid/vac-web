@@ -5,7 +5,12 @@
 // against a mock transport so we don't need a live bridge.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { registerSessionHistoryHandlers } from './history';
+import {
+  registerSessionHistoryHandlers,
+  requestConfigReload,
+  requestConfigValidate,
+  requestHistoryResume,
+} from './history';
 import { useSessionHistory } from '../../stores/sessionHistory';
 import type { EventFrame, TransportHandle } from '../../transport';
 
@@ -13,8 +18,10 @@ type Handler = (ev: EventFrame) => void;
 
 function mockTransport() {
   const handlers = new Map<string, Handler[]>();
+  const sent: Array<{ sessionId: string; type: string; payload: unknown }> = [];
   const t: TransportHandle = {
-    async send() {
+    async send(sessionId, type, payload) {
+      sent.push({ sessionId, type, payload });
       return { ackOf: 'x', ok: true };
     },
     on(type, handler) {
@@ -39,7 +46,7 @@ function mockTransport() {
     };
     for (const h of handlers.get(type) ?? []) h(frame);
   };
-  return { t, emit };
+  return { t, emit, sent };
 }
 
 describe('session history resume state machine (Stage X6 4-5)', () => {
@@ -436,6 +443,8 @@ describe('session history resume state machine (Stage X6 4-5)', () => {
     const s = useSessionHistory.getState();
     expect(s.configStatus).toBe('invalid');
     expect(s.configReloading).toBe(false);
+    expect(s.configActiveSnapshotRetained).toBe(true);
+    expect(s.configLastReloadFailedAt).toEqual(expect.any(String));
     // policy/agents/mcp should NOT be cleared — the bridge keeps the
     // previous snapshot live, and the FE should mirror that.
     expect(s.resumePolicy?.default_mode).toBe('replay_only');
@@ -476,7 +485,61 @@ describe('session history resume state machine (Stage X6 4-5)', () => {
     s = useSessionHistory.getState();
     expect(s.configStatus).toBe('invalid');
     expect(s.configDiagnostics).toHaveLength(1);
-    expect(s.configDiagnostics[0].scope).toBe('mcp');
+    expect(s.configDiagnostics[0]?.scope).toBe('mcp');
+  });
+
+
+
+  it('successful config snapshot clears retained reload-failure state', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    emit('config.reload_failed', {
+      diagnostics: [
+        { scope: 'mcp', path: 'servers[0].id', message: 'missing id' },
+      ],
+    });
+    expect(useSessionHistory.getState().configActiveSnapshotRetained).toBe(true);
+
+    emit('config.reloaded', {
+      ok: true,
+      loaded_at: '2026-04-30T11:00:00Z',
+      policy: {
+        default_mode: 'native_or_replay',
+        native_fallback: 'replay_only',
+        mcp_server_drift: 'warn',
+        profile_class_mismatch: 'fail',
+        retention_days: 30,
+        max_events: 2000,
+      },
+      agents: { version: 1, count: 1, default_id: null, items: [] },
+      mcp: { version: 1, count: 0, servers: [] },
+      diagnostics: [],
+    });
+
+    const s = useSessionHistory.getState();
+    expect(s.configStatus).toBe('valid');
+    expect(s.configActiveSnapshotRetained).toBe(false);
+    expect(s.configLastReloadFailedAt).toBeNull();
+    expect(s.configLoadedAt).toBe('2026-04-30T11:00:00Z');
+  });
+
+  it('request helpers send config and policy-default resume commands', async () => {
+    const { t, sent } = mockTransport();
+
+    await requestConfigValidate(t);
+    await requestConfigReload(t);
+    await requestHistoryResume(t, 'vac-default', 'native_or_replay');
+
+    expect(sent).toEqual([
+      { sessionId: '', type: 'config.validate', payload: {} },
+      { sessionId: '', type: 'config.reload', payload: {} },
+      {
+        sessionId: 'vac-default',
+        type: 'session.resume',
+        payload: { vac_session_id: 'vac-default', mode: 'native_or_replay' },
+      },
+    ]);
   });
 
   it('asEffectiveMode coerces older bridge native flag', () => {

@@ -6,6 +6,7 @@
 // the assessment diff (resolved / persistent / regressed / new).
 
 import { create } from 'zustand';
+import type { DiffResult } from './assessmentDiff';
 
 export type Severity = 'info' | 'low' | 'medium' | 'high' | 'critical';
 export type Category = 'technical' | 'product' | 'ux' | 'release' | 'ops';
@@ -51,6 +52,30 @@ export interface ConnectorSnapshot {
   snapshot_id: string;
   captured_at: string;
   etag?: string;
+}
+
+export interface RunProgress {
+  completed: number;
+  total: number;
+  current?: string;
+  phase?: string;
+  pass?: number;
+  max_passes?: number;
+  reason?: string;
+  elapsed_ms?: number;
+}
+
+export interface RunVerdictDetail {
+  status: string;
+  delivery_state?: string;
+  reason?: string;
+  counts?: Record<string, number>;
+}
+
+export interface RunFailure {
+  status: 'failed' | 'cancelled';
+  reason: string;
+  detail?: string;
 }
 
 export interface Finding {
@@ -112,32 +137,112 @@ export interface Run {
   status: RunStatus;
   started_at: string;
   finished_at?: string;
-  progress: { completed: number; total: number; current?: string };
+  sweep_id?: string;
+  progress: RunProgress;
   verdict?: Verdict;
   score?: Record<Category, number>;
   validation?: CandidateValidationStats;
   scope?: RunScope;
   connector_snapshots?: ConnectorSnapshot[];
+  agent_id?: string;
+  agent_kind?: string;
+  agent_role?: string;
+  worker_session_id?: string;
+  verdict_detail?: RunVerdictDetail;
+  failure?: RunFailure;
+}
+
+export interface Sweep {
+  id: string;
+  families: AssessorFamily[];
+  status: RunStatus;
+  started_at: string;
+  finished_at?: string;
+  progress: RunProgress;
+  verdict?: Verdict;
+  verdict_detail?: RunVerdictDetail;
+  counts?: Record<string, number>;
+  run_ids: string[];
+  scope?: RunScope;
+  agent_id?: string;
+  agent_kind?: string;
+  agent_role?: string;
+  failure?: RunFailure;
 }
 
 interface AssessmentSlice {
   runs: Map<string, Run>;
   runOrder: string[];
   activeRunId: string | null;
+  sweeps: Map<string, Sweep>;
+  sweepOrder: string[];
+  activeSweepId: string | null;
   findings: Map<string, Finding>;
   findingsByHash: Map<string, string>; // identity_hash -> finding id
   evidence: Map<string, EvidenceRef>;
+  diffs: Map<string, DiffResult>;
+  diffOrder: string[];
 
   upsertRun(run: Run): void;
-  setProgress(runId: string, progress: Run['progress']): void;
-  completeRun(runId: string, verdict: Verdict, score: Record<Category, number>): void;
+  upsertSweep(sweep: Sweep): void;
+  setProgress(runId: string, progress: RunProgress): void;
+  setSweepProgress(sweepId: string, progress: RunProgress): void;
+  completeRun(
+    runId: string,
+    verdict: Verdict,
+    score: Record<Category, number>,
+    meta?: {
+      verdict_detail?: RunVerdictDetail;
+      agent_id?: string;
+      agent_kind?: string;
+      agent_role?: string;
+      worker_session_id?: string;
+    },
+  ): void;
+  completeSweep(
+    sweepId: string,
+    verdict: Verdict,
+    counts: Record<string, number>,
+    meta?: {
+      verdict_detail?: RunVerdictDetail;
+      agent_id?: string;
+      agent_kind?: string;
+      agent_role?: string;
+    },
+  ): void;
+  failRun(
+    runId: string,
+    status: RunFailure['status'],
+    reason: string,
+    detail?: string,
+    meta?: {
+      agent_id?: string;
+      agent_kind?: string;
+      agent_role?: string;
+      worker_session_id?: string;
+    },
+  ): void;
+  failSweep(
+    sweepId: string,
+    status: RunFailure['status'],
+    reason: string,
+    detail?: string,
+    meta?: {
+      verdict_detail?: RunVerdictDetail;
+      agent_id?: string;
+      agent_kind?: string;
+      agent_role?: string;
+    },
+  ): void;
   setActive(runId: string | null): void;
+  setActiveSweep(sweepId: string | null): void;
   recordCandidateReceived(runId: string, count?: number): void;
   recordCandidateRejected(runId: string, reason: string): void;
 
   emitFinding(f: Finding): void;
   upsertEvidence(e: EvidenceRef): void;
   setEvidencePreview(id: string, preview: string): void;
+  upsertDiff(baseRunId: string, nextRunId: string, diff: DiffResult): void;
 
   clear(): void;
 }
@@ -146,9 +251,14 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
   runs: new Map(),
   runOrder: [],
   activeRunId: null,
+  sweeps: new Map(),
+  sweepOrder: [],
+  activeSweepId: null,
   findings: new Map(),
   findingsByHash: new Map(),
   evidence: new Map(),
+  diffs: new Map(),
+  diffOrder: [],
 
   upsertRun(run) {
     set((s) => {
@@ -164,10 +274,47 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
           rejection_reasons: {},
         },
       });
+      const sweeps = new Map(s.sweeps);
+      if (run.sweep_id) {
+        const prevSweep = sweeps.get(run.sweep_id) ?? {
+          id: run.sweep_id,
+          families: [],
+          status: 'running' as const,
+          started_at: run.started_at,
+          progress: { completed: 0, total: 0 },
+          run_ids: [],
+        };
+        sweeps.set(run.sweep_id, {
+          ...prevSweep,
+          run_ids: prevSweep.run_ids.includes(run.id)
+            ? prevSweep.run_ids
+            : [...prevSweep.run_ids, run.id],
+        });
+      }
       return {
         runs,
         runOrder,
         activeRunId: s.activeRunId ?? run.id,
+        activeSweepId: s.activeSweepId ?? run.sweep_id ?? null,
+        sweeps,
+      };
+    });
+  },
+
+  upsertSweep(sweep) {
+    set((s) => {
+      const sweeps = new Map(s.sweeps);
+      const sweepOrder = sweeps.has(sweep.id) ? s.sweepOrder : [...s.sweepOrder, sweep.id];
+      const prev = sweeps.get(sweep.id);
+      sweeps.set(sweep.id, {
+        ...prev,
+        ...sweep,
+        run_ids: Array.from(new Set([...(prev?.run_ids ?? []), ...(sweep.run_ids ?? [])])),
+      });
+      return {
+        sweeps,
+        sweepOrder,
+        activeSweepId: s.activeSweepId ?? sweep.id,
       };
     });
   },
@@ -182,24 +329,117 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
     });
   },
 
-  completeRun(runId, verdict, score) {
+  setSweepProgress(sweepId, progress) {
+    set((s) => {
+      const cur = s.sweeps.get(sweepId);
+      if (!cur) return s;
+      const sweeps = new Map(s.sweeps);
+      sweeps.set(sweepId, { ...cur, progress });
+      return { sweeps };
+    });
+  },
+
+  completeRun(runId, verdict, score, meta) {
+    set((s) => {
+      const cur = s.runs.get(runId);
+      if (!cur) return s;
+      const runs = new Map(s.runs);
+      const next: Run = {
+        ...cur,
+        status: 'completed',
+        verdict,
+        score,
+        ...(meta?.verdict_detail ? { verdict_detail: meta.verdict_detail } : {}),
+        ...(meta?.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta?.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta?.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        ...(meta?.worker_session_id !== undefined
+          ? { worker_session_id: meta.worker_session_id }
+          : {}),
+        finished_at: new Date().toISOString(),
+      };
+      delete next.failure;
+      runs.set(runId, next);
+      return { runs };
+    });
+  },
+
+  completeSweep(sweepId, verdict, counts, meta) {
+    set((s) => {
+      const cur = s.sweeps.get(sweepId);
+      if (!cur) return s;
+      const sweeps = new Map(s.sweeps);
+      const next: Sweep = {
+        ...cur,
+        status: 'completed',
+        verdict,
+        counts,
+        ...(meta?.verdict_detail ? { verdict_detail: meta.verdict_detail } : {}),
+        ...(meta?.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta?.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta?.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        finished_at: new Date().toISOString(),
+      };
+      delete next.failure;
+      sweeps.set(sweepId, next);
+      return { sweeps };
+    });
+  },
+
+  failRun(runId, status, reason, detail, meta) {
     set((s) => {
       const cur = s.runs.get(runId);
       if (!cur) return s;
       const runs = new Map(s.runs);
       runs.set(runId, {
         ...cur,
-        status: 'completed',
-        verdict,
-        score,
+        status,
+        failure: {
+          status,
+          reason,
+          ...(detail !== undefined ? { detail } : {}),
+        },
+        ...(meta?.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta?.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta?.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        ...(meta?.worker_session_id !== undefined
+          ? { worker_session_id: meta.worker_session_id }
+          : {}),
         finished_at: new Date().toISOString(),
       });
       return { runs };
     });
   },
 
+  failSweep(sweepId, status, reason, detail, meta) {
+    set((s) => {
+      const cur = s.sweeps.get(sweepId);
+      if (!cur) return s;
+      const sweeps = new Map(s.sweeps);
+      sweeps.set(sweepId, {
+        ...cur,
+        status,
+        failure: {
+          status,
+          reason,
+          ...(detail !== undefined ? { detail } : {}),
+        },
+        ...(meta?.verdict_detail ? { verdict_detail: meta.verdict_detail } : {}),
+        ...(meta?.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta?.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta?.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        finished_at: new Date().toISOString(),
+      });
+      return { sweeps };
+    });
+  },
+
   setActive(runId) {
     set({ activeRunId: runId });
+  },
+
+  setActiveSweep(sweepId) {
+    set({ activeSweepId: sweepId });
   },
 
   recordCandidateReceived(runId, count = 1) {
@@ -286,14 +526,29 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
     });
   },
 
+  upsertDiff(baseRunId, nextRunId, diff) {
+    set((s) => {
+      const key = `${baseRunId}\x00${nextRunId}`;
+      const diffs = new Map(s.diffs);
+      const diffOrder = diffs.has(key) ? s.diffOrder : [...s.diffOrder, key];
+      diffs.set(key, diff);
+      return { diffs, diffOrder };
+    });
+  },
+
   clear() {
     set({
       runs: new Map(),
       runOrder: [],
       activeRunId: null,
+      sweeps: new Map(),
+      sweepOrder: [],
+      activeSweepId: null,
       findings: new Map(),
       findingsByHash: new Map(),
       evidence: new Map(),
+      diffs: new Map(),
+      diffOrder: [],
     });
   },
 }));

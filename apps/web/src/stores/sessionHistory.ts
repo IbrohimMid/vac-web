@@ -191,6 +191,10 @@ interface SessionHistorySlice {
   mcpSummary: McpServersSummary | null;
   /** Stage R4 — true while a `config.reload` is in flight (between `started` and `reloaded`/`reload_failed`). */
   configReloading: boolean;
+  /** Stage R4 — true after `config.reload_failed`; previous active runtime snapshot is still in use. */
+  configActiveSnapshotRetained: boolean;
+  /** Stage R4 — ISO timestamp of the latest failed reload, shown as operator context. */
+  configLastReloadFailedAt: string | null;
   /** Stage R3 — set the preview snapshot from a `config.validated` event. */
   setResumePolicy(policy: ResumePolicySnapshot): void;
   /** Stage R3 — record validation diagnostics from `config.validate.failed`. */
@@ -208,6 +212,8 @@ interface SessionHistorySlice {
     agents?: AgentRegistrySummary | null;
     mcp?: McpServersSummary | null;
     diagnostics?: ConfigDiagnostic[];
+    active_snapshot_retained?: boolean;
+    last_reload_failed_at?: string | null;
   }): void;
   /** Stage R4 — mark a reload as in flight (`config.reload.started`). */
   beginConfigReload(): void;
@@ -217,7 +223,10 @@ interface SessionHistorySlice {
    * the same — and just flips the chip to `invalid` plus stores the
    * diagnostic list.
    */
-  recordConfigReloadFailure(diags: ConfigDiagnostic[]): void;
+  recordConfigReloadFailure(
+    diags: ConfigDiagnostic[],
+    meta?: { last_reload_failed_at?: string | null },
+  ): void;
   setRows(
     rows: PersistentSessionRow[],
     persistence: 'disabled' | 'file',
@@ -248,6 +257,8 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
   agentsSummary: null,
   mcpSummary: null,
   configReloading: false,
+  configActiveSnapshotRetained: false,
+  configLastReloadFailedAt: null,
   setResumePolicy(policy) {
     // Stage R3 — a successful policy snapshot also clears any
     // previously latched diagnostic (the bridge only re-broadcasts
@@ -256,19 +267,25 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
       resumePolicy: policy,
       configDiagnostics: [],
       configStatus: 'valid',
+      configActiveSnapshotRetained: false,
+      configLastReloadFailedAt: null,
     });
   },
   setConfigDiagnostics(diags) {
     set({
       configDiagnostics: diags,
       configStatus: diags.length ? 'invalid' : 'valid',
+      configActiveSnapshotRetained: false,
+      configLastReloadFailedAt: null,
     });
   },
   applyConfigSnapshot(snap) {
     set((s) => ({
       configStatus: snap.ok ? 'valid' : 'invalid',
-      configLoadedAt: snap.loaded_at ?? new Date().toISOString(),
-      vacVersion: typeof snap.vac_version === 'number' ? snap.vac_version : s.vacVersion,
+      configLoadedAt: snap.ok
+        ? (snap.loaded_at ?? new Date().toISOString())
+        : s.configLoadedAt,
+      vacVersion: snap.ok && typeof snap.vac_version === 'number' ? snap.vac_version : s.vacVersion,
       // Resume policy: keep previous on `ok=false` so the preview
       // doesn't go blank during a failed reload — the bridge
       // behaves the same way.
@@ -277,16 +294,34 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
       mcpSummary: snap.ok && snap.mcp ? snap.mcp : s.mcpSummary,
       configDiagnostics: snap.diagnostics ?? [],
       configReloading: false,
+      configActiveSnapshotRetained:
+        typeof snap.active_snapshot_retained === 'boolean'
+          ? snap.active_snapshot_retained
+          : !snap.ok && s.configActiveSnapshotRetained,
+      configLastReloadFailedAt: snap.ok
+        ? null
+        : typeof snap.last_reload_failed_at === 'string'
+          ? snap.last_reload_failed_at
+          : s.configLastReloadFailedAt,
     }));
   },
   beginConfigReload() {
-    set({ configReloading: true });
+    set({
+      configReloading: true,
+      configActiveSnapshotRetained: false,
+      configLastReloadFailedAt: null,
+    });
   },
-  recordConfigReloadFailure(diags) {
+  recordConfigReloadFailure(diags, meta) {
     set({
       configStatus: 'invalid',
       configDiagnostics: diags,
       configReloading: false,
+      configActiveSnapshotRetained: true,
+      configLastReloadFailedAt:
+        typeof meta?.last_reload_failed_at === 'string'
+          ? meta.last_reload_failed_at
+          : new Date().toISOString(),
     });
   },
   setRows(rows, persistence, health, recentFailures) {
@@ -345,6 +380,8 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
       agentsSummary: null,
       mcpSummary: null,
       configReloading: false,
+      configActiveSnapshotRetained: false,
+      configLastReloadFailedAt: null,
     });
   },
 }));
