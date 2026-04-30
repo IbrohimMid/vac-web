@@ -298,6 +298,10 @@ mod tests {
             native_resume: PersistenceNativeResume::default(),
             mcp_servers: vec![],
             agent_capabilities: serde_json::json!({"loadSession": true}),
+            // Stage R2 — mirror what spawn_acp / spawn_mock now
+            // record at `session/new` time. The shipped
+            // `executor-code` profile parses to class `executor`.
+            profile_class: Some("executor".to_string()),
         }
     }
 

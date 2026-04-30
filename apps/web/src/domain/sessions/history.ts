@@ -235,6 +235,21 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
     }),
   );
 
+  offs.push(
+    transport.on('session.resume.warning', (ev) => {
+      const p = ev.payload as
+        | { vac_session_id?: string; reason?: string; detail?: string; at?: string }
+        | null;
+      if (!p?.vac_session_id) return;
+      useSessionHistory.getState().recordResumeWarning({
+        vac_session_id: p.vac_session_id,
+        reason: p.reason ?? 'unknown',
+        ...(typeof p.detail === 'string' ? { detail: p.detail } : {}),
+        at: typeof p.at === 'string' ? p.at : new Date().toISOString(),
+      });
+    }),
+  );
+
   return () => {
     for (const off of offs) off();
   };

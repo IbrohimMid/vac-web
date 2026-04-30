@@ -70,6 +70,13 @@ export type ResumeStatus =
       detail?: string;
     };
 
+export interface ResumeWarning {
+  vac_session_id: string;
+  reason: string;
+  detail?: string;
+  at: string;
+}
+
 /**
  * Stage X6 P2-B — persistence health surface for the cockpit chip.
  * Drawn from two sources, in priority order:
@@ -103,6 +110,10 @@ interface SessionHistorySlice {
   /** Stage X6 P2-B — most recent failures (ring-capped on the bridge). */
   recentFailures: PersistenceFailure[];
   resume: ResumeStatus;
+  /** Non-terminal resume warnings keyed by persisted session id. */
+  resumeWarnings: Record<string, ResumeWarning>;
+  /** Most recent resume warning, used by global status surfaces. */
+  lastWarning: ResumeWarning | null;
   setRows(
     rows: PersistentSessionRow[],
     persistence: 'disabled' | 'file',
@@ -111,6 +122,7 @@ interface SessionHistorySlice {
   ): void;
   /** Stage X6 P2-B — surface a live degraded ServerEvent. */
   recordPersistenceFailure(failure: PersistenceFailure): void;
+  recordResumeWarning(warning: ResumeWarning): void;
   remove(vac_session_id: string): void;
   setResume(status: ResumeStatus): void;
   clear(): void;
@@ -122,6 +134,8 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
   health: 'healthy',
   recentFailures: [],
   resume: { kind: 'idle' },
+  resumeWarnings: {},
+  lastWarning: null,
   setRows(rows, persistence, health, recentFailures) {
     set({
       rows,
@@ -139,8 +153,25 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
       recentFailures: [failure, ...s.recentFailures].slice(0, 16),
     }));
   },
+  recordResumeWarning(warning) {
+    set((s) => ({
+      resumeWarnings: {
+        ...s.resumeWarnings,
+        [warning.vac_session_id]: warning,
+      },
+      lastWarning: warning,
+    }));
+  },
   remove(vac_session_id) {
-    set((s) => ({ rows: s.rows.filter((r) => r.vac_session_id !== vac_session_id) }));
+    set((s) => {
+      const { [vac_session_id]: _removed, ...resumeWarnings } = s.resumeWarnings;
+      return {
+        rows: s.rows.filter((r) => r.vac_session_id !== vac_session_id),
+        resumeWarnings,
+        lastWarning:
+          s.lastWarning?.vac_session_id === vac_session_id ? null : s.lastWarning,
+      };
+    });
   },
   setResume(status) {
     set({ resume: status });
@@ -149,6 +180,8 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
     set({
       rows: [],
       resume: { kind: 'idle' },
+      resumeWarnings: {},
+      lastWarning: null,
       health: 'healthy',
       recentFailures: [],
     });

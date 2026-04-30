@@ -25,6 +25,7 @@ export function PersistentSessions({ transport }: Props) {
   const rows = useSessionHistory((s) => s.rows);
   const persistence = useSessionHistory((s) => s.persistence);
   const resume = useSessionHistory((s) => s.resume);
+  const resumeWarnings = useSessionHistory((s) => s.resumeWarnings);
   const health = useSessionHistory((s) => s.health);
   const recentFailures = useSessionHistory((s) => s.recentFailures);
 
@@ -98,6 +99,7 @@ export function PersistentSessions({ transport }: Props) {
         </thead>
         <tbody>
           {rows.map((r) => {
+            const warning = resumeWarnings[r.vac_session_id];
             // Stage X6 4-5 — "busy" now includes the new in-flight
             // states (`initializing`, `loading_native`) so neither
             // button can be re-clicked while a resume is mid-flight.
@@ -140,7 +142,22 @@ export function PersistentSessions({ transport }: Props) {
                 <td style={td} title={r.project_root}>
                   {shortPath(r.project_root)}
                 </td>
-                <td style={td}>{r.status}</td>
+                <td style={td}>
+                  {r.status}
+                  {warning ? (
+                    <div
+                      role="status"
+                      title={
+                        warning.detail
+                          ? `${warning.reason}: ${warning.detail}`
+                          : warning.reason
+                      }
+                      style={rowWarningStyle}
+                    >
+                      Resume warning: {warningLabel(warning.reason)}
+                    </div>
+                  ) : null}
+                </td>
                 <td style={td}>{formatDate(r.updated_at)}</td>
                 <td style={td}>{r.native_resume_supported ? 'yes' : 'replay'}</td>
                 <td style={td}>
@@ -238,3 +255,20 @@ const chipStyle: React.CSSProperties = {
   fontWeight: 600,
 };
 const chipDetailStyle: React.CSSProperties = { opacity: 0.75, fontWeight: 400 };
+const rowWarningStyle: React.CSSProperties = {
+  marginTop: 4,
+  color: '#cc9900',
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+function warningLabel(reason: string): string {
+  if (reason === 'mcp_server_drift') return 'MCP servers changed';
+  // Stage R2 — legacy persisted meta predates the `profile_class`
+  // snapshot, so the bridge couldn't compare it against the live
+  // profile. We surface a non-blocking notice. A class *mismatch*
+  // (different from missing) is a hard failure and never reaches
+  // this label path.
+  if (reason === 'profile_class_missing') return 'Profile class was not recorded';
+  return reason;
+}

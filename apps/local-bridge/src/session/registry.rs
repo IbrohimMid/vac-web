@@ -28,7 +28,15 @@ use tracing::info;
 /// `Debug`, so this enum opts out of `#[derive(Debug)]`.
 pub enum ResumeNativeOutcome {
     /// `session/load` succeeded; the bridge has live pumps + handle.
-    Started(SessionHandleRef),
+    /// Stage R2 — `warnings` carries non-blocking validation
+    /// notices accumulated during pre-spawn checks (e.g. a legacy
+    /// meta missing `profile_class`). The translator emits a
+    /// `session.resume.warning` for each entry before forwarding
+    /// the resume lifecycle events.
+    Started {
+        handle: SessionHandleRef,
+        warnings: Vec<ResumeValidationWarning>,
+    },
     /// Agent's `initialize` advertised loadSession=true but the
     /// `session/load` RPC came back with method-not-found / unsupported.
     /// Callers in `native_or_replay` mode should fall back to replay.
@@ -42,6 +50,26 @@ pub enum ResumeNativeOutcome {
     /// Pre-spawn validation against the live registry / persisted meta
     /// rejected the request. No child was spawned.
     Validation(ResumeValidationFailure),
+}
+
+/// Stage R2 — non-blocking validation notice accumulated during
+/// pre-spawn checks. Each variant maps to a `session.resume.warning`
+/// reason on the wire; the resume itself proceeds.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ResumeValidationWarning {
+    /// Persisted meta predates Stage R2 and has no `profile_class`
+    /// recorded. The bridge can't compare it against the live profile,
+    /// so we surface a non-blocking warning and continue resume.
+    ProfileClassMissing,
+}
+
+impl ResumeValidationWarning {
+    /// Wire reason string for `session.resume.warning.reason`.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::ProfileClassMissing => "profile_class_missing",
+        }
+    }
 }
 
 /// Stage X6 4-4 — specific pre-spawn validation failures. Each
@@ -74,6 +102,13 @@ pub enum ResumeValidationFailure {
     /// `meta.agent_session_id` is `None` — the session never reached
     /// `session/new` so there's nothing for `session/load` to target.
     VacSessionUnknown,
+    /// Stage R2 — the persisted `profile_class` differs from the
+    /// current parsed profile's `class`. The session was created
+    /// against a profile whose semantic class (e.g. `assessor`) has
+    /// since changed (e.g. to `executor`). Hard-fail by default; the
+    /// R3 policy `profile_class_mismatch` may downgrade this to a
+    /// warning at a later stage.
+    ProfileClassMismatch,
 }
 
 impl ResumeValidationFailure {
@@ -88,6 +123,7 @@ impl ResumeValidationFailure {
             Self::AgentKindNotAllowed => "agent_kind_not_allowed",
             Self::ProjectRootUnavailable => "project_root_unavailable",
             Self::VacSessionUnknown => "vac_session_unknown",
+            Self::ProfileClassMismatch => "profile_class_mismatch",
         }
     }
 }
@@ -382,6 +418,60 @@ impl SessionRegistry {
             return ResumeNativeOutcome::Validation(ResumeValidationFailure::AgentKindNotAllowed);
         }
 
+        // Stage R2 — profile_class compatibility. Compare the snapshot
+        // recorded at `session/new` time against the live class. Three
+        // outcomes:
+        //   * Both Some + equal      → pass through.
+        //   * Both Some + different  → hard fail `profile_class_mismatch`.
+        //   * Persisted None         → legacy meta predating R2; emit a
+        //                              `profile_class_missing` warning
+        //                              and continue.
+        // The current profile's class is read from the parsed Rust
+        // value (post `inherits_from` resolution + consistency check),
+        // *not* the raw YAML field, so an attacker can't bypass the
+        // gate by tweaking only the YAML.
+        let live_class = serde_json::to_value(&profile.class)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string));
+        let mut warnings: Vec<ResumeValidationWarning> = Vec::new();
+        match (meta.profile_class.as_deref(), live_class.as_deref()) {
+            (Some(persisted), Some(live)) if persisted != live => {
+                tracing::warn!(
+                    profile = %meta.profile_id,
+                    persisted_class = %persisted,
+                    live_class = %live,
+                    "resume_native: profile_class drift between session/new and resume"
+                );
+                return ResumeNativeOutcome::Validation(
+                    ResumeValidationFailure::ProfileClassMismatch,
+                );
+            }
+            (Some(_), Some(_)) => {
+                // Classes match — nothing to do.
+            }
+            (None, _) => {
+                // Legacy meta predating R2. Surface a non-blocking
+                // warning so the operator notices, but continue.
+                tracing::info!(
+                    profile = %meta.profile_id,
+                    vac_session = %meta.vac_session_id,
+                    "resume_native: persisted meta has no profile_class; emitting profile_class_missing warning"
+                );
+                warnings.push(ResumeValidationWarning::ProfileClassMissing);
+            }
+            (Some(_), None) => {
+                // We have a persisted class but couldn't read the live
+                // one. The profile loaded successfully above, so this
+                // shouldn't happen in practice; tolerate it as a
+                // missing-class warning rather than a mismatch fail.
+                tracing::warn!(
+                    profile = %meta.profile_id,
+                    "resume_native: live profile class not extractable; treating as missing"
+                );
+                warnings.push(ResumeValidationWarning::ProfileClassMissing);
+            }
+        }
+
         // Step 6–10 — spawn ACP child via existing flow with
         // `resume_native` set. `SessionHandle::spawn` reuses the
         // existing `vac_session_id` and replaces `session/new` with a
@@ -420,9 +510,15 @@ impl SessionRegistry {
                 info!(
                     session_id = %meta.vac_session_id,
                     total = self.inner.len(),
+                    warnings = warnings.len(),
                     "native resume succeeded"
                 );
-                ResumeNativeOutcome::Started(handle)
+                // Stage R2 — forward any pre-spawn validation
+                // warnings (e.g. legacy meta missing `profile_class`)
+                // alongside the live handle so the translator can
+                // emit `session.resume.warning` events before the
+                // resume lifecycle stream.
+                ResumeNativeOutcome::Started { handle, warnings }
             }
             Err(e) => match e.downcast::<LoadSessionError>() {
                 Ok(LoadSessionError::Unsupported(_)) => ResumeNativeOutcome::Unsupported,
@@ -544,6 +640,32 @@ mod tests {
         profile_id: &str,
         agent_session_id: Option<&str>,
     ) -> PersistedSessionMeta {
+        meta_with_class(
+            agent_id,
+            agent_kind,
+            project_root,
+            profile_id,
+            agent_session_id,
+            // Stage R2 — most existing tests load the shipped
+            // `assessor` profile, so default the persisted class
+            // to match. Tests that need to exercise the
+            // `profile_class_missing` warning path call
+            // `meta_with_class(.., None)` directly.
+            Some("assessor"),
+        )
+    }
+
+    /// Stage R2 — explicit-class variant of `meta_with` so tests can
+    /// inject `profile_class: None` (legacy meta) or a deliberate
+    /// mismatch without touching every other validation test.
+    fn meta_with_class(
+        agent_id: &str,
+        agent_kind: &str,
+        project_root: PathBuf,
+        profile_id: &str,
+        agent_session_id: Option<&str>,
+        profile_class: Option<&str>,
+    ) -> PersistedSessionMeta {
         use crate::session::persistence::{
             PersistedSessionStatus, PersistenceNativeResume, PersistenceVersion,
         };
@@ -566,6 +688,7 @@ mod tests {
             },
             mcp_servers: Vec::new(),
             agent_capabilities: serde_json::json!({}),
+            profile_class: profile_class.map(str::to_string),
         }
     }
 
@@ -726,6 +849,135 @@ mod tests {
                 assert_eq!(f.reason(), "profile_not_found");
             }
             _ => panic!("expected Validation(ProfileNotFound) for missing profile file"),
+        }
+    }
+
+    /// Stage R2 — mismatched persisted vs live `profile_class`
+    /// must hard-fail with `profile_class_mismatch` BEFORE any
+    /// child is spawned. Builds a profile fixture whose class is
+    /// `assessor` but persists meta as if it were `executor`.
+    #[tokio::test]
+    async fn resume_native_validation_profile_class_mismatch() {
+        let agents = registry_from(
+            r#"
+            default_agent_id = "alpha"
+            [agents.alpha]
+            label = "Alpha"
+            kind = "acp"
+            command = "/bin/true"
+            "#,
+        );
+        let profile_root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            profile_root.path().join("assessor.yaml"),
+            "id: assessor\nclass: assessor\nversion: 0.0.0\nallowed_agent_kinds:\n  - acp\n",
+        )
+        .unwrap();
+        let registry =
+            SessionRegistry::with_runtime_and_profiles(agents, profile_root.path().to_path_buf());
+        let project_tmp = tempfile::tempdir().unwrap();
+        let meta = meta_with_class(
+            "alpha",
+            "acp",
+            project_tmp.path().to_path_buf(),
+            "assessor",
+            Some("agent_sess_x"),
+            Some("executor"), // drift: persisted as executor, profile is assessor
+        );
+        let outcome = registry.resume_native(&meta, "acp_load").await;
+        match outcome {
+            ResumeNativeOutcome::Validation(f) => {
+                assert_eq!(f, ResumeValidationFailure::ProfileClassMismatch);
+                assert_eq!(f.reason(), "profile_class_mismatch");
+            }
+            _ => panic!("expected Validation(ProfileClassMismatch)"),
+        }
+    }
+
+    /// Stage R2 — a persisted meta with the same class as the live
+    /// profile must clear the R2 gate. Reaches `vac_session_unknown`
+    /// because `agent_session_id` is `None` (no need to spawn an
+    /// actual child to assert the gate passed).
+    #[tokio::test]
+    async fn resume_native_validation_profile_class_match_passes_gate() {
+        let agents = registry_from(
+            r#"
+            default_agent_id = "alpha"
+            [agents.alpha]
+            label = "Alpha"
+            kind = "acp"
+            command = "/bin/true"
+            "#,
+        );
+        let profile_root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            profile_root.path().join("assessor.yaml"),
+            "id: assessor\nclass: assessor\nversion: 0.0.0\nallowed_agent_kinds:\n  - acp\n",
+        )
+        .unwrap();
+        let registry =
+            SessionRegistry::with_runtime_and_profiles(agents, profile_root.path().to_path_buf());
+        let project_tmp = tempfile::tempdir().unwrap();
+        let meta = meta_with_class(
+            "alpha",
+            "acp",
+            project_tmp.path().to_path_buf(),
+            "assessor",
+            None, // forces VacSessionUnknown after the R2 gate
+            Some("assessor"),
+        );
+        let outcome = registry.resume_native(&meta, "acp_load").await;
+        match outcome {
+            ResumeNativeOutcome::Validation(f) => {
+                // Gate passed; downstream check tripped on missing
+                // agent_session_id, which is the expected next failure.
+                assert_eq!(f, ResumeValidationFailure::VacSessionUnknown);
+            }
+            _ => panic!("expected gate to pass and trip VacSessionUnknown"),
+        }
+    }
+
+    /// Stage R2 — legacy meta missing `profile_class` must NOT fail
+    /// the gate; the warning is accumulated and the resume continues
+    /// to the next validation step. We assert by reaching
+    /// `VacSessionUnknown` (downstream gate) with an absent persisted
+    /// class — if the R2 gate had hard-failed we'd see
+    /// `ProfileClassMismatch` instead.
+    #[tokio::test]
+    async fn resume_native_validation_profile_class_missing_does_not_fail_gate() {
+        let agents = registry_from(
+            r#"
+            default_agent_id = "alpha"
+            [agents.alpha]
+            label = "Alpha"
+            kind = "acp"
+            command = "/bin/true"
+            "#,
+        );
+        let profile_root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            profile_root.path().join("assessor.yaml"),
+            "id: assessor\nclass: assessor\nversion: 0.0.0\nallowed_agent_kinds:\n  - acp\n",
+        )
+        .unwrap();
+        let registry =
+            SessionRegistry::with_runtime_and_profiles(agents, profile_root.path().to_path_buf());
+        let project_tmp = tempfile::tempdir().unwrap();
+        let meta = meta_with_class(
+            "alpha",
+            "acp",
+            project_tmp.path().to_path_buf(),
+            "assessor",
+            None,
+            None, // legacy meta with no persisted class
+        );
+        let outcome = registry.resume_native(&meta, "acp_load").await;
+        match outcome {
+            ResumeNativeOutcome::Validation(ResumeValidationFailure::VacSessionUnknown) => {}
+            other => panic!(
+                "expected gate to pass and trip VacSessionUnknown, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         }
     }
 

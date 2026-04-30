@@ -177,6 +177,58 @@ describe('session history resume state machine (Stage X6 4-5)', () => {
     });
   });
 
+  it('session.resume.warning records non-terminal MCP drift warning', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    emit('session.resume.started', { vac_session_id: 'vac-warn', mode: 'acp_load' });
+    emit('session.resume.warning', {
+      vac_session_id: 'vac-warn',
+      reason: 'mcp_server_drift',
+      detail: 'MCP server set changed since this session was created',
+      at: '2026-04-30T00:00:00.000Z',
+    });
+
+    const state = useSessionHistory.getState();
+    expect(state.resume).toMatchObject({
+      kind: 'starting',
+      vac_session_id: 'vac-warn',
+    });
+    expect(state.lastWarning).toEqual({
+      vac_session_id: 'vac-warn',
+      reason: 'mcp_server_drift',
+      detail: 'MCP server set changed since this session was created',
+      at: '2026-04-30T00:00:00.000Z',
+    });
+    expect(state.resumeWarnings['vac-warn']).toEqual(state.lastWarning);
+  });
+
+  // Stage R2 — legacy persisted meta missing `profile_class` is a
+  // non-blocking warning emitted before the resume lifecycle
+  // events. Verify the same store machinery used for
+  // `mcp_server_drift` keys this reason on `vac_session_id` and
+  // exposes it as `lastWarning` + `resumeWarnings[id]`.
+  it('session.resume.warning records profile_class_missing for legacy meta', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    emit('session.resume.started', { vac_session_id: 'vac-r2', mode: 'native_or_replay' });
+    emit('session.resume.warning', {
+      vac_session_id: 'vac-r2',
+      reason: 'profile_class_missing',
+      at: '2026-04-30T00:00:00.000Z',
+    });
+
+    const state = useSessionHistory.getState();
+    expect(state.lastWarning).toMatchObject({
+      vac_session_id: 'vac-r2',
+      reason: 'profile_class_missing',
+    });
+    expect(state.resumeWarnings['vac-r2']).toMatchObject({
+      reason: 'profile_class_missing',
+    });
+  });
+
   for (const reason of [
     'vac_session_unknown',
     'agent_not_in_registry',

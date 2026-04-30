@@ -234,6 +234,12 @@ fn make_meta(
         },
         mcp_servers: Vec::new(),
         agent_capabilities: json!({"loadSession": load_session_supported}),
+        // Stage R2 — the shipped `executor.code@1.0.0` profile
+        // parses to class `executor`, so seed a matching persisted
+        // class. The R2 unit tests in this file that exercise
+        // mismatch / missing paths construct meta inline rather
+        // than going through `make_meta`.
+        profile_class: Some("executor".to_string()),
     }
 }
 

@@ -636,6 +636,20 @@ impl SessionHandle {
             }
         };
 
+        // Stage R2 — snapshot the parsed profile class for the
+        // persisted meta. Loading the profile here mirrors the
+        // `spawn_acp` path. A failure to load is recorded as `None`
+        // (legacy behavior, surfaces as a `profile_class_missing`
+        // warning at resume time) rather than blocking spawn.
+        let profile_class_for_meta_mock =
+            profile_core::profile::CapabilityProfile::load(&opts.profile_id, &opts.profile_root)
+                .ok()
+                .and_then(|p| {
+                    serde_json::to_value(&p.class)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                });
+
         // Persist `session/new` metadata + build the per-session
         // sink before we wire up emitter tasks, so the very first
         // events the session emits land in the durable transcript.
@@ -643,6 +657,7 @@ impl SessionHandle {
             opts.persistence.as_ref(),
             &opts.session_id,
             &opts.profile_id,
+            profile_class_for_meta_mock.as_deref(),
             &opts.project_root,
             &opts.agent,
             None,
@@ -1159,6 +1174,7 @@ fn build_persistence_sink(
     persistence: Option<&Arc<dyn SessionPersistence>>,
     session_id: &str,
     profile_id: &str,
+    profile_class: Option<&str>,
     project_root: &Path,
     agent: &AgentDefinition,
     agent_capabilities: Option<&serde_json::Value>,
@@ -1197,6 +1213,16 @@ fn build_persistence_sink(
         agent_capabilities: agent_capabilities
             .cloned()
             .unwrap_or(serde_json::Value::Null),
+        // Stage R2 — snapshot of the parsed profile class at
+        // `session/new` time. Source of truth is the Rust
+        // `CapabilityProfile.class` after `inherits_from` resolution
+        // and consistency validation, never the raw YAML field.
+        // `None` only when the caller couldn't load the profile (e.g.
+        // a YAML parse error in the spawn_mock fallback path); in that
+        // case we still let the session start, and `resume_native`
+        // will surface a `profile_class_missing` warning instead of a
+        // hard failure.
+        profile_class: profile_class.map(str::to_string),
     };
     if let Err(e) = inner.save_meta(&meta) {
         tracing::warn!(
@@ -2041,6 +2067,15 @@ impl SessionHandle {
             }
         };
 
+        // Stage R2 — reuse the already-loaded `profile` (from the
+        // fs/terminal capability advertisement step above) for the
+        // persisted class snapshot. Serializes the Class enum through
+        // serde so the on-disk value matches the lowercase wire form
+        // (`assessor` / `executor`).
+        let profile_class_for_meta_acp = serde_json::to_value(&profile.class)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string));
+
         // Persist `session/new` metadata + build the per-session
         // sink with the agent capabilities we just learned at
         // `initialize`. ACP-only fact: the agent_session_id is
@@ -2050,6 +2085,7 @@ impl SessionHandle {
             opts.persistence.as_ref(),
             &opts.session_id,
             &opts.profile_id,
+            profile_class_for_meta_acp.as_deref(),
             &opts.project_root,
             &opts.agent,
             Some(&init.agent_capabilities),

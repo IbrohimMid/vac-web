@@ -654,7 +654,7 @@ pub async fn dispatch_command(
                     let outcome = state.sessions.resume_native(&meta, mode_static).await;
                     use crate::session::{ResumeNativeOutcome, ResumeValidationFailure};
                     match outcome {
-                        ResumeNativeOutcome::Started(handle) => {
+                        ResumeNativeOutcome::Started { handle, warnings } => {
                             // Handle already emitted session.resume.initializing,
                             // vac.session_resumed_native, replayed fixture
                             // updates, and session.resumed via spawn_acp.
@@ -676,6 +676,39 @@ pub async fn dispatch_command(
                                     "resume_mode": "native",
                                 }),
                             );
+                            // Stage R2 — emit any pre-spawn validation
+                            // warnings BEFORE draining the resume
+                            // lifecycle ring so the FE warning chip
+                            // shows up in the same dispatch response
+                            // that carries `session.resumed`. Each
+                            // warning is a single-line
+                            // `session.resume.warning` event keyed by
+                            // a stable lowercase reason string
+                            // (`profile_class_missing`, etc).
+                            for warning in &warnings {
+                                events.push(ServerEvent {
+                                    seq: 0,
+                                    session_id: target_id.clone(),
+                                    event_type: "session.resume.warning".into(),
+                                    payload: json!({
+                                        "vac_session_id": target_id,
+                                        "mode": mode_str,
+                                        "reason": warning.reason(),
+                                    }),
+                                    v: 1,
+                                    ts: chrono::Utc::now().to_rfc3339(),
+                                });
+                                state.audit.log(
+                                    &target_id,
+                                    "session",
+                                    AuditSeverity::Warn,
+                                    json!({
+                                        "event": "resume_warning",
+                                        "reason": warning.reason(),
+                                        "mode": mode_str,
+                                    }),
+                                );
+                            }
                             let ring = handle.ring.read().await;
                             if let ReplayResult::Stream(evs) = ring.replay_after(0) {
                                 events.extend(evs.into_iter().map(|(seq, mut ev)| {
@@ -855,6 +888,15 @@ pub async fn dispatch_command(
                                 }
                                 ResumeValidationFailure::ProjectRootUnavailable => {
                                     "session.project_root_unavailable"
+                                }
+                                // Stage R2 — hard fail when persisted
+                                // `profile_class` differs from the live
+                                // parsed profile's class. R3 may turn
+                                // this into a policy-driven warning, but
+                                // for now it always lands on a
+                                // `session.resume.failed` ack.
+                                ResumeValidationFailure::ProfileClassMismatch => {
+                                    "session.profile_class_mismatch"
                                 }
                             };
                             events.push(ServerEvent {

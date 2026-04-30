@@ -9,39 +9,61 @@ import { useSessionHistory } from '../../stores/sessionHistory';
 
 export function ResumeStatus() {
   const resume = useSessionHistory((s) => s.resume);
+  const warning = useSessionHistory((s) => s.lastWarning);
+  const warningChip = warning ? (
+    <span
+      aria-live="polite"
+      style={chip('amber')}
+      title={warning.detail ? `${warning.reason}: ${warning.detail}` : warning.reason}
+    >
+      Resume warning: {warningLabel(warning.reason)}
+    </span>
+  ) : null;
 
-  if (resume.kind === 'idle') return null;
+  if (resume.kind === 'idle') return warningChip;
 
   if (resume.kind === 'starting') {
     return (
-      <span aria-live="polite" style={chip('blue')}>
-        Resuming {short(resume.vac_session_id)}… ({resume.mode})
-      </span>
+      <>
+        <span aria-live="polite" style={chip('blue')}>
+          Resuming {short(resume.vac_session_id)}… ({resume.mode})
+        </span>
+        {warningChip}
+      </>
     );
   }
 
   if (resume.kind === 'initializing') {
     return (
-      <span aria-live="polite" style={chip('blue')}>
-        Initializing {short(resume.vac_session_id)}…
-      </span>
+      <>
+        <span aria-live="polite" style={chip('blue')}>
+          Initializing {short(resume.vac_session_id)}…
+        </span>
+        {warningChip}
+      </>
     );
   }
 
   if (resume.kind === 'loading_native') {
     return (
-      <span aria-live="polite" style={chip('blue')}>
-        Loading {short(resume.vac_session_id)} natively…
-      </span>
+      <>
+        <span aria-live="polite" style={chip('blue')}>
+          Loading {short(resume.vac_session_id)} natively…
+        </span>
+        {warningChip}
+      </>
     );
   }
 
   if (resume.kind === 'replaying') {
     return (
-      <span aria-live="polite" style={chip('blue')}>
-        Replaying {short(resume.vac_session_id)}…
-        {resume.replayed > 0 ? ` (${resume.replayed} events)` : ''}
-      </span>
+      <>
+        <span aria-live="polite" style={chip('blue')}>
+          Replaying {short(resume.vac_session_id)}…
+          {resume.replayed > 0 ? ` (${resume.replayed} events)` : ''}
+        </span>
+        {warningChip}
+      </>
     );
   }
 
@@ -54,25 +76,39 @@ export function ResumeStatus() {
           ? 'replay (fallback)'
           : 'replay';
     return (
-      <span aria-live="polite" style={chip(tone)}>
-        Resumed {short(resume.vac_session_id)} · {resume.replayed} events ({label})
-      </span>
+      <>
+        <span aria-live="polite" style={chip(tone)}>
+          Resumed {short(resume.vac_session_id)} · {resume.replayed} events ({label})
+        </span>
+        {warningChip}
+      </>
     );
   }
 
   return (
-    <span
-      aria-live="assertive"
-      style={chip('red')}
-      title={resume.detail ? `${resume.reason}: ${resume.detail}` : resume.reason}
-    >
-      Resume failed: {short(resume.vac_session_id)} — {resume.reason}
-    </span>
+    <>
+      <span
+        aria-live="assertive"
+        style={chip('red')}
+        title={resume.detail ? `${resume.reason}: ${resume.detail}` : resume.reason}
+      >
+        Resume failed: {short(resume.vac_session_id)} — {resume.reason}
+      </span>
+      {warningChip}
+    </>
   );
 }
 
 function short(id: string): string {
   return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+function warningLabel(reason: string): string {
+  if (reason === 'mcp_server_drift') return 'MCP servers changed';
+  // Stage R2 — see PersistentSessions.warningLabel for the
+  // missing-vs-mismatch rationale. Mismatch is a hard fail.
+  if (reason === 'profile_class_missing') return 'Profile class was not recorded';
+  return reason;
 }
 
 function chip(tone: 'blue' | 'green' | 'red' | 'amber'): React.CSSProperties {

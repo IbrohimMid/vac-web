@@ -74,6 +74,16 @@ pub struct PersistedSessionMeta {
     pub mcp_servers: Vec<serde_json::Value>,
     #[serde(default)]
     pub agent_capabilities: serde_json::Value,
+    /// Stage R2 — profile class snapshot recorded at `session/new`
+    /// time, captured from the parsed `CapabilityProfile.class`
+    /// (`assessor` / `executor` today). Wrapped in `Option` so legacy
+    /// pre-R2 metas without this field deserialize cleanly as `None`
+    /// and trigger a `profile_class_missing` warning instead of a
+    /// hard failure on resume. The profile YAML's raw `class:` field
+    /// is *not* the source of truth — we always read the value the
+    /// Rust loader produced after inheritance resolution + validation.
+    #[serde(default)]
+    pub profile_class: Option<String>,
 }
 
 /// Redaction label written next to every persisted event so the
