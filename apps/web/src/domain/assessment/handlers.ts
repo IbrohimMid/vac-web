@@ -9,6 +9,7 @@ import {
   type Category,
   type ConnectorSnapshot,
   type Finding,
+  type QueryAction,
   type Run,
   type RunProgress,
   type RunFailure,
@@ -18,6 +19,7 @@ import {
 } from '../../stores/assessment';
 import type { DiffResult } from '../../stores/assessmentDiff';
 import type { TransportHandle } from '../../transport';
+import { reasonFromAckCode, reasonLabel } from './queries';
 
 function asSeverity(raw: string | undefined): Severity {
   if (raw === 'info' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'critical')
@@ -990,6 +992,39 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
       const payload = ev.payload as Record<string, unknown> | null;
       if (!payload) return;
       hydrateAssessmentDiff(payload);
+    }),
+  );
+
+  // P2: backend may emit a follow-up `assessment.query_failed` event after
+  // accepting a command but failing during background execution (e.g. event
+  // log truncation). Surface that as a queryError so the UI can render a
+  // banner with a Retry CTA, mirroring the synchronous ack failure path.
+  offs.push(
+    transport.on('assessment.query_failed', (ev) => {
+      const payload = (ev.payload as Record<string, unknown> | null) ?? null;
+      if (!payload) return;
+      const action = (payload['action'] ?? payload['kind']) as QueryAction | undefined;
+      if (!action) return;
+      const code = typeof payload['code'] === 'string' ? (payload['code'] as string) : undefined;
+      const message =
+        typeof payload['message'] === 'string'
+          ? (payload['message'] as string)
+          : reasonLabel('event_log_truncated');
+      const targetId =
+        typeof payload['target_id'] === 'string'
+          ? (payload['target_id'] as string)
+          : typeof payload['run_id'] === 'string'
+            ? (payload['run_id'] as string)
+            : typeof payload['sweep_id'] === 'string'
+              ? (payload['sweep_id'] as string)
+              : undefined;
+      useAssessment.getState().recordQueryFailure({
+        action,
+        reason: reasonFromAckCode(code) ?? 'event_log_truncated',
+        message,
+        ts: new Date().toISOString(),
+        ...(targetId !== undefined ? { targetId } : {}),
+      });
     }),
   );
 

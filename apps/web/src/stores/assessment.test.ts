@@ -207,7 +207,10 @@ describe('queryErrors (P2)', () => {
   it('clearQueryFailure removes only the matching entry', () => {
     const s = useAssessment.getState();
     s.recordQueryFailure(failure({ action: 'fetch_report', targetId: 'r1' }));
-    s.recordQueryFailure(failure({ action: 'list_runs', targetId: undefined }));
+    const noTarget = failure();
+    delete (noTarget as { targetId?: string }).targetId;
+    noTarget.action = 'list_runs';
+    s.recordQueryFailure(noTarget);
     s.clearQueryFailure('fetch_report', 'r1');
     const after = useAssessment.getState().queryErrors;
     expect(after.has('fetch_report:r1')).toBe(false);
@@ -217,7 +220,10 @@ describe('queryErrors (P2)', () => {
   it('clearAllQueryErrors empties the map', () => {
     const s = useAssessment.getState();
     s.recordQueryFailure(failure());
-    s.recordQueryFailure(failure({ action: 'list_runs', targetId: undefined }));
+    const noTarget = failure();
+    delete (noTarget as { targetId?: string }).targetId;
+    noTarget.action = 'list_runs';
+    s.recordQueryFailure(noTarget);
     s.clearAllQueryErrors();
     expect(useAssessment.getState().queryErrors.size).toBe(0);
   });

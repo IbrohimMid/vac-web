@@ -10,6 +10,7 @@ import {
   type AssessorFamily,
   type Category,
   type Finding,
+  type QueryFailure,
   type Severity,
   type Verdict,
 } from '../../stores/assessment';
@@ -21,13 +22,33 @@ import {
   pickAssessmentAgentId,
 } from '../../domain/assessment/agentSelection';
 import {
+  reasonLabel,
   requestAssessmentFetchReport,
   requestAssessmentListRuns,
   requestAssessmentReplay,
+  requestAssessmentRun,
   requestAssessmentSweepCancel,
 } from '../../domain/assessment/queries';
 
 const CATEGORIES: Category[] = ['technical', 'product', 'ux', 'release', 'ops'];
+
+const hubErrorStackStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  marginBottom: 8,
+};
+const hubErrorRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  alignItems: 'center',
+  padding: '6px 10px',
+  border: '1px solid var(--sev-error)',
+  borderRadius: 6,
+  fontSize: 12,
+};
+const hubErrorTitleStyle: React.CSSProperties = { color: 'var(--sev-error)' };
+const hubErrorMessageStyle: React.CSSProperties = { flex: 1 };
 
 const VERDICT_COLOR: Record<Verdict, string> = {
   pass: 'var(--sev-ok)',
@@ -111,10 +132,38 @@ function ReadinessHubMain({ transport }: Props) {
     void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => {});
   }, [transport, sessionId]);
 
+  const queryErrors = useAssessment((s) => s.queryErrors);
+  const clearQueryFailure = useAssessment((s) => s.clearQueryFailure);
+  const headerErrors = useMemo<QueryFailure[]>(() => {
+    const out: QueryFailure[] = [];
+    for (const action of ['list_runs', 'run', 'sweep.run', 'sweep.cancel'] as const) {
+      for (const [key, failure] of queryErrors.entries()) {
+        if (key === action || key.startsWith(`${action}:`)) out.push(failure);
+      }
+    }
+    return out;
+  }, [queryErrors]);
+
+  const retryHeaderError = (failure: QueryFailure) => {
+    if (!transport || !sessionId) return;
+    clearQueryFailure(failure.action, failure.targetId);
+    if (failure.action === 'list_runs') {
+      void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => {});
+    } else if (failure.action === 'run') {
+      void requestAssessmentRun(transport, sessionId, {
+        swarm: familyToRun,
+        ...(defaultAssessmentAgentId ? { agent_id: defaultAssessmentAgentId } : {}),
+        agent_role: 'assessment-worker',
+      }).catch(() => {});
+    } else if (failure.action === 'sweep.cancel' && failure.targetId) {
+      void requestAssessmentSweepCancel(transport, sessionId, failure.targetId).catch(() => {});
+    }
+  };
+
   const run = async (swarm: AssessorFamily) => {
     if (!transport || !sessionId) return;
     try {
-      await transport.send(sessionId, 'assessment.run', {
+      await requestAssessmentRun(transport, sessionId, {
         swarm,
         ...(defaultAssessmentAgentId ? { agent_id: defaultAssessmentAgentId } : {}),
         agent_role: 'assessment-worker',
@@ -202,6 +251,40 @@ function ReadinessHubMain({ transport }: Props) {
         )}
         {active?.status === 'running' && <button onClick={cancel}>Cancel</button>}
       </header>
+      {headerErrors.length > 0 && (
+        <div role="alert" style={hubErrorStackStyle}>
+          {headerErrors.map((failure) => (
+            <div
+              key={`${failure.action}:${failure.targetId ?? ''}:${failure.ts}`}
+              style={hubErrorRowStyle}
+            >
+              <strong style={hubErrorTitleStyle}>
+                {reasonLabel(failure.reason)}
+              </strong>
+              <span className="muted" style={hubErrorMessageStyle}>
+                {failure.action}: {failure.message}
+              </span>
+              {(failure.action === 'list_runs' ||
+                failure.action === 'run' ||
+                failure.action === 'sweep.cancel') && (
+                <button
+                  className="btn xs"
+                  onClick={() => retryHeaderError(failure)}
+                  disabled={!transport || !sessionId}
+                >
+                  Retry
+                </button>
+              )}
+              <button
+                className="btn xs ghost"
+                onClick={() => clearQueryFailure(failure.action, failure.targetId)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {runOrder.length === 0 ? (
         <div style={{ color: 'var(--text-2)', padding: 16 }}>
           No runs yet — pick a family and click Run.

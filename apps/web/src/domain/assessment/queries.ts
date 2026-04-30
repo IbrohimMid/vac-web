@@ -146,6 +146,18 @@ export function requestAssessmentDiff(
   );
 }
 
+export function requestAssessmentRun(
+  transport: TransportHandle,
+  sessionId: string,
+  payload: {
+    swarm: AssessorFamily;
+    agent_id?: string;
+    agent_role?: string;
+  },
+) {
+  return sendCapturing(transport, sessionId, 'assessment.run', payload, 'run');
+}
+
 export function requestAssessmentSweepRun(
   transport: TransportHandle,
   sessionId: string,
