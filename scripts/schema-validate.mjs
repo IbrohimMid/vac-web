@@ -49,6 +49,9 @@ const CONFIG_SCHEMA_DIR = join(ROOT, 'schema', 'config');
 // schema/config/. Adding a new gated config file only requires
 // landing its schema and adding one line here.
 const CONFIG_SCHEMA_MAP = {
+  'vac.yaml': 'vac.schema.json',
+  'agents/registry.yaml': 'agent-registry.schema.json',
+  'mcp/servers.yaml': 'mcp-servers.schema.json',
   'sessions/resume-policy.yaml': 'session-resume.schema.json',
 };
 

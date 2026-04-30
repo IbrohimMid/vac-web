@@ -4,8 +4,10 @@
 
 import {
   useSessionHistory,
+  type AgentRegistrySummary,
   type ConfigDiagnostic,
   type EffectiveResumeMode,
+  type McpServersSummary,
   type PersistedStatus,
   type PersistenceFailure,
   type PersistenceHealthState,
@@ -237,54 +239,136 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
     }),
   );
 
-  // Stage R3 — surface the bridge's normalized resume policy so the
+  // Stage R3/R4 — surface the bridge's normalized resume policy so the
   // FE preview block always reflects what the runtime will actually
   // enforce. The bridge sends `config.validated` in response to a
-  // `config.policy.get` query and (in R4) on reload broadcasts.
-  offs.push(
-    transport.on('config.validated', (ev) => {
-      const p = ev.payload as
-        | {
-            scope?: string;
-            ok?: boolean;
-            policy?: Partial<ResumePolicySnapshot>;
+  // `config.policy.get` (R3 narrow shape: just `policy`) **and** to
+  // `config.validate` (R4 wide shape: full snapshot with agents,
+  // mcp, vac_version, diagnostics). `config.reloaded` carries the
+  // same wide shape after a successful `config.reload`.
+  const onConfigSnapshot = (ev: { payload: unknown }) => {
+    const p = ev.payload as
+      | {
+          ok?: boolean;
+          loaded_at?: string;
+          vac_version?: number;
+          policy?: Partial<ResumePolicySnapshot>;
+          agents?: Partial<AgentRegistrySummary>;
+          mcp?: Partial<McpServersSummary>;
+          diagnostics?: Array<Partial<ConfigDiagnostic>>;
+        }
+      | null;
+    if (!p) return;
+    const pol = p.policy;
+    // Defensive narrowing: only accept a fully-typed policy. If the
+    // bridge ever ships a 4th mode we want the FE to fall back to
+    // the previous snapshot rather than half-render an unknown enum.
+    const policy: ResumePolicySnapshot | null =
+      pol &&
+      pol.default_mode &&
+      pol.native_fallback &&
+      pol.mcp_server_drift &&
+      pol.profile_class_mismatch &&
+      typeof pol.retention_days === 'number' &&
+      typeof pol.max_events === 'number'
+        ? (pol as ResumePolicySnapshot)
+        : null;
+    const agents: AgentRegistrySummary | null =
+      p.agents && typeof p.agents.count === 'number'
+        ? {
+            version: p.agents.version ?? 0,
+            count: p.agents.count,
+            default_id: p.agents.default_id ?? null,
+            items: Array.isArray(p.agents.items) ? p.agents.items : [],
           }
-        | null;
-      if (!p?.policy) return;
-      const pol = p.policy;
-      // Defensive narrowing: drop the snapshot entirely rather than
-      // half-render an unknown enum value. If the bridge ever ships a
-      // 4th mode we want the FE to fall back to "unknown" instead of
-      // claiming we know what's enforced.
-      if (
-        !pol.default_mode ||
-        !pol.native_fallback ||
-        !pol.mcp_server_drift ||
-        !pol.profile_class_mismatch ||
-        typeof pol.retention_days !== 'number' ||
-        typeof pol.max_events !== 'number'
-      ) {
-        return;
-      }
-      useSessionHistory.getState().setResumePolicy(pol as ResumePolicySnapshot);
-    }),
-  );
-
-  // Stage R3 — latch validation failures so the preview block can
-  // render an inline "Config invalid" chip plus the offending
-  // path/message. Bridge falls back to defaults when validation
-  // fails, so the runtime keeps working but the FE flags it.
-  offs.push(
-    transport.on('config.validate.failed', (ev) => {
-      const p = ev.payload as
-        | { scope?: string; errors?: Array<Partial<ConfigDiagnostic>> }
-        | null;
-      if (!p?.errors) return;
-      const diags: ConfigDiagnostic[] = p.errors
-        .filter((e): e is ConfigDiagnostic =>
+        : null;
+    const mcp: McpServersSummary | null =
+      p.mcp && typeof p.mcp.count === 'number'
+        ? {
+            version: p.mcp.version ?? 0,
+            count: p.mcp.count,
+            servers: Array.isArray(p.mcp.servers) ? p.mcp.servers : [],
+          }
+        : null;
+    const diagnostics: ConfigDiagnostic[] = (p.diagnostics ?? [])
+      .filter(
+        (e): e is ConfigDiagnostic =>
           typeof e?.scope === 'string' &&
           typeof e?.path === 'string' &&
           typeof e?.message === 'string',
+      )
+      .map((e) => ({
+        scope: e.scope,
+        path: e.path,
+        message: e.message,
+        ...(e.severity ? { severity: e.severity } : {}),
+        ...(e.code ? { code: e.code } : {}),
+      }));
+    useSessionHistory.getState().applyConfigSnapshot({
+      ok: p.ok ?? true,
+      ...(typeof p.loaded_at === 'string' ? { loaded_at: p.loaded_at } : {}),
+      ...(typeof p.vac_version === 'number' ? { vac_version: p.vac_version } : {}),
+      policy,
+      agents,
+      mcp,
+      diagnostics,
+    });
+  };
+  offs.push(transport.on('config.validated', onConfigSnapshot));
+  offs.push(transport.on('config.reloaded', onConfigSnapshot));
+
+  // Stage R4 — reload lifecycle events. `started` flips a spinner;
+  // `reload_failed` keeps the previous snapshot installed (matching
+  // bridge behavior) and surfaces the diagnostics so the operator
+  // can fix the YAML before retrying.
+  offs.push(
+    transport.on('config.reload.started', () => {
+      useSessionHistory.getState().beginConfigReload();
+    }),
+  );
+  offs.push(
+    transport.on('config.reload_failed', (ev) => {
+      const p = ev.payload as
+        | { diagnostics?: Array<Partial<ConfigDiagnostic>> }
+        | null;
+      const diags: ConfigDiagnostic[] = (p?.diagnostics ?? [])
+        .filter(
+          (e): e is ConfigDiagnostic =>
+            typeof e?.scope === 'string' &&
+            typeof e?.path === 'string' &&
+            typeof e?.message === 'string',
+        )
+        .map((e) => ({
+          scope: e.scope,
+          path: e.path,
+          message: e.message,
+          ...(e.severity ? { severity: e.severity } : {}),
+          ...(e.code ? { code: e.code } : {}),
+        }));
+      useSessionHistory.getState().recordConfigReloadFailure(diags);
+    }),
+  );
+
+  // Stage R3 — legacy `config.validate.failed` carrying just an
+  // `errors` array. Newer bridges fold this into the wide
+  // `config.validate.failed` payload via `diagnostics`, but we keep
+  // the old key so older snapshots still flag the topbar chip.
+  offs.push(
+    transport.on('config.validate.failed', (ev) => {
+      const p = ev.payload as
+        | {
+            scope?: string;
+            errors?: Array<Partial<ConfigDiagnostic>>;
+            diagnostics?: Array<Partial<ConfigDiagnostic>>;
+          }
+        | null;
+      const raw = p?.diagnostics ?? p?.errors ?? [];
+      const diags: ConfigDiagnostic[] = raw
+        .filter(
+          (e): e is ConfigDiagnostic =>
+            typeof e?.scope === 'string' &&
+            typeof e?.path === 'string' &&
+            typeof e?.message === 'string',
         )
         .map((e) => ({
           scope: e.scope,
@@ -360,6 +444,32 @@ export async function requestHistoryResume(
 export async function requestResumePolicy(transport: TransportHandle): Promise<void> {
   await transport.send('', 'config.policy.get', {}).catch(() => {
     /* config.validated event resolves */
+  });
+}
+
+/**
+ * Stage R4 — ask the bridge to echo its live config snapshot
+ * (agents, MCP, resume policy, diagnostics). Useful for the
+ * preview panel's "Validate" button. The actual snapshot arrives
+ * via `config.validated`.
+ */
+export async function requestConfigValidate(transport: TransportHandle): Promise<void> {
+  await transport.send('', 'config.validate', {}).catch(() => {
+    /* config.validated / config.validate.failed event resolves */
+  });
+}
+
+/**
+ * Stage R4 — trigger a `config.reload` on the bridge. Re-reads
+ * every YAML file under `config/` and, on success, swaps the
+ * snapshot atomically. The `config.reload.started` event flips the
+ * spinner; the terminal `config.reloaded` / `config.reload_failed`
+ * event resolves it.
+ */
+export async function requestConfigReload(transport: TransportHandle): Promise<void> {
+  useSessionHistory.getState().beginConfigReload();
+  await transport.send('', 'config.reload', {}).catch(() => {
+    /* terminal event resolves the spinner */
   });
 }
 

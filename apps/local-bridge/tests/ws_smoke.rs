@@ -51,6 +51,7 @@ async fn start_bridge() -> (String, Arc<AppState>) {
         persistence: None,
         persistence_health: PersistenceHealth::default(),
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
+        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(local_bridge::config::ConfigSnapshot::default())),
     });
     // Leak the tempdir so the audit dir survives the test run.
     std::mem::forget(tmp);

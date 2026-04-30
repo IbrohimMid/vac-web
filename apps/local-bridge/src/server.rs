@@ -2,7 +2,8 @@
 
 use crate::audit::AuditFacility;
 use crate::auth::{AuthState, PairingStore};
-use crate::config::SessionResumePolicy;
+use crate::config::{ConfigSnapshot, SessionResumePolicy};
+use tokio::sync::RwLock;
 use crate::handoff::HandoffService;
 use crate::session::persistence::{PersistenceHealth, SharedPersistence};
 use crate::session::SessionRegistry;
@@ -40,6 +41,14 @@ pub struct AppState {
     /// the only enforcement point; the YAML at
     /// `config/sessions/resume-policy.yaml` is a control plane.
     pub resume_policy: Arc<SessionResumePolicy>,
+    /// Stage R4 — full control-plane snapshot. Held behind
+    /// `Arc<RwLock<...>>` so `config.reload` can swap atomically
+    /// while readers (frontend preview, `config.validate`) take
+    /// only a read lock. The Rust runtime still owns the agent
+    /// registry and MCP wiring; this snapshot is a *preview* +
+    /// the live source for resume policy enforcement (which uses
+    /// the Arc above for hot-path reads, kept in sync on reload).
+    pub config_snapshot: Arc<RwLock<ConfigSnapshot>>,
 }
 
 impl AppState {

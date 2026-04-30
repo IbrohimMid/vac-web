@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/config/vac.schema.json",
+  "title": "VacRoot",
+  "description": "Stage R4 — root manifest under config/vac.yaml. The Rust loader walks this file first and uses `imports` to discover every other validated YAML in the control plane. The runtime, not the YAML, is the source of truth for behavior; this manifest only declares which files participate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Manifest schema version. Bumped on breaking shape changes."
+    },
+    "imports": {
+      "type": "object",
+      "description": "Optional pointers to child config files. Unset keys fall back to baked-in defaults under config/.",
+      "additionalProperties": false,
+      "properties": {
+        "agents_registry": { "type": "string", "minLength": 1 },
+        "mcp_servers": { "type": "string", "minLength": 1 },
+        "session_resume": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

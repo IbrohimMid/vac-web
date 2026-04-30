@@ -163,6 +163,7 @@ async fn start_bridge_with_audit_dir(
         persistence: None,
         persistence_health: PersistenceHealth::default(),
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
+        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(local_bridge::config::ConfigSnapshot::default())),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));
@@ -193,6 +194,7 @@ async fn start_bridge_with(registry: AgentRuntimeRegistry) -> (String, Arc<AppSt
         persistence: None,
         persistence_health: PersistenceHealth::default(),
         resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
+        config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(local_bridge::config::ConfigSnapshot::default())),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));

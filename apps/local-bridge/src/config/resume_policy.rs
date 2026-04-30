@@ -197,7 +197,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    fn err(scope: &str, path: &str, code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn err(scope: &str, path: &str, code: &str, message: impl Into<String>) -> Self {
         Self {
             scope: scope.into(),
             path: path.into(),

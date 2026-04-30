@@ -291,6 +291,194 @@ describe('session history resume state machine (Stage X6 4-5)', () => {
     expect(useSessionHistory.getState().resume.kind).toBe('resumed');
   });
 
+  // Stage R4 — config snapshot lifecycle. The bridge sends
+  // `config.validated` (and `config.reloaded`) with a wide payload
+  // including the resume policy, agent registry, and MCP servers.
+  // The store must merge these into the preview surfaces and flip
+  // `configStatus` to `valid`.
+  it('config.validated wide payload populates preview surfaces and flips status to valid', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    emit('config.validated', {
+      scope: 'config',
+      ok: true,
+      loaded_at: '2026-04-30T09:30:00Z',
+      vac_version: 1,
+      policy: {
+        default_mode: 'native_or_replay',
+        native_fallback: 'replay_only',
+        mcp_server_drift: 'warn',
+        profile_class_mismatch: 'fail',
+        retention_days: 30,
+        max_events: 5000,
+      },
+      agents: {
+        version: 1,
+        count: 2,
+        default_id: 'mock-1',
+        items: [
+          { id: 'mock-1', kind: 'mock', enabled: true },
+          { id: 'acp-1', kind: 'acp', enabled: false },
+        ],
+      },
+      mcp: {
+        version: 1,
+        count: 1,
+        servers: [{ id: 'fs', transport: 'stdio', enabled: true }],
+      },
+      diagnostics: [],
+    });
+
+    const s = useSessionHistory.getState();
+    expect(s.configStatus).toBe('valid');
+    expect(s.configLoadedAt).toBe('2026-04-30T09:30:00Z');
+    expect(s.vacVersion).toBe(1);
+    expect(s.resumePolicy).toMatchObject({ default_mode: 'native_or_replay' });
+    expect(s.agentsSummary).toMatchObject({ count: 2, default_id: 'mock-1' });
+    expect(s.mcpSummary).toMatchObject({ count: 1 });
+    expect(s.configDiagnostics).toEqual([]);
+    expect(s.configReloading).toBe(false);
+  });
+
+  it('config.reload.started flips configReloading to true without dropping the existing snapshot', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    // seed with a known-good snapshot first
+    emit('config.validated', {
+      ok: true,
+      policy: {
+        default_mode: 'replay_only',
+        native_fallback: 'replay_only',
+        mcp_server_drift: 'ignore',
+        profile_class_mismatch: 'warn',
+        retention_days: 7,
+        max_events: 100,
+      },
+      agents: { version: 1, count: 1, default_id: null, items: [] },
+      mcp: { version: 1, count: 0, servers: [] },
+    });
+    expect(useSessionHistory.getState().resumePolicy?.default_mode).toBe('replay_only');
+
+    emit('config.reload.started', {});
+    const s = useSessionHistory.getState();
+    expect(s.configReloading).toBe(true);
+    // existing snapshot is retained
+    expect(s.resumePolicy?.default_mode).toBe('replay_only');
+  });
+
+  it('config.reloaded swaps the snapshot atomically and clears configReloading', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    emit('config.reload.started', {});
+    expect(useSessionHistory.getState().configReloading).toBe(true);
+
+    emit('config.reloaded', {
+      ok: true,
+      loaded_at: '2026-04-30T10:00:00Z',
+      vac_version: 2,
+      policy: {
+        default_mode: 'acp_load',
+        native_fallback: 'fail',
+        mcp_server_drift: 'fail',
+        profile_class_mismatch: 'fail',
+        retention_days: 60,
+        max_events: 10000,
+      },
+      agents: { version: 2, count: 3, default_id: 'mock-1', items: [] },
+      mcp: { version: 2, count: 2, servers: [] },
+      diagnostics: [],
+    });
+
+    const s = useSessionHistory.getState();
+    expect(s.configStatus).toBe('valid');
+    expect(s.configReloading).toBe(false);
+    expect(s.vacVersion).toBe(2);
+    expect(s.resumePolicy?.default_mode).toBe('acp_load');
+    expect(s.agentsSummary?.count).toBe(3);
+    expect(s.mcpSummary?.count).toBe(2);
+  });
+
+  it('config.reload_failed keeps previous snapshot and surfaces diagnostics', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    // seed a healthy snapshot
+    emit('config.validated', {
+      ok: true,
+      policy: {
+        default_mode: 'replay_only',
+        native_fallback: 'replay_only',
+        mcp_server_drift: 'warn',
+        profile_class_mismatch: 'warn',
+        retention_days: 14,
+        max_events: 500,
+      },
+      agents: { version: 1, count: 4, default_id: 'a', items: [] },
+      mcp: { version: 1, count: 1, servers: [] },
+    });
+
+    emit('config.reload.started', {});
+    emit('config.reload_failed', {
+      diagnostics: [
+        {
+          scope: 'agents',
+          path: 'agents.registry[0].id',
+          message: 'duplicate agent id',
+          severity: 'error',
+          code: 'agents.duplicate_id',
+        },
+      ],
+    });
+
+    const s = useSessionHistory.getState();
+    expect(s.configStatus).toBe('invalid');
+    expect(s.configReloading).toBe(false);
+    // policy/agents/mcp should NOT be cleared — the bridge keeps the
+    // previous snapshot live, and the FE should mirror that.
+    expect(s.resumePolicy?.default_mode).toBe('replay_only');
+    expect(s.agentsSummary?.count).toBe(4);
+    expect(s.configDiagnostics).toHaveLength(1);
+    expect(s.configDiagnostics[0]).toMatchObject({
+      scope: 'agents',
+      path: 'agents.registry[0].id',
+      severity: 'error',
+      code: 'agents.duplicate_id',
+    });
+  });
+
+  it('config.validate.failed (R3 legacy errors[] and R4 diagnostics[]) both flip status to invalid', () => {
+    const { t, emit } = mockTransport();
+    detach = registerSessionHistoryHandlers(t);
+
+    // R3 legacy shape
+    emit('config.validate.failed', {
+      scope: 'session_resume',
+      errors: [
+        { scope: 'session_resume', path: 'retention_days', message: 'must be > 0' },
+      ],
+    });
+    let s = useSessionHistory.getState();
+    expect(s.configStatus).toBe('invalid');
+    expect(s.configDiagnostics).toHaveLength(1);
+
+    useSessionHistory.getState().clear();
+
+    // R4 wide shape
+    emit('config.validate.failed', {
+      scope: 'config',
+      diagnostics: [
+        { scope: 'mcp', path: 'mcp.servers[0].id', message: 'missing id' },
+      ],
+    });
+    s = useSessionHistory.getState();
+    expect(s.configStatus).toBe('invalid');
+    expect(s.configDiagnostics).toHaveLength(1);
+    expect(s.configDiagnostics[0].scope).toBe('mcp');
+  });
+
   it('asEffectiveMode coerces older bridge native flag', () => {
     const { t, emit } = mockTransport();
     detach = registerSessionHistoryHandlers(t);

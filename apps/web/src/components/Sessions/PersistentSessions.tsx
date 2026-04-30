@@ -10,6 +10,8 @@
 
 import { useEffect } from 'react';
 import {
+  requestConfigReload,
+  requestConfigValidate,
   requestHistoryForget,
   requestHistoryList,
   requestHistoryResume,
@@ -34,6 +36,15 @@ export function PersistentSessions({ transport }: Props) {
   // bridge hasn't replied yet so the panel structure stays stable.
   const resumePolicy = useSessionHistory((s) => s.resumePolicy);
   const configDiagnostics = useSessionHistory((s) => s.configDiagnostics);
+  // Stage R4 — R4 surfaces the rest of the live config snapshot so
+  // the operator can confirm what agents and MCP servers the runtime
+  // currently knows about, separate from the resume policy preview.
+  const configStatus = useSessionHistory((s) => s.configStatus);
+  const configReloading = useSessionHistory((s) => s.configReloading);
+  const configLoadedAt = useSessionHistory((s) => s.configLoadedAt);
+  const vacVersion = useSessionHistory((s) => s.vacVersion);
+  const agentsSummary = useSessionHistory((s) => s.agentsSummary);
+  const mcpSummary = useSessionHistory((s) => s.mcpSummary);
 
   useEffect(() => {
     if (!transport) return;
@@ -45,17 +56,33 @@ export function PersistentSessions({ transport }: Props) {
     void requestResumePolicy(transport);
   }, [transport]);
 
-  const policyChip = configDiagnostics.length > 0 ? (
-    <div
-      role="alert"
-      aria-label="Resume policy config invalid"
-      title={configDiagnostics.map((d) => `${d.path}: ${d.message}`).join('\n')}
-      style={configChipStyle}
-    >
-      ⚠️ Config invalid
-      <span style={chipDetailStyle}> ({configDiagnostics.length})</span>
-    </div>
-  ) : null;
+  // Stage R4 — chip reflects the live `configStatus` rather than
+  // the diagnostic-count proxy used in R3. Topbar surfaces the same
+  // state via `<ConfigStatusChip />` for quick scanning; this chip
+  // sits inline with the preview block so the operator who has the
+  // panel open can read severity + diagnostics in one place.
+  const policyChip =
+    configStatus === 'invalid' || configDiagnostics.length > 0 ? (
+      <div
+        role="alert"
+        aria-label="Resume policy config invalid"
+        title={configDiagnostics.map((d) => `${d.path}: ${d.message}`).join('\n') || 'Bridge reports the live snapshot is invalid.'}
+        style={configChipStyle}
+      >
+        ⚠️ Config invalid
+        {configDiagnostics.length > 0 ? (
+          <span style={chipDetailStyle}> ({configDiagnostics.length})</span>
+        ) : null}
+      </div>
+    ) : configStatus === 'valid' ? (
+      <div
+        aria-label="Resume policy config valid"
+        title={configLoadedAt ? `Loaded at ${configLoadedAt}` : 'Snapshot loaded.'}
+        style={configOkChipStyle}
+      >
+        ✓ Config valid
+      </div>
+    ) : null;
 
   const policyPreview = resumePolicy ? (
     <dl aria-label="Resume policy" style={policyDlStyle}>
@@ -83,16 +110,82 @@ export function PersistentSessions({ transport }: Props) {
         <dt style={policyDtStyle}>Max events</dt>
         <dd style={policyDdStyle}>{resumePolicy.max_events.toLocaleString()}</dd>
       </div>
+      {agentsSummary ? (
+        <div style={policyRowStyle}>
+          <dt style={policyDtStyle}>Agents</dt>
+          <dd style={policyDdStyle} title={agentsSummary.items.map((a) => `${a.id} (${a.kind})`).join(', ')}>
+            {agentsSummary.count}
+            {agentsSummary.default_id ? ` (default: ${agentsSummary.default_id})` : ''}
+          </dd>
+        </div>
+      ) : null}
+      {mcpSummary ? (
+        <div style={policyRowStyle}>
+          <dt style={policyDtStyle}>MCP servers</dt>
+          <dd style={policyDdStyle} title={mcpSummary.servers.map((m) => `${m.id} (${m.transport})`).join(', ')}>
+            {mcpSummary.count}
+          </dd>
+        </div>
+      ) : null}
+      {vacVersion > 0 ? (
+        <div style={policyRowStyle}>
+          <dt style={policyDtStyle}>vac.yaml version</dt>
+          <dd style={policyDdStyle}>{vacVersion}</dd>
+        </div>
+      ) : null}
     </dl>
   ) : null;
 
-  const policyBlock = (resumePolicy || policyChip) ? (
+  // Stage R4 — diagnostic detail list (when the live snapshot is
+  // invalid) so the operator can see exactly which YAML path tripped
+  // the gate without leaving the panel.
+  const diagnosticList =
+    configDiagnostics.length > 0 ? (
+      <ul aria-label="Config diagnostics" style={diagListStyle}>
+        {configDiagnostics.map((d, i) => (
+          <li key={`${d.scope}:${d.path}:${i}`} style={diagItemStyle}>
+            <span style={diagSeverityStyle(d.severity)}>{(d.severity ?? 'error').toUpperCase()}</span>{' '}
+            <code style={diagPathStyle}>{d.scope}/{d.path}</code>{': '}
+            <span>{d.message}</span>
+            {d.code ? <span style={diagCodeStyle}> [{d.code}]</span> : null}
+          </li>
+        ))}
+      </ul>
+    ) : null;
+
+  const reloadDisabled = !transport || configReloading;
+  const reloadLabel = configReloading ? 'Reloading\u2026' : 'Reload config';
+
+  const policyBlock = (resumePolicy || policyChip || configReloading) ? (
     <section aria-label="Resume policy" style={policyBlockStyle}>
       <header style={policyHeaderStyle}>
-        <span>Resume policy</span>
-        {policyChip}
+        <span>Active config</span>
+        <span style={headerActionsStyle}>
+          {policyChip}
+          <button
+            type="button"
+            onClick={() => transport && void requestConfigValidate(transport)}
+            disabled={!transport}
+            style={inlineBtnStyle}
+            title="Re-emit the live config snapshot without re-reading YAML."
+            aria-label="Validate config"
+          >
+            Validate
+          </button>
+          <button
+            type="button"
+            onClick={() => transport && void requestConfigReload(transport)}
+            disabled={reloadDisabled}
+            style={inlineBtnStyle}
+            title="Re-read every config/*.yaml file and swap the live snapshot if validation passes."
+            aria-label="Reload config"
+          >
+            {reloadLabel}
+          </button>
+        </span>
       </header>
       {policyPreview}
+      {diagnosticList}
     </section>
   ) : null;
 
@@ -377,6 +470,63 @@ const configChipStyle: React.CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
 };
+const configOkChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 6px',
+  borderRadius: 4,
+  background: 'rgba(80, 180, 110, 0.16)',
+  color: '#3a9a5b',
+  border: '1px solid rgba(80, 180, 110, 0.4)',
+  fontSize: 11,
+  fontWeight: 600,
+};
+const headerActionsStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+};
+const inlineBtnStyle: React.CSSProperties = {
+  fontSize: 11,
+  padding: '2px 8px',
+  borderRadius: 4,
+  border: '1px solid rgba(120, 130, 160, 0.4)',
+  background: 'transparent',
+  cursor: 'pointer',
+};
+const diagListStyle: React.CSSProperties = {
+  margin: '8px 0 0',
+  padding: 0,
+  listStyle: 'none',
+  fontSize: 11,
+  display: 'grid',
+  gap: 3,
+};
+const diagItemStyle: React.CSSProperties = {
+  padding: '2px 0',
+  lineHeight: 1.4,
+  borderTop: '1px dotted rgba(120, 130, 160, 0.25)',
+};
+const diagPathStyle: React.CSSProperties = {
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  opacity: 0.85,
+};
+const diagCodeStyle: React.CSSProperties = {
+  opacity: 0.6,
+  marginLeft: 4,
+};
+function diagSeverityStyle(
+  severity: 'error' | 'warning' | undefined,
+): React.CSSProperties {
+  return {
+    display: 'inline-block',
+    minWidth: 52,
+    fontSize: 10,
+    fontWeight: 700,
+    color: severity === 'warning' ? '#cc9900' : '#cc4444',
+  };
+}
 
 function warningLabel(reason: string): string {
   if (reason === 'mcp_server_drift') return 'MCP servers changed';

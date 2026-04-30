@@ -3,7 +3,8 @@
 use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
-use local_bridge::config::{resume_policy, SessionResumePolicy};
+use local_bridge::config::{loader as config_loader, resume_policy, ConfigSnapshot, LoadOutcome, LoaderPaths, SessionResumePolicy};
+use tokio::sync::RwLock;
 use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::persistence::{FilePersistence, PersistenceHealth, SharedPersistence};
@@ -149,6 +150,44 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Stage R4 — build the full ConfigSnapshot from the same
+    // tree that fed the resume-policy load above. The resume_policy
+    // Arc stays as the hot-path source of truth (translator reads
+    // it without locking); the snapshot adds preview surfaces for
+    // agents + MCP + resume policy and is held behind RwLock so
+    // `config.reload` can swap atomically. A failed top-level load
+    // still boots the bridge: the snapshot is marked `ok=false` and
+    // carries the diagnostics so the frontend can show them.
+    let config_paths = LoaderPaths::from_env_or(std::path::PathBuf::from("config"));
+    let initial_snapshot = match config_loader::load(&config_paths) {
+        LoadOutcome::Loaded(s) => {
+            tracing::info!(
+                vac_version = s.vac_version,
+                agents = s.agents.count,
+                mcp_servers = s.mcp.count,
+                "config.snapshot.loaded"
+            );
+            s
+        }
+        LoadOutcome::Failed(diags) => {
+            for d in &diags {
+                tracing::error!(
+                    scope = %d.scope,
+                    path = %d.path,
+                    code = %d.code,
+                    message = %d.message,
+                    "config.snapshot.failed"
+                );
+            }
+            ConfigSnapshot {
+                ok: false,
+                diagnostics: diags,
+                ..ConfigSnapshot::default()
+            }
+        }
+    };
+    let config_snapshot = Arc::new(RwLock::new(initial_snapshot));
+
     let state = Arc::new(AppState {
         started_at: Instant::now(),
         sessions,
@@ -160,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
         persistence,
         persistence_health,
         resume_policy,
+        config_snapshot,
     });
 
     // Optional outbound-dial tunnel (Phase 7): opt-in via VAC_RELAY_URL. When

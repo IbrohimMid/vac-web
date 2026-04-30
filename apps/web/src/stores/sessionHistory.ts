@@ -108,6 +108,37 @@ export interface ConfigDiagnostic {
 }
 
 /**
+ * Stage R4 — compact agent registry summary used by the cockpit
+ * preview panel. Mirrors `AgentRegistrySummary` on the bridge.
+ */
+export interface AgentRegistrySummary {
+  version: number;
+  count: number;
+  default_id: string | null;
+  items: Array<{ id: string; kind: string; enabled: boolean }>;
+}
+
+/**
+ * Stage R4 — compact MCP servers summary used by the cockpit
+ * preview panel. Mirrors `McpServersSummary` on the bridge.
+ */
+export interface McpServersSummary {
+  version: number;
+  count: number;
+  servers: Array<{ id: string; transport: string; enabled: boolean }>;
+}
+
+/**
+ * Stage R4 — high-level state for the topbar config chip:
+ *   - `unknown`: no `config.validated`/`config.reloaded` seen yet
+ *   - `valid`: live snapshot is `ok=true`
+ *   - `invalid`: live snapshot is `ok=false` (validation/reload
+ *     failed; previous snapshot retained on the bridge but the
+ *     operator should look at the diagnostics)
+ */
+export type ConfigStatus = 'unknown' | 'valid' | 'invalid';
+
+/**
  * Stage X6 P2-B — persistence health surface for the cockpit chip.
  * Drawn from two sources, in priority order:
  *   1. Live `session.persistence_degraded` ServerEvents (sticky once
@@ -148,10 +179,45 @@ interface SessionHistorySlice {
   resumePolicy: ResumePolicySnapshot | null;
   /** Stage R3 — latest config diagnostics; non-empty means policy may be stale/default. */
   configDiagnostics: ConfigDiagnostic[];
+  /** Stage R4 — high-level chip state derived from `config.validated` / `config.reloaded` / `*.failed`. */
+  configStatus: ConfigStatus;
+  /** Stage R4 — ISO timestamp of the most recent successful snapshot. */
+  configLoadedAt: string | null;
+  /** Stage R4 — root `vac.yaml` version captured in the live snapshot (0 when unknown). */
+  vacVersion: number;
+  /** Stage R4 — declared agent registry summary (preview only). */
+  agentsSummary: AgentRegistrySummary | null;
+  /** Stage R4 — declared MCP servers summary (preview only). */
+  mcpSummary: McpServersSummary | null;
+  /** Stage R4 — true while a `config.reload` is in flight (between `started` and `reloaded`/`reload_failed`). */
+  configReloading: boolean;
   /** Stage R3 — set the preview snapshot from a `config.validated` event. */
   setResumePolicy(policy: ResumePolicySnapshot): void;
   /** Stage R3 — record validation diagnostics from `config.validate.failed`. */
   setConfigDiagnostics(diags: ConfigDiagnostic[]): void;
+  /**
+   * Stage R4 — ingest a successful `config.validated` / `config.reloaded`
+   * snapshot. Replaces all R4 preview surfaces atomically and clears the
+   * reload-in-progress flag.
+   */
+  applyConfigSnapshot(snapshot: {
+    ok: boolean;
+    loaded_at?: string;
+    vac_version?: number;
+    policy?: ResumePolicySnapshot | null;
+    agents?: AgentRegistrySummary | null;
+    mcp?: McpServersSummary | null;
+    diagnostics?: ConfigDiagnostic[];
+  }): void;
+  /** Stage R4 — mark a reload as in flight (`config.reload.started`). */
+  beginConfigReload(): void;
+  /**
+   * Stage R4 — record a `config.reload_failed` event. Keeps the
+   * previous policy/agents/mcp summaries in place — the bridge does
+   * the same — and just flips the chip to `invalid` plus stores the
+   * diagnostic list.
+   */
+  recordConfigReloadFailure(diags: ConfigDiagnostic[]): void;
   setRows(
     rows: PersistentSessionRow[],
     persistence: 'disabled' | 'file',
@@ -176,14 +242,52 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
   lastWarning: null,
   resumePolicy: null,
   configDiagnostics: [],
+  configStatus: 'unknown',
+  configLoadedAt: null,
+  vacVersion: 0,
+  agentsSummary: null,
+  mcpSummary: null,
+  configReloading: false,
   setResumePolicy(policy) {
     // Stage R3 — a successful policy snapshot also clears any
     // previously latched diagnostic (the bridge only re-broadcasts
     // `config.validated` after a clean validation pass).
-    set({ resumePolicy: policy, configDiagnostics: [] });
+    set({
+      resumePolicy: policy,
+      configDiagnostics: [],
+      configStatus: 'valid',
+    });
   },
   setConfigDiagnostics(diags) {
-    set({ configDiagnostics: diags });
+    set({
+      configDiagnostics: diags,
+      configStatus: diags.length ? 'invalid' : 'valid',
+    });
+  },
+  applyConfigSnapshot(snap) {
+    set((s) => ({
+      configStatus: snap.ok ? 'valid' : 'invalid',
+      configLoadedAt: snap.loaded_at ?? new Date().toISOString(),
+      vacVersion: typeof snap.vac_version === 'number' ? snap.vac_version : s.vacVersion,
+      // Resume policy: keep previous on `ok=false` so the preview
+      // doesn't go blank during a failed reload — the bridge
+      // behaves the same way.
+      resumePolicy: snap.ok && snap.policy ? snap.policy : s.resumePolicy,
+      agentsSummary: snap.ok && snap.agents ? snap.agents : s.agentsSummary,
+      mcpSummary: snap.ok && snap.mcp ? snap.mcp : s.mcpSummary,
+      configDiagnostics: snap.diagnostics ?? [],
+      configReloading: false,
+    }));
+  },
+  beginConfigReload() {
+    set({ configReloading: true });
+  },
+  recordConfigReloadFailure(diags) {
+    set({
+      configStatus: 'invalid',
+      configDiagnostics: diags,
+      configReloading: false,
+    });
   },
   setRows(rows, persistence, health, recentFailures) {
     set({
@@ -235,6 +339,12 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
       recentFailures: [],
       resumePolicy: null,
       configDiagnostics: [],
+      configStatus: 'unknown',
+      configLoadedAt: null,
+      vacVersion: 0,
+      agentsSummary: null,
+      mcpSummary: null,
+      configReloading: false,
     });
   },
 }));

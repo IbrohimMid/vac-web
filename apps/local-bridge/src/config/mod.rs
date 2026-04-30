@@ -9,8 +9,13 @@
 //! Currently scoped to session-resume policy; R4 expands this
 //! module to cover the whole `config/vac.yaml` import graph.
 
+pub mod loader;
 pub mod resume_policy;
 
+pub use loader::{
+    AgentRegistryItem, AgentRegistrySummary, ConfigSnapshot, LoadOutcome, LoaderPaths,
+    McpServerItem, McpServersSummary,
+};
 pub use resume_policy::{
     Diagnostic, DiagnosticSeverity, McpDriftPolicy, NativeFallbackPolicy, ProfileClassPolicy,
     RawResumePolicy, RawSessionResumeBlock, ResumeDefaultMode, SessionResumePolicy,

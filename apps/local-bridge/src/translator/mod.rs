@@ -2301,6 +2301,13 @@ pub async fn dispatch_command(
         "registry.sync" => dispatch_registry_sync(&cmd, &state).await,
         "registry.add" => dispatch_registry_add(&cmd, &state).await,
         "registry.reload" => dispatch_registry_reload(&cmd, &state).await,
+        // Stage R4 — control-plane validation + reload. `config.validate`
+        // is read-only: it returns the live snapshot's status without
+        // re-reading any YAML. `config.reload` re-runs the loader; on
+        // success the snapshot is swapped in atomically and the new
+        // resume policy mirrored back into the hot-path Arc on AppState.
+        "config.validate" => dispatch_config_validate(&cmd, &state).await,
+        "config.reload" => dispatch_config_reload(&cmd, &state).await,
         _ => {
             // Forward to engine via session handle.
             let Some(handle) = state.sessions.get(&cmd.session_id) else {
@@ -3284,6 +3291,168 @@ async fn dispatch_registry_reload(
             },
             vec![],
         ),
+    }
+}
+
+/// Build the `payload` object that `config.validated` /
+/// `config.reloaded` events ship to the FE. Mirrors the resume
+/// policy block from `config.policy.get` so the FE store can use
+/// the same reducer for both event types, and adds preview
+/// summaries for agents + MCP plus any non-fatal diagnostics.
+fn config_snapshot_payload(snap: &crate::config::ConfigSnapshot) -> serde_json::Value {
+    let p = &snap.resume_policy;
+    json!({
+        "scope": "config",
+        "ok": snap.ok,
+        "loaded_at": snap.loaded_at,
+        "vac_version": snap.vac_version,
+        "policy": {
+            "default_mode": p.default_mode.as_str(),
+            "native_fallback": p.native_fallback.as_str(),
+            "mcp_server_drift": p.mcp_server_drift.as_str(),
+            "profile_class_mismatch": p.profile_class_mismatch.as_str(),
+            "retention_days": p.retention_days,
+            "max_events": p.max_events,
+        },
+        "agents": {
+            "version": snap.agents.version,
+            "count": snap.agents.count,
+            "default_id": snap.agents.default_id,
+            "items": snap.agents.agents,
+        },
+        "mcp": {
+            "version": snap.mcp.version,
+            "count": snap.mcp.count,
+            "servers": snap.mcp.servers,
+        },
+        "diagnostics": snap.diagnostics,
+    })
+}
+
+/// `config.validate` — read-only echo of the live snapshot. Useful
+/// before flipping a reload button on the FE so the operator can
+/// see what's currently active without triggering a re-read.
+async fn dispatch_config_validate(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let snap = state.config_snapshot.read().await;
+    let event_type = if snap.ok {
+        "config.validated"
+    } else {
+        "config.validate.failed"
+    };
+    let payload = config_snapshot_payload(&snap);
+    (
+        ServerAck {
+            ack_of: cmd.id.clone(),
+            ok: snap.ok,
+            error: if snap.ok {
+                None
+            } else {
+                Some(ErrorInfo {
+                    code: "config.invalid".into(),
+                    message: "active config snapshot has unresolved errors".into(),
+                })
+            },
+        },
+        vec![ServerEvent {
+            seq: 0,
+            session_id: cmd.session_id.clone(),
+            event_type: event_type.into(),
+            payload,
+            v: 1,
+            ts: chrono::Utc::now().to_rfc3339(),
+        }],
+    )
+}
+
+/// `config.reload` — re-run the loader against the same
+/// `LoaderPaths` we booted with. On success: swap the snapshot
+/// atomically and emit `config.reloaded` so every FE client
+/// updates its preview. On failure: keep the previous snapshot
+/// installed and emit `config.reload_failed` with the diagnostic
+/// list. The hot-path `state.resume_policy` Arc is *not* swapped
+/// here — that keeps resume enforcement byte-stable across a
+/// reload; an operator who needs new resume rules to take effect
+/// at runtime restarts the bridge. The snapshot's resume policy
+/// is still updated so the FE preview reflects the new YAML.
+async fn dispatch_config_reload(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let started = ServerEvent {
+        seq: 0,
+        session_id: cmd.session_id.clone(),
+        event_type: "config.reload.started".into(),
+        payload: json!({ "scope": "config" }),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    };
+    let paths = crate::config::LoaderPaths::from_env_or(std::path::PathBuf::from("config"));
+    match crate::config::loader::load(&paths) {
+        crate::config::LoadOutcome::Loaded(snap) => {
+            let payload = config_snapshot_payload(&snap);
+            {
+                let mut guard = state.config_snapshot.write().await;
+                *guard = snap;
+            }
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                vec![
+                    started,
+                    ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "config.reloaded".into(),
+                        payload,
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    },
+                ],
+            )
+        }
+        crate::config::LoadOutcome::Failed(diags) => {
+            // Mark the live snapshot as not-ok so future
+            // `config.validate` calls reflect the failed state, but
+            // keep the previous policy + summaries — operators still
+            // need a working bridge while they fix the YAML.
+            {
+                let mut guard = state.config_snapshot.write().await;
+                guard.ok = false;
+                guard.diagnostics = diags.clone();
+            }
+            let payload = json!({
+                "scope": "config",
+                "ok": false,
+                "diagnostics": diags,
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "config.reload_failed".into(),
+                        message: "config reload failed; previous snapshot retained".into(),
+                    }),
+                },
+                vec![
+                    started,
+                    ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "config.reload_failed".into(),
+                        payload,
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    },
+                ],
+            )
+        }
     }
 }
 

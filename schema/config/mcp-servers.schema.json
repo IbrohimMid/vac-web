@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/config/mcp-servers.schema.json",
+  "title": "McpServers",
+  "description": "Stage R4 — declarative MCP server registry under config/mcp/servers.yaml. Just the declared list; actual MCP wiring still happens via the runtime translator + agent capabilities, not by re-reading this file at request time.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "servers"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 0 },
+    "servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "transport"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "pattern": "^[a-zA-Z0-9_.:-]+$" },
+          "label": { "type": "string" },
+          "transport": {
+            "type": "string",
+            "enum": ["stdio", "http", "streamable_http", "sse", "websocket"]
+          },
+          "command": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "url": { "type": "string", "format": "uri" },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": ["none", "bearer", "oauth2"] },
+              "token_env": { "type": "string" }
+            }
+          },
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

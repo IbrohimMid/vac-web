@@ -6,6 +6,7 @@ import { useCockpit } from '../../stores/cockpit';
 import { authMethodSummary } from '../../domain/sessions/auth';
 import { GATE_ORDER, useGates, type GateState } from '../../stores/gates';
 import { useSession } from '../../stores/session';
+import { useSessionHistory } from '../../stores/sessionHistory';
 import { Avatar, Icon } from './primitives';
 
 interface Props {
@@ -138,6 +139,7 @@ export function Topbar({ onCmdK, onTweaks }: Props) {
             image
           </span>
         )}
+        <ConfigStatusChip />
         <Icon
           name="chevron-d"
           size={13}
@@ -217,3 +219,48 @@ function GateRibbon() {
     </div>
   );
 }
+
+// Stage R4 — compact "Config: valid/invalid" chip in the brand area.
+// Reads `useSessionHistory` rather than re-fetching so it stays in lock-step
+// with the resume policy preview panel inside `PersistentSessions`. The
+// tooltip lists each diagnostic so an operator can spot the offending YAML
+// key without leaving the cockpit.
+function ConfigStatusChip() {
+  const status = useSessionHistory((s) => s.configStatus);
+  const diagnostics = useSessionHistory((s) => s.configDiagnostics);
+  const reloading = useSessionHistory((s) => s.configReloading);
+  if (status === 'unknown') return null;
+  const ok = status === 'valid';
+  const tone: 'ok' | 'crit' = ok ? 'ok' : 'crit';
+  const label = reloading
+    ? 'Config: reloading\u2026'
+    : ok
+    ? 'Config: valid'
+    : 'Config: invalid';
+  const title = diagnostics.length
+    ? diagnostics
+        .slice(0, 5)
+        .map((d) => `${d.scope}/${d.path}: ${d.message}`)
+        .join('\n') + (diagnostics.length > 5 ? `\n\u2026 +${diagnostics.length - 5} more` : '')
+    : ok
+    ? 'Config snapshot loaded successfully.'
+    : 'Bridge config validation failed; runtime is using last good snapshot.';
+  const chipStyle: React.CSSProperties = {
+    padding: '1px 6px',
+    fontSize: 10.5,
+    marginLeft: 4,
+  };
+  return (
+    <span
+      className={`badge ${tone}`}
+      style={chipStyle}
+      data-testid="config-status-chip"
+      role={ok ? undefined : 'alert'}
+      title={title}
+      aria-label={label}
+    >
+      {label}
+    </span>
+  );
+}
+
