@@ -7,6 +7,7 @@ pub mod agent_runtime;
 pub mod audit;
 pub mod auth;
 pub mod capabilities;
+pub mod config;
 pub mod handoff;
 pub mod notify;
 pub mod profile_layer;

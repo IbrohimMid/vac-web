@@ -2,6 +2,7 @@
 
 use crate::audit::AuditFacility;
 use crate::auth::{AuthState, PairingStore};
+use crate::config::SessionResumePolicy;
 use crate::handoff::HandoffService;
 use crate::session::persistence::{PersistenceHealth, SharedPersistence};
 use crate::session::SessionRegistry;
@@ -33,6 +34,12 @@ pub struct AppState {
     /// flag here, and the translator's `session.history.list` arm can
     /// surface that as a `health` field on the listed payload.
     pub persistence_health: PersistenceHealth,
+    /// Stage R3 — normalized session-resume policy. Cheap-clone
+    /// `Arc` so the translator can read it without locking and the
+    /// frontend preview surface can serialize it. The Rust struct is
+    /// the only enforcement point; the YAML at
+    /// `config/sessions/resume-policy.yaml` is a control plane.
+    pub resume_policy: Arc<SessionResumePolicy>,
 }
 
 impl AppState {

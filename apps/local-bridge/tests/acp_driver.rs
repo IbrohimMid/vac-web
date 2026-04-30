@@ -162,6 +162,7 @@ async fn start_bridge_with_audit_dir(
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));
@@ -191,6 +192,7 @@ async fn start_bridge_with(registry: AgentRuntimeRegistry) -> (String, Arc<AppSt
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));

@@ -27,17 +27,30 @@ import process from 'node:process';
 
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
+import yaml from 'js-yaml';
 
 // Build the canonical base URI piece-by-piece so no literal SCHEME://host
 // appears as a single token in this source (the audit chat transport rewrites
 // URL literals; concatenation sidesteps that).
 const SCHEME = 'http' + 's:';
 const BASE = SCHEME + '//vac-web/schema/v1/';
+const BASE_CONFIG = SCHEME + '//vac-web/schema/config/';
 
 const __filename = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(__filename), '..');
 const V1 = join(ROOT, 'packages', 'protocol', 'v1');
 const SAMPLES = join(V1, '_samples');
+// Stage R3 — control-plane YAML lives under config/, schemas under
+// schema/config/. The Rust runtime is the source of truth, but the
+// schema gate catches typos before they ever reach the bridge.
+const CONFIG_DIR = join(ROOT, 'config');
+const CONFIG_SCHEMA_DIR = join(ROOT, 'schema', 'config');
+// Stem mapping: relative path under config/ → schema basename under
+// schema/config/. Adding a new gated config file only requires
+// landing its schema and adding one line here.
+const CONFIG_SCHEMA_MAP = {
+  'sessions/resume-policy.yaml': 'session-resume.schema.json',
+};
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -141,8 +154,86 @@ function findSchemaForSample(dirName) {
   return null;
 }
 
+// Stage R3 — register every schema under schema/config/ with the AJV
+// instance. Same alias trick as the v1 protocol schemas: the
+// declared $id is canonical, plus a path-based fallback so refs
+// resolve regardless of which spelling the author used.
+function loadConfigSchemas(ajv) {
+  let count = 0;
+  let entries;
+  try {
+    entries = readdirSync(CONFIG_SCHEMA_DIR);
+  } catch {
+    return 0;
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.schema.json')) continue;
+    const path = join(CONFIG_SCHEMA_DIR, name);
+    const schema = JSON.parse(readFileSync(path, 'utf8'));
+    const canonical = BASE_CONFIG + name;
+    const cloned = { ...schema, $id: canonical };
+    try {
+      ajv.addSchema(cloned, canonical);
+    } catch (err) {
+      if (!String(err?.message ?? err).includes('already exists')) throw err;
+    }
+    if (schema.$id && schema.$id !== canonical) {
+      try {
+        ajv.addSchema(schema, schema.$id);
+      } catch (err) {
+        if (!String(err?.message ?? err).includes('already exists')) throw err;
+      }
+    }
+    count += 1;
+  }
+  return count;
+}
+
+function validateConfigYaml(ajv) {
+  let fail = 0;
+  let total = 0;
+  for (const [stem, schemaName] of Object.entries(CONFIG_SCHEMA_MAP)) {
+    total += 1;
+    const yamlPath = join(CONFIG_DIR, stem);
+    let body;
+    try {
+      body = readFileSync(yamlPath, 'utf8');
+    } catch {
+      console.log('  FAIL  config/' + stem + ' (file missing)');
+      fail = 1;
+      continue;
+    }
+    let data;
+    try {
+      data = yaml.load(body);
+    } catch (err) {
+      console.log('  FAIL  config/' + stem + ' (yaml parse error: ' + (err?.message ?? err) + ')');
+      fail = 1;
+      continue;
+    }
+    const validate = ajv.getSchema(BASE_CONFIG + schemaName);
+    if (!validate) {
+      console.log('  FAIL  config/' + stem + ' (no validator for ' + schemaName + ')');
+      fail = 1;
+      continue;
+    }
+    const ok = validate(data);
+    if (ok) {
+      console.log('  PASS  config/' + stem);
+    } else {
+      console.log('  FAIL  config/' + stem + ' (schema violation)');
+      for (const e of validate.errors ?? []) {
+        console.log('      ' + (e.instancePath || '<root>') + ' ' + e.message);
+      }
+      fail = 1;
+    }
+  }
+  return { fail, total };
+}
+
 function main() {
   const ajv = buildAjv();
+  loadConfigSchemas(ajv);
   let fail = 0;
   let total = 0;
 
@@ -192,6 +283,13 @@ function main() {
       }
     }
   }
+
+  // Stage R3 — also validate every gated config YAML against its
+  // schema/config/ counterpart. Failures here mean the operator
+  // wrote a YAML that the Rust normalizer would reject too.
+  const cfg = validateConfigYaml(ajv);
+  total += cfg.total;
+  fail = fail || cfg.fail;
 
   if (fail) {
     console.error('\n[schema-validate] ' + total + ' samples checked, gate FAILED.');

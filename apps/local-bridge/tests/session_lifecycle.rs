@@ -48,6 +48,7 @@ async fn start_bridge() -> (String, Arc<AppState>) {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     std::mem::forget(tmp); // keep audit dir alive for test duration
     let app = build_app(Arc::clone(&state));

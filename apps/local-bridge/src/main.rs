@@ -3,6 +3,7 @@
 use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
+use local_bridge::config::{resume_policy, SessionResumePolicy};
 use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::persistence::{FilePersistence, PersistenceHealth, SharedPersistence};
@@ -100,6 +101,54 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Stage R3 — load + normalize the declarative resume policy at
+    // startup. The Rust runtime is the only enforcement point; if
+    // YAML validation fails we log the diagnostics and boot with the
+    // default policy so the bridge stays usable while the operator
+    // fixes the file. The trace lines double as the
+    // `config.validate.started` / `config.validate.failed` /
+    // `config.validated` audit signal until the WS surface lands
+    // (R4 promotes these to typed ServerEvents).
+    let resume_policy_path = std::env::var("VAC_RESUME_POLICY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("config/sessions/resume-policy.yaml"));
+    tracing::info!(
+        path = %resume_policy_path.display(),
+        scope = "session_resume",
+        "config.validate.started"
+    );
+    let resume_policy = match resume_policy::load_from_path(&resume_policy_path) {
+        Ok(p) => {
+            tracing::info!(
+                path = %resume_policy_path.display(),
+                scope = "session_resume",
+                default_mode = p.default_mode.as_str(),
+                native_fallback = p.native_fallback.as_str(),
+                mcp_server_drift = p.mcp_server_drift.as_str(),
+                profile_class_mismatch = p.profile_class_mismatch.as_str(),
+                retention_days = p.retention_days,
+                max_events = p.max_events,
+                "config.validated"
+            );
+            Arc::new(p)
+        }
+        Err(diags) => {
+            for d in &diags {
+                tracing::error!(
+                    scope = %d.scope,
+                    path = %d.path,
+                    code = %d.code,
+                    message = %d.message,
+                    "config.validate.failed"
+                );
+            }
+            tracing::warn!(
+                "falling back to default SessionResumePolicy because YAML validation failed"
+            );
+            Arc::new(SessionResumePolicy::default())
+        }
+    };
+
     let state = Arc::new(AppState {
         started_at: Instant::now(),
         sessions,
@@ -110,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
         handoff,
         persistence,
         persistence_health,
+        resume_policy,
     });
 
     // Optional outbound-dial tunnel (Phase 7): opt-in via VAC_RELAY_URL. When

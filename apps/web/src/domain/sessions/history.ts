@@ -4,12 +4,14 @@
 
 import {
   useSessionHistory,
+  type ConfigDiagnostic,
   type EffectiveResumeMode,
   type PersistedStatus,
   type PersistenceFailure,
   type PersistenceHealthState,
   type PersistentSessionRow,
   type ResumeMode,
+  type ResumePolicySnapshot,
 } from '../../stores/sessionHistory';
 import type { TransportHandle } from '../../transport';
 
@@ -235,6 +237,66 @@ export function registerSessionHistoryHandlers(transport: TransportHandle): () =
     }),
   );
 
+  // Stage R3 — surface the bridge's normalized resume policy so the
+  // FE preview block always reflects what the runtime will actually
+  // enforce. The bridge sends `config.validated` in response to a
+  // `config.policy.get` query and (in R4) on reload broadcasts.
+  offs.push(
+    transport.on('config.validated', (ev) => {
+      const p = ev.payload as
+        | {
+            scope?: string;
+            ok?: boolean;
+            policy?: Partial<ResumePolicySnapshot>;
+          }
+        | null;
+      if (!p?.policy) return;
+      const pol = p.policy;
+      // Defensive narrowing: drop the snapshot entirely rather than
+      // half-render an unknown enum value. If the bridge ever ships a
+      // 4th mode we want the FE to fall back to "unknown" instead of
+      // claiming we know what's enforced.
+      if (
+        !pol.default_mode ||
+        !pol.native_fallback ||
+        !pol.mcp_server_drift ||
+        !pol.profile_class_mismatch ||
+        typeof pol.retention_days !== 'number' ||
+        typeof pol.max_events !== 'number'
+      ) {
+        return;
+      }
+      useSessionHistory.getState().setResumePolicy(pol as ResumePolicySnapshot);
+    }),
+  );
+
+  // Stage R3 — latch validation failures so the preview block can
+  // render an inline "Config invalid" chip plus the offending
+  // path/message. Bridge falls back to defaults when validation
+  // fails, so the runtime keeps working but the FE flags it.
+  offs.push(
+    transport.on('config.validate.failed', (ev) => {
+      const p = ev.payload as
+        | { scope?: string; errors?: Array<Partial<ConfigDiagnostic>> }
+        | null;
+      if (!p?.errors) return;
+      const diags: ConfigDiagnostic[] = p.errors
+        .filter((e): e is ConfigDiagnostic =>
+          typeof e?.scope === 'string' &&
+          typeof e?.path === 'string' &&
+          typeof e?.message === 'string',
+        )
+        .map((e) => ({
+          scope: e.scope,
+          path: e.path,
+          message: e.message,
+          ...(e.severity ? { severity: e.severity } : {}),
+          ...(e.code ? { code: e.code } : {}),
+        }));
+      if (diags.length) useSessionHistory.getState().setConfigDiagnostics(diags);
+    }),
+  );
+
   offs.push(
     transport.on('session.resume.warning', (ev) => {
       const p = ev.payload as
@@ -287,6 +349,18 @@ export async function requestHistoryResume(
         reason: err instanceof Error ? err.message : String(err),
       });
     });
+}
+
+/**
+ * Stage R3 — ask the bridge for the current normalized resume
+ * policy. Resolves when the ack lands; the actual snapshot arrives
+ * asynchronously on the `config.validated` ServerEvent and lands in
+ * `useSessionHistory.resumePolicy`.
+ */
+export async function requestResumePolicy(transport: TransportHandle): Promise<void> {
+  await transport.send('', 'config.policy.get', {}).catch(() => {
+    /* config.validated event resolves */
+  });
 }
 
 export async function requestHistoryForget(

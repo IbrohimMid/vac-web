@@ -411,6 +411,42 @@ pub async fn dispatch_command(
                 events,
             )
         }
+        "config.policy.get" => {
+            // Stage R3 — expose the active session-resume policy to the
+            // FE so the persistent sessions panel can render the
+            // "Resume policy" preview block (default mode, drift,
+            // retention, max events). Read-only: the FE never mutates
+            // policy directly; that's the operator's job via YAML +
+            // R4's reload command.
+            let p = &state.resume_policy;
+            events.push(ServerEvent {
+                seq: 0,
+                session_id: cmd.session_id.clone(),
+                event_type: "config.validated".into(),
+                payload: json!({
+                    "scope": "session_resume",
+                    "ok": true,
+                    "policy": {
+                        "default_mode": p.default_mode.as_str(),
+                        "native_fallback": p.native_fallback.as_str(),
+                        "mcp_server_drift": p.mcp_server_drift.as_str(),
+                        "profile_class_mismatch": p.profile_class_mismatch.as_str(),
+                        "retention_days": p.retention_days,
+                        "max_events": p.max_events,
+                    },
+                }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                events,
+            )
+        }
         "session.resume" => {
             // Stage X6 batch 4-3 / 4-4 / 4-5 — resume mode dispatch
             // matrix. Batches 4-4 and 4-5 wired the native ACP
@@ -428,7 +464,7 @@ pub async fn dispatch_command(
             // | native_or_replay | required| caps=false     | fallback to persistence replay, resume_mode=replay_only_fallback |
             // | native_or_replay | required| caps=true      | try native; on Unsupported -> replay_only_fallback           |
             // | <unknown>        | any     | any            | reject `unknown_resume_mode`                                  |
-            let requested_mode = cmd
+            let raw_requested_mode = cmd
                 .payload
                 .get("resume_mode")
                 .and_then(|v| v.as_str())
@@ -438,6 +474,18 @@ pub async fn dispatch_command(
                 .get("vac_session_id")
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
+
+            // Stage R3 — if the client omits `resume_mode` AND there's a
+            // persisted session to attach to, inject the policy default
+            // so behavior is predictable across new vs old clients.
+            // When there's no `vac_session_id` we keep the legacy
+            // in-memory ring path — that's a different code path that
+            // doesn't even consult persistence.
+            let requested_mode: Option<String> = match (raw_requested_mode.as_deref(), vac_session_id.as_deref()) {
+                (Some(_), _) => raw_requested_mode.clone(),
+                (None, Some(_)) => Some(state.resume_policy.default_mode.as_str().to_string()),
+                (None, None) => None,
+            };
 
             // Reject obviously unknown mode strings up front so a typo
             // can't silently downgrade to legacy ring replay.
@@ -640,16 +688,35 @@ pub async fn dispatch_command(
                         // Unreachable — we already filtered to these two.
                         _ => unreachable!("caps_supported branch reached with unexpected mode"),
                     };
-                    // Stage X6 batch C1 — emit a non-blocking MCP drift
-                    // warning when the persisted session's `mcp_servers`
-                    // differ from what the live agent registry currently
-                    // advertises. We do this BEFORE calling resume_native
-                    // so the FE can render the warning even on hard
-                    // failure paths (caps mismatch / Validation outcomes).
-                    if let Some(drift_event) =
-                        build_mcp_drift_warning(&state, &meta, &target_id, mode_str.as_str())
-                    {
-                        events.push(drift_event);
+                    // Stage X6 batch C1 + R3 — emit a policy-driven MCP
+                    // drift event when the persisted session's
+                    // `mcp_servers` differ from what the live agent
+                    // registry currently advertises. We do this BEFORE
+                    // calling resume_native so the FE can render the
+                    // event even on hard failure paths (caps mismatch /
+                    // Validation outcomes). Under `mcp_server_drift: fail`
+                    // we short-circuit the resume entirely.
+                    match build_mcp_drift_event(&state, &meta, &target_id, mode_str.as_str()) {
+                        McpDriftAction::None => {}
+                        McpDriftAction::Warn(event) => {
+                            events.push(event);
+                        }
+                        McpDriftAction::Fail(event) => {
+                            events.push(event);
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "session.mcp_server_drift".into(),
+                                        message:
+                                            "persisted MCP servers differ from live agent advertisement"
+                                                .into(),
+                                    }),
+                                },
+                                events,
+                            );
+                        }
                     }
                     let outcome = state.sessions.resume_native(&meta, mode_static).await;
                     use crate::session::{ResumeNativeOutcome, ResumeValidationFailure};
@@ -721,6 +788,49 @@ pub async fn dispatch_command(
                                     ack_of: cmd.id.clone(),
                                     ok: true,
                                     error: None,
+                                },
+                                events,
+                            );
+                        }
+                        ResumeNativeOutcome::Unsupported if mode_static == "native_or_replay" && matches!(state.resume_policy.native_fallback, crate::config::NativeFallbackPolicy::Fail) => {
+                            // Stage R3 — `native_fallback: fail` makes the
+                            // unsupported case explicit instead of silently
+                            // downshifting to persistence replay. Same shape
+                            // as the acp_load Unsupported reject below so
+                            // the FE renders one consistent failed-state.
+                            events.push(ServerEvent {
+                                seq: 0,
+                                session_id: target_id.clone(),
+                                event_type: "session.resume.failed".into(),
+                                payload: json!({
+                                    "vac_session_id": target_id,
+                                    "mode": mode_str,
+                                    "reason": "native_resume_unsupported",
+                                    "detail": "agent rejected session/load with method-not-found",
+                                    "policy": "native_fallback=fail",
+                                }),
+                                v: 1,
+                                ts: chrono::Utc::now().to_rfc3339(),
+                            });
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": "native_resume_unsupported",
+                                    "mode": mode_str,
+                                    "policy": "native_fallback=fail",
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "session.native_resume_unsupported".into(),
+                                        message: "agent does not implement session/load (policy: native_fallback=fail)".into(),
+                                    }),
                                 },
                                 events,
                             );
@@ -2396,37 +2506,62 @@ async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
 /// servers in a different order can resolve to different effective
 /// tool sets when the agent picks the first match for a tool name.
 ///
-/// We never block resume on drift — the cockpit renders an amber
-/// chip and the session continues so the user can decide whether to
-/// recreate.
-fn build_mcp_drift_warning(
+/// Stage R3 — the policy at `state.resume_policy.mcp_server_drift`
+/// chooses between `Warn` (today's behavior), `Fail` (hard reject),
+/// and `Ignore` (suppress the event entirely). This keeps the runtime
+/// the only enforcement point and lets operators flip the safety
+/// posture from YAML.
+#[derive(Debug)]
+pub(crate) enum McpDriftAction {
+    None,
+    Warn(ServerEvent),
+    Fail(ServerEvent),
+}
+
+fn build_mcp_drift_event(
     state: &AppStateHandle,
     meta: &crate::session::persistence::PersistedSessionMeta,
     target_id: &str,
     mode: &str,
-) -> Option<ServerEvent> {
+) -> McpDriftAction {
     let registry = state.sessions.agents();
-    let agent = registry.get(&meta.agent_id).ok()?;
+    let Ok(agent) = registry.get(&meta.agent_id) else {
+        return McpDriftAction::None;
+    };
     if meta.mcp_servers == agent.mcp_servers {
-        return None;
+        return McpDriftAction::None;
     }
+    use crate::config::McpDriftPolicy;
+    let policy = state.resume_policy.mcp_server_drift;
+    if matches!(policy, McpDriftPolicy::Ignore) {
+        return McpDriftAction::None;
+    }
+    let severity = match policy {
+        McpDriftPolicy::Fail => AuditSeverity::Error,
+        _ => AuditSeverity::Warn,
+    };
     state.audit.log(
         target_id,
         "session",
-        AuditSeverity::Warn,
+        severity,
         json!({
             "event": "resume_mcp_drift",
             "vac_session_id": target_id,
             "agent_id": meta.agent_id,
             "mode": mode,
+            "policy": policy.as_str(),
             "persisted_count": meta.mcp_servers.len(),
             "live_count": agent.mcp_servers.len(),
         }),
     );
-    Some(ServerEvent {
+    let event_type = match policy {
+        McpDriftPolicy::Fail => "session.resume.failed",
+        _ => "session.resume.warning",
+    };
+    let event = ServerEvent {
         seq: 0,
         session_id: target_id.to_string(),
-        event_type: "session.resume.warning".into(),
+        event_type: event_type.into(),
         payload: json!({
             "vac_session_id": target_id,
             "reason": "mcp_server_drift",
@@ -2437,7 +2572,11 @@ fn build_mcp_drift_warning(
         }),
         v: 1,
         ts: chrono::Utc::now().to_rfc3339(),
-    })
+    };
+    match policy {
+        McpDriftPolicy::Fail => McpDriftAction::Fail(event),
+        _ => McpDriftAction::Warn(event),
+    }
 }
 
 /// Stage X6 4-5 — build a `session.replay.progress` event for the

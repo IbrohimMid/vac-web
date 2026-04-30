@@ -166,6 +166,7 @@ async fn start_bridge_with_persistence(extra_mock_args: Vec<String>) -> Harness 
         handoff: Arc::new(HandoffService::new()),
         persistence: Some(Arc::clone(&persistence)),
         persistence_health: health,
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
 
     let app = build_app(Arc::clone(&state));

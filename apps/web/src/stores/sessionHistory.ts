@@ -78,6 +78,36 @@ export interface ResumeWarning {
 }
 
 /**
+ * Stage R3 — normalized session-resume policy snapshot the bridge
+ * sends in response to `config.policy.get` (or future
+ * `config.validated` broadcasts after a reload). The struct mirrors
+ * `apps/local-bridge/src/config/resume_policy.rs::SessionResumePolicy`
+ * one-for-one so the FE can render a read-only preview without
+ * second-guessing what the runtime will actually enforce.
+ */
+export interface ResumePolicySnapshot {
+  default_mode: 'replay_only' | 'acp_load' | 'native_or_replay';
+  native_fallback: 'replay_only' | 'fail';
+  mcp_server_drift: 'warn' | 'fail' | 'ignore';
+  profile_class_mismatch: 'fail' | 'warn';
+  retention_days: number;
+  max_events: number;
+}
+
+/**
+ * Stage R3 — surface for `config.validate.failed` so the FE can
+ * render an inline "Config invalid" badge and the operator can see
+ * exactly which YAML key tripped the gate.
+ */
+export interface ConfigDiagnostic {
+  scope: string;
+  path: string;
+  message: string;
+  severity?: 'error' | 'warning';
+  code?: string;
+}
+
+/**
  * Stage X6 P2-B — persistence health surface for the cockpit chip.
  * Drawn from two sources, in priority order:
  *   1. Live `session.persistence_degraded` ServerEvents (sticky once
@@ -114,6 +144,14 @@ interface SessionHistorySlice {
   resumeWarnings: Record<string, ResumeWarning>;
   /** Most recent resume warning, used by global status surfaces. */
   lastWarning: ResumeWarning | null;
+  /** Stage R3 — normalized resume policy snapshot, populated by `config.policy.get`. */
+  resumePolicy: ResumePolicySnapshot | null;
+  /** Stage R3 — latest config diagnostics; non-empty means policy may be stale/default. */
+  configDiagnostics: ConfigDiagnostic[];
+  /** Stage R3 — set the preview snapshot from a `config.validated` event. */
+  setResumePolicy(policy: ResumePolicySnapshot): void;
+  /** Stage R3 — record validation diagnostics from `config.validate.failed`. */
+  setConfigDiagnostics(diags: ConfigDiagnostic[]): void;
   setRows(
     rows: PersistentSessionRow[],
     persistence: 'disabled' | 'file',
@@ -136,6 +174,17 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
   resume: { kind: 'idle' },
   resumeWarnings: {},
   lastWarning: null,
+  resumePolicy: null,
+  configDiagnostics: [],
+  setResumePolicy(policy) {
+    // Stage R3 — a successful policy snapshot also clears any
+    // previously latched diagnostic (the bridge only re-broadcasts
+    // `config.validated` after a clean validation pass).
+    set({ resumePolicy: policy, configDiagnostics: [] });
+  },
+  setConfigDiagnostics(diags) {
+    set({ configDiagnostics: diags });
+  },
   setRows(rows, persistence, health, recentFailures) {
     set({
       rows,
@@ -184,6 +233,8 @@ export const useSessionHistory = create<SessionHistorySlice>((set) => ({
       lastWarning: null,
       health: 'healthy',
       recentFailures: [],
+      resumePolicy: null,
+      configDiagnostics: [],
     });
   },
 }));

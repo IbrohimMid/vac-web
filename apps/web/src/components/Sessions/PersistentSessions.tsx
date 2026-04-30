@@ -13,6 +13,7 @@ import {
   requestHistoryForget,
   requestHistoryList,
   requestHistoryResume,
+  requestResumePolicy,
 } from '../../domain/sessions/history';
 import { useSessionHistory } from '../../stores/sessionHistory';
 import type { TransportHandle } from '../../transport';
@@ -28,11 +29,72 @@ export function PersistentSessions({ transport }: Props) {
   const resumeWarnings = useSessionHistory((s) => s.resumeWarnings);
   const health = useSessionHistory((s) => s.health);
   const recentFailures = useSessionHistory((s) => s.recentFailures);
+  // Stage R3 — read the runtime-enforced resume policy snapshot for
+  // the read-only preview block. We render a fallback row when the
+  // bridge hasn't replied yet so the panel structure stays stable.
+  const resumePolicy = useSessionHistory((s) => s.resumePolicy);
+  const configDiagnostics = useSessionHistory((s) => s.configDiagnostics);
 
   useEffect(() => {
     if (!transport) return;
     void requestHistoryList(transport, { limit: 50 });
+    // Stage R3 — fetch the policy on mount so the preview block is
+    // populated before the user opens the persistent sessions panel.
+    // The bridge's reply is a `config.validated` ServerEvent that the
+    // history domain handler already routes into the store.
+    void requestResumePolicy(transport);
   }, [transport]);
+
+  const policyChip = configDiagnostics.length > 0 ? (
+    <div
+      role="alert"
+      aria-label="Resume policy config invalid"
+      title={configDiagnostics.map((d) => `${d.path}: ${d.message}`).join('\n')}
+      style={configChipStyle}
+    >
+      ⚠️ Config invalid
+      <span style={chipDetailStyle}> ({configDiagnostics.length})</span>
+    </div>
+  ) : null;
+
+  const policyPreview = resumePolicy ? (
+    <dl aria-label="Resume policy" style={policyDlStyle}>
+      <div style={policyRowStyle}>
+        <dt style={policyDtStyle}>Default mode</dt>
+        <dd style={policyDdStyle}>{resumePolicy.default_mode}</dd>
+      </div>
+      <div style={policyRowStyle}>
+        <dt style={policyDtStyle}>Native fallback</dt>
+        <dd style={policyDdStyle}>{resumePolicy.native_fallback}</dd>
+      </div>
+      <div style={policyRowStyle}>
+        <dt style={policyDtStyle}>MCP drift</dt>
+        <dd style={policyDdStyle}>{resumePolicy.mcp_server_drift}</dd>
+      </div>
+      <div style={policyRowStyle}>
+        <dt style={policyDtStyle}>Profile class</dt>
+        <dd style={policyDdStyle}>{resumePolicy.profile_class_mismatch}</dd>
+      </div>
+      <div style={policyRowStyle}>
+        <dt style={policyDtStyle}>Retention</dt>
+        <dd style={policyDdStyle}>{resumePolicy.retention_days} days</dd>
+      </div>
+      <div style={policyRowStyle}>
+        <dt style={policyDtStyle}>Max events</dt>
+        <dd style={policyDdStyle}>{resumePolicy.max_events.toLocaleString()}</dd>
+      </div>
+    </dl>
+  ) : null;
+
+  const policyBlock = (resumePolicy || policyChip) ? (
+    <section aria-label="Resume policy" style={policyBlockStyle}>
+      <header style={policyHeaderStyle}>
+        <span>Resume policy</span>
+        {policyChip}
+      </header>
+      {policyPreview}
+    </section>
+  ) : null;
 
   // Stage X6 P2-B — health chip. Rendered inline above whatever
   // body content this panel shows (table, empty state, or disabled
@@ -61,6 +123,7 @@ export function PersistentSessions({ transport }: Props) {
     return (
       <div>
         {healthChip}
+        {policyBlock}
         <div role="status" style={emptyStyle}>
           Persistent session history is disabled on this bridge.
         </div>
@@ -72,6 +135,7 @@ export function PersistentSessions({ transport }: Props) {
     return (
       <div>
         {healthChip}
+        {policyBlock}
         <div role="status" style={emptyStyle}>
           No persistent sessions yet — they will appear here after the first
           message in a new session.
@@ -83,6 +147,7 @@ export function PersistentSessions({ transport }: Props) {
   return (
     <section aria-label="Persistent sessions" style={sectionStyle}>
       {healthChip}
+      {policyBlock}
       <h3 style={headingStyle}>Persistent sessions</h3>
       <table aria-label="Persistent sessions" style={tableStyle}>
         <thead>
@@ -259,6 +324,57 @@ const rowWarningStyle: React.CSSProperties = {
   marginTop: 4,
   color: '#cc9900',
   fontSize: 12,
+  fontWeight: 600,
+};
+// Stage R3 — resume-policy preview surface. Visually quieter than the
+// health chip (which signals an active failure) so the operator reads
+// it as ambient state rather than a problem.
+const policyBlockStyle: React.CSSProperties = {
+  margin: '4px 0 12px',
+  padding: '8px 10px',
+  borderRadius: 4,
+  background: 'rgba(120, 130, 160, 0.08)',
+  border: '1px solid rgba(120, 130, 160, 0.2)',
+  fontSize: 12,
+};
+const policyHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  fontWeight: 600,
+  marginBottom: 6,
+  opacity: 0.85,
+};
+const policyDlStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+  gap: '4px 12px',
+  margin: 0,
+};
+const policyRowStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 6,
+  alignItems: 'baseline',
+};
+const policyDtStyle: React.CSSProperties = {
+  fontWeight: 500,
+  opacity: 0.7,
+  margin: 0,
+};
+const policyDdStyle: React.CSSProperties = {
+  margin: 0,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+};
+const configChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 6px',
+  borderRadius: 4,
+  background: 'rgba(220, 80, 80, 0.18)',
+  color: '#cc4444',
+  border: '1px solid rgba(220, 80, 80, 0.4)',
+  fontSize: 11,
   fontWeight: 600,
 };
 

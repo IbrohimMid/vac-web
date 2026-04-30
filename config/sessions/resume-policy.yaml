@@ -1,19 +1,38 @@
-# sessions/resume-policy.yaml — default resume policy (placeholder)
-# Real schema: schema/config/sessions.resume-policy.schema.json (TBD)
+# sessions/resume-policy.yaml — declarative resume policy.
+#
+# Validated against schema/config/session-resume.schema.json.
+# Parsed and normalized by apps/local-bridge/src/config/resume_policy.rs;
+# the resulting `SessionResumePolicy` lives behind Arc<...> on AppState
+# and is the only thing the translator + persistence consult at runtime.
+#
+# Source of truth: the Rust struct. This file can only pick between
+# behaviors the runtime already supports — it cannot extend them.
 
-version: 0
-# Default mode for client-initiated session.resume calls.
-# One of: replay_only | acp_load | native_or_replay.
-default_mode: replay_only
+version: 1
 
-retention:
-  # How long to keep persisted session metadata + events.
-  # ISO-8601 duration; null = indefinite.
-  ttl: null
-  # Maximum events per session before older events are evicted.
-  # null = no cap.
-  max_events: null
+session_resume:
+  # Used when the client sends `session.resume` without `resume_mode`.
+  default_mode: native_or_replay
 
-redaction:
-  # standard | strict
-  mode: standard
+  # Behavior when `native_or_replay` lands on an agent that doesn't
+  # advertise loadSession capability:
+  #   - replay_only: silently downshift to persistence replay (today's behavior)
+  #   - fail:        emit `session.resume.failed reason=native_resume_unsupported`
+  native_fallback: replay_only
+
+  # MCP server drift between persisted meta and live agent registry:
+  #   - warn:   emit `session.resume.warning reason=mcp_server_drift` and continue
+  #   - fail:   emit `session.resume.failed reason=mcp_server_drift`
+  #   - ignore: no event
+  mcp_server_drift: warn
+
+  # Persisted vs live `profile_class` (Stage R2). Only `fail` is
+  # honored today; `warn` is reserved for a future relaxed mode.
+  profile_class_mismatch: fail
+
+  # Persistence retention. Background cleanup uses this when deciding
+  # which sessions are eligible for archival.
+  retention_days: 30
+
+  # Per-session event ceiling enforced at append time.
+  max_events: 20000

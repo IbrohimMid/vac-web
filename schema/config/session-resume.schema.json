@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vac-web/schema/config/session-resume.schema.json",
+  "title": "SessionResumePolicy",
+  "description": "Stage R3 — declarative resume policy for the local bridge. The Rust runtime parses this file via `RawResumePolicy`, normalizes it into `SessionResumePolicy`, and is the sole source of truth for actual enforcement. The YAML is a *control plane*: it can only narrow or pick between behaviors the runtime already supports.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "session_resume"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Config schema version. Bumped on breaking shape changes."
+    },
+    "session_resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "default_mode": {
+          "description": "Resume mode selected when the client omits `resume_mode` on `session.resume`. Mirrors the three modes the translator already knows.",
+          "type": "string",
+          "enum": ["replay_only", "acp_load", "native_or_replay"]
+        },
+        "native_fallback": {
+          "description": "What to do when `native_or_replay` reaches a non-supporting agent. `replay_only` mirrors today's silent fallback; `fail` makes the situation explicit instead.",
+          "type": "string",
+          "enum": ["replay_only", "fail"]
+        },
+        "mcp_server_drift": {
+          "description": "What to do when persisted MCP servers differ from the live agent registry advertisement at resume time. `ignore` suppresses the event entirely.",
+          "type": "string",
+          "enum": ["warn", "fail", "ignore"]
+        },
+        "profile_class_mismatch": {
+          "description": "What to do when a persisted `profile_class` does not equal the live profile's class (Stage R2 hard-gate). Only `fail` is currently honored by the runtime; `warn` is reserved for a future relaxed mode.",
+          "type": "string",
+          "enum": ["fail", "warn"]
+        },
+        "retention_days": {
+          "description": "How long persisted session metadata is kept before background cleanup considers it stale. Bounded so a typo can't accidentally request multi-decade retention.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+        },
+        "max_events": {
+          "description": "Per-session event ceiling enforced by persistence/replay. Older events beyond this are dropped at append time.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

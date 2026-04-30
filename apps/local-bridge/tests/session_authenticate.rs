@@ -114,6 +114,7 @@ async fn start_bridge_acp(auth_methods: Value) -> (String, Arc<AppState>) {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));
@@ -140,6 +141,7 @@ async fn start_bridge_mock_engine() -> (String, Arc<AppState>) {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));
@@ -688,6 +690,7 @@ async fn start_bridge_with_id(agent_id: &str, auth_methods: Value) -> (String, A
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     std::mem::forget(tmp);
     let app = build_app(Arc::clone(&state));

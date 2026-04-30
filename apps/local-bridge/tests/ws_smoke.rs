@@ -50,6 +50,7 @@ async fn start_bridge() -> (String, Arc<AppState>) {
         handoff: Arc::new(HandoffService::new()),
         persistence: None,
         persistence_health: PersistenceHealth::default(),
+        resume_policy: std::sync::Arc::new(local_bridge::config::SessionResumePolicy::default()),
     });
     // Leak the tempdir so the audit dir survives the test run.
     std::mem::forget(tmp);
