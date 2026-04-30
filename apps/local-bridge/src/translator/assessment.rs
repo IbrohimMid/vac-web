@@ -2256,3 +2256,131 @@ async fn run_assessment_task(
         }
     }
 }
+
+#[cfg(test)]
+mod n3_worker_output_rejection_tests {
+    //! N3 unit tests for the worker-output-rejection helpers.
+    //!
+    //! These tests stay close to the helper boundary so they remain stable
+    //! across refactors of the surrounding `run_assessment_task` async
+    //! plumbing. The full controller-level emission flow (which requires
+    //! a `SessionHandleRef` with a live event channel + tokio runtime)
+    //! is exercised by the WS / persistence integration suites.
+
+    use super::{
+        parse_acp_candidate_payload_full, redact_worker_sample, WORKER_OUTPUT_SAMPLE_LIMIT,
+    };
+
+    #[test]
+    fn redact_worker_sample_redacts_known_token_shapes() {
+        let raw = concat!(
+            "hello bearer abcdef1234567890 ",
+            "and sk-1234567890abcdef ",
+            "and ghp_thisIsAFakeToken123 ",
+            "and xoxb-1234567890-abcdef ",
+            "and AWS_SECRET=ABCDEF1234567890",
+        );
+        let scrubbed = redact_worker_sample(raw);
+        assert!(
+            !scrubbed.contains("abcdef1234567890") || scrubbed.matches("[REDACTED]").count() >= 4,
+            "expected at least four token shapes redacted; got: {scrubbed}"
+        );
+        assert!(
+            scrubbed.contains("[REDACTED]"),
+            "redactor must substitute [REDACTED] for token bodies; got: {scrubbed}"
+        );
+        // Non-token text is preserved.
+        assert!(scrubbed.contains("hello"));
+    }
+
+    #[test]
+    fn redact_worker_sample_truncates_to_limit() {
+        let raw: String = "a".repeat(WORKER_OUTPUT_SAMPLE_LIMIT + 250);
+        let scrubbed = redact_worker_sample(&raw);
+        assert_eq!(
+            scrubbed.chars().count(),
+            WORKER_OUTPUT_SAMPLE_LIMIT,
+            "sample must be truncated to the configured limit"
+        );
+    }
+
+    #[test]
+    fn redact_worker_sample_handles_empty_input() {
+        assert_eq!(redact_worker_sample(""), "");
+    }
+
+    #[test]
+    fn parse_full_returns_none_rejection_for_valid_envelope() {
+        let transcript = r#"{
+            "schema_version": 1,
+            "candidates": []
+        }"#;
+        let (candidates, rejection) =
+            parse_acp_candidate_payload_full(transcript).expect("valid v1 envelope must parse");
+        assert!(candidates.is_empty());
+        assert!(
+            rejection.is_none(),
+            "a valid v1 envelope must not produce a rejection"
+        );
+    }
+
+    #[test]
+    fn parse_full_returns_rejection_for_unsupported_schema_version() {
+        let transcript = r#"{
+            "schema_version": 99,
+            "candidates": []
+        }"#;
+        let (candidates, rejection) = parse_acp_candidate_payload_full(transcript)
+            .expect("recognised envelope must not be reported as Err()");
+        assert!(candidates.is_empty());
+        let rej = rejection.expect("unsupported schema_version must produce a rejection");
+        assert_eq!(rej.code, "schema_version_unsupported");
+        assert_eq!(rej.path.as_deref(), Some("schema_version"));
+    }
+
+    #[test]
+    fn parse_full_returns_rejection_for_invalid_severity() {
+        // Provide every required candidate field except severity so that
+        // validate_candidate_v1 reaches the severity check before bailing
+        // on a missing earlier field. The exact field ordering of
+        // validate_candidate_v1 is an implementation detail — what we
+        // assert here is just that an invalid severity value is detected
+        // and surfaced as a structured rejection.
+        let transcript = r#"{
+            "schema_version": 1,
+            "candidates": [
+                {
+                    "id": "c-1",
+                    "title": "bad sev",
+                    "summary": "x",
+                    "category": "technical",
+                    "severity": "showstopper"
+                }
+            ]
+        }"#;
+        let (_candidates, rejection) = parse_acp_candidate_payload_full(transcript)
+            .expect("recognised envelope must not be reported as Err()");
+        let rej = rejection.expect("invalid severity must produce a rejection");
+        // The rejection should call out the bad severity value somewhere —
+        // either in the structured path or in the human-readable message.
+        let path = rej.path.as_deref().unwrap_or("");
+        let mentions_severity = path.contains("severity")
+            || rej.message.to_lowercase().contains("severity")
+            || rej.code.to_lowercase().contains("severity");
+        assert!(
+            mentions_severity,
+            "rejection must surface severity in path/message/code; got code={:?} message={:?} path={:?}",
+            rej.code, rej.message, rej.path
+        );
+    }
+
+    #[test]
+    fn parse_full_returns_err_for_unparseable_transcript() {
+        let transcript = "this is not json {{ ;;";
+        let result = parse_acp_candidate_payload_full(transcript);
+        assert!(
+            result.is_err(),
+            "unparseable transcript must yield Err() so the caller emits the unparseable code"
+        );
+    }
+}

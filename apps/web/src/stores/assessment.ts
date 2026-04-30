@@ -210,6 +210,38 @@ export function queryFailureKey(action: QueryAction, targetId?: string): string 
   return targetId ? `${action}:${targetId}` : action;
 }
 
+// N3 (worker output rejection) — kept SEPARATE from queryErrors on purpose.
+// queryErrors are recoverable read-side failures the operator can Retry;
+// worker output rejections are write-side worker-contract failures that
+// need a Replay (or different worker) instead. Conflating them in one
+// banner would hide the distinction and tempt operators to keep mashing
+// Retry on a structurally broken worker.
+export interface WorkerOutputRejection {
+  /** The run that produced the broken envelope. */
+  run_id: string;
+  /** Worker session that produced the broken envelope, if known. */
+  worker_session_id?: string;
+  /** Provenance triplet, when the backend supplied it. */
+  agent_id?: string;
+  agent_kind?: string;
+  agent_role?: string;
+  /** Stable error category emitted by the backend (always `schema_invalid` today). */
+  reason: string;
+  /** Stable machine code (e.g. `unparseable`, `schema_version_unsupported`, `severity_invalid`). */
+  code: string;
+  /** Human-readable detail for the banner body. */
+  detail: string;
+  /** Optional JSON pointer-ish path to the bad field. */
+  path?: string;
+  /** Pass index inside max_passes when the worker re-tries; both omitted when unknown. */
+  pass?: number;
+  max_passes?: number;
+  /** Truncated + redacted transcript sample (≤ 500 chars). */
+  sample?: string;
+  /** Wallclock the rejection event was observed on this client. */
+  ts: string;
+}
+
 interface AssessmentSlice {
   runs: Map<string, Run>;
   runOrder: string[];
@@ -224,6 +256,10 @@ interface AssessmentSlice {
   diffOrder: string[];
   /** P2: keyed by `queryFailureKey(action, targetId)`. */
   queryErrors: Map<string, QueryFailure>;
+  /** N3: worker-output rejection events keyed by run_id. Distinct from
+   *  queryErrors so the UI can surface a Replay-action banner instead of
+   *  a Retry banner; see WorkerOutputRejection doc above. */
+  workerOutputErrors: Map<string, WorkerOutputRejection>;
 
   upsertRun(run: Run): void;
   upsertSweep(sweep: Sweep): void;
@@ -290,6 +326,13 @@ interface AssessmentSlice {
   clearQueryFailure(action: QueryAction, targetId?: string): void;
   clearAllQueryErrors(): void;
 
+  /** N3: record an `assessment.worker_output_rejected` event. */
+  recordWorkerOutputRejection(rejection: WorkerOutputRejection): void;
+  /** N3: drop the rejection for a specific run (e.g. operator dismissed banner or replayed). */
+  clearWorkerOutputRejection(runId: string): void;
+  /** N3: drop all worker output rejections (used by `clear()`). */
+  clearAllWorkerOutputErrors(): void;
+
   clear(): void;
 }
 
@@ -306,6 +349,7 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
   diffs: new Map(),
   diffOrder: [],
   queryErrors: new Map(),
+  workerOutputErrors: new Map(),
 
   upsertRun(run) {
     set((s) => {
@@ -613,6 +657,29 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
     set((s) => (s.queryErrors.size === 0 ? s : { queryErrors: new Map() }));
   },
 
+  recordWorkerOutputRejection(rejection) {
+    set((s) => {
+      const workerOutputErrors = new Map(s.workerOutputErrors);
+      workerOutputErrors.set(rejection.run_id, rejection);
+      return { workerOutputErrors };
+    });
+  },
+
+  clearWorkerOutputRejection(runId) {
+    set((s) => {
+      if (!s.workerOutputErrors.has(runId)) return s;
+      const workerOutputErrors = new Map(s.workerOutputErrors);
+      workerOutputErrors.delete(runId);
+      return { workerOutputErrors };
+    });
+  },
+
+  clearAllWorkerOutputErrors() {
+    set((s) =>
+      s.workerOutputErrors.size === 0 ? s : { workerOutputErrors: new Map() },
+    );
+  },
+
   clear() {
     set({
       runs: new Map(),
@@ -627,6 +694,7 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
       diffs: new Map(),
       diffOrder: [],
       queryErrors: new Map(),
+      workerOutputErrors: new Map(),
     });
   },
 }));

@@ -6,6 +6,7 @@ import {
   type EvidenceRef,
   type QueryFailure,
   type Sweep,
+  type WorkerOutputRejection,
 } from './assessment';
 import type { DiffResult } from './assessmentDiff';
 
@@ -247,5 +248,84 @@ describe('queryErrors (P2)', () => {
     s.recordQueryFailure(failure());
     s.clear();
     expect(useAssessment.getState().queryErrors.size).toBe(0);
+  });
+});
+
+describe('workerOutputErrors (N3)', () => {
+  beforeEach(() => reset());
+
+  const rejection = (
+    overrides: Partial<WorkerOutputRejection> = {},
+  ): WorkerOutputRejection => ({
+    run_id: 'r1',
+    worker_session_id: 'w1',
+    agent_id: 'agent-x',
+    agent_kind: 'acp',
+    agent_role: 'assessment-worker',
+    reason: 'schema_invalid',
+    code: 'severity_invalid',
+    detail: 'severity must be one of critical|high|medium|low|info',
+    path: 'candidates[0].severity',
+    pass: 1,
+    max_passes: 3,
+    sample: 'redacted-transcript',
+    ts: 't',
+    ...overrides,
+  });
+
+  it('recordWorkerOutputRejection stores the rejection keyed by run_id', () => {
+    useAssessment.getState().recordWorkerOutputRejection(rejection());
+    const stored = useAssessment.getState().workerOutputErrors.get('r1');
+    expect(stored?.reason).toBe('schema_invalid');
+    expect(stored?.code).toBe('severity_invalid');
+    expect(stored?.path).toBe('candidates[0].severity');
+    expect(stored?.pass).toBe(1);
+    expect(stored?.max_passes).toBe(3);
+  });
+
+  it('recordWorkerOutputRejection overwrites prior rejection for the same run', () => {
+    const s = useAssessment.getState();
+    s.recordWorkerOutputRejection(rejection({ pass: 1 }));
+    s.recordWorkerOutputRejection(rejection({ pass: 2, code: 'title_missing' }));
+    const stored = useAssessment.getState().workerOutputErrors.get('r1');
+    expect(stored?.pass).toBe(2);
+    expect(stored?.code).toBe('title_missing');
+    expect(useAssessment.getState().workerOutputErrors.size).toBe(1);
+  });
+
+  it('clearWorkerOutputRejection removes only the matching run', () => {
+    const s = useAssessment.getState();
+    s.recordWorkerOutputRejection(rejection({ run_id: 'r1' }));
+    s.recordWorkerOutputRejection(rejection({ run_id: 'r2' }));
+    s.clearWorkerOutputRejection('r1');
+    const after = useAssessment.getState().workerOutputErrors;
+    expect(after.has('r1')).toBe(false);
+    expect(after.has('r2')).toBe(true);
+  });
+
+  it('clearAllWorkerOutputErrors empties the map', () => {
+    const s = useAssessment.getState();
+    s.recordWorkerOutputRejection(rejection({ run_id: 'r1' }));
+    s.recordWorkerOutputRejection(rejection({ run_id: 'r2' }));
+    s.clearAllWorkerOutputErrors();
+    expect(useAssessment.getState().workerOutputErrors.size).toBe(0);
+  });
+
+  it('clear() resets workerOutputErrors', () => {
+    const s = useAssessment.getState();
+    s.recordWorkerOutputRejection(rejection());
+    s.clear();
+    expect(useAssessment.getState().workerOutputErrors.size).toBe(0);
+  });
+
+  it('worker output rejection does NOT collapse into queryErrors', () => {
+    // The two failure modes are different categories: queryErrors are
+    // recoverable read-side failures; worker_output_rejected means the
+    // worker contract itself is broken. They must not share storage or
+    // the UI cannot render distinct affordances.
+    const s = useAssessment.getState();
+    s.recordWorkerOutputRejection(rejection());
+    expect(useAssessment.getState().queryErrors.size).toBe(0);
+    expect(useAssessment.getState().workerOutputErrors.size).toBe(1);
   });
 });

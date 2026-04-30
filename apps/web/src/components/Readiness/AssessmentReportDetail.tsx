@@ -19,7 +19,11 @@ import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useCockpit } from '../../stores/cockpit';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
-import { reasonLabel, requestAssessmentFetchReport } from '../../domain/assessment/queries';
+import {
+  reasonLabel,
+  requestAssessmentFetchReport,
+  requestAssessmentReplay,
+} from '../../domain/assessment/queries';
 
 interface Props {
   runId: string;
@@ -34,6 +38,12 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
     s.queryErrors.get(queryFailureKey('fetch_report', runId)),
   );
   const clearQueryFailure = useAssessment((s) => s.clearQueryFailure);
+  // N3: surface worker_output_rejected as a SEPARATE banner from queryErrors.
+  // Re-running an assessment with broken worker output via the generic Retry
+  // would just hit the same broken envelope; the operator needs an explicit
+  // "Replay this run" affordance and a clear "contract broken" framing.
+  const workerOutputRejection = useAssessment((s) => s.workerOutputErrors.get(runId));
+  const clearWorkerOutputRejection = useAssessment((s) => s.clearWorkerOutputRejection);
   const selected = useAssessmentReport((s) => s.selectedFindingIds);
   const toggleFinding = useAssessmentReport((s) => s.toggleFinding);
   const setRoute = useCockpit((s) => s.setRoute);
@@ -51,6 +61,12 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
     clearQueryFailure('fetch_report', runId);
     requested.current = null;
     void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => {});
+  };
+
+  const replayAfterWorkerRejection = () => {
+    if (!transport || !sessionId) return;
+    clearWorkerOutputRejection(runId);
+    void requestAssessmentReplay(transport, sessionId, runId).catch(() => {});
   };
 
   const runFindings = useMemo<Finding[]>(() => {
@@ -109,6 +125,51 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
 
   return (
     <div style={shellStyle}>
+      {workerOutputRejection ? (
+        <div
+          role="alert"
+          data-testid="assessment-worker-output-rejection"
+          className="card"
+          style={workerErrorCardStyle}
+        >
+          <strong style={workerErrorTitleStyle}>
+            Worker output rejected — {workerOutputRejection.reason}
+          </strong>
+          <p className="muted" style={errorMessageStyle}>
+            {workerOutputRejection.detail}
+            {workerOutputRejection.path ? (
+              <>
+                {' '}
+                <code>at {workerOutputRejection.path}</code>
+              </>
+            ) : null}
+          </p>
+          {typeof workerOutputRejection.pass === 'number' &&
+          typeof workerOutputRejection.max_passes === 'number' ? (
+            <p className="muted" style={workerPassMetaStyle}>
+              Pass {workerOutputRejection.pass} / {workerOutputRejection.max_passes}
+              {workerOutputRejection.agent_kind ? (
+                <> · {workerOutputRejection.agent_kind} worker</>
+              ) : null}
+            </p>
+          ) : null}
+          <div style={errorButtonRowStyle}>
+            <button
+              className="btn sm"
+              onClick={replayAfterWorkerRejection}
+              disabled={!transport || !sessionId}
+            >
+              Replay
+            </button>
+            <button
+              className="btn sm ghost"
+              onClick={() => clearWorkerOutputRejection(runId)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
       <header style={headerStyle}>
         <button className="btn ghost" onClick={onBack}>
           ← Readiness
@@ -177,6 +238,20 @@ const errorCardStyle: React.CSSProperties = {
 const errorTitleStyle: React.CSSProperties = { color: 'var(--sev-error)' };
 const errorMessageStyle: React.CSSProperties = { margin: '6px 0 10px' };
 const errorButtonRowStyle: React.CSSProperties = { display: 'flex', gap: 8 };
+// N3: distinct "contract broken" treatment — warn-tone (not generic error)
+// to signal this is a worker-side schema breach, not a transient query
+// failure. Slightly heavier left border to read as a structural issue.
+const workerErrorCardStyle: React.CSSProperties = {
+  borderColor: 'var(--sev-warn)',
+  borderLeftWidth: 4,
+  padding: 12,
+  marginBottom: 'var(--gap)',
+};
+const workerErrorTitleStyle: React.CSSProperties = { color: 'var(--sev-warn)' };
+const workerPassMetaStyle: React.CSSProperties = {
+  margin: '0 0 10px',
+  fontSize: 12.5,
+};
 const loadingStyle: React.CSSProperties = { fontSize: 13 };
 const shellStyle: React.CSSProperties = {
   display: 'flex',

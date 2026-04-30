@@ -923,6 +923,51 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
     }),
   );
 
+  // N3: backend emits `assessment.worker_output_rejected` BEFORE the
+  // terminal `assessment.failed { reason: 'invalid_worker_output' }`.
+  // Surface it on a dedicated store slice so the run-detail UI can show a
+  // "Worker output rejected" banner with a Replay action — NOT the
+  // queryErrors Retry banner. The two failure modes are different
+  // categories: queryErrors are recoverable read-side failures (the run
+  // exists; just couldn't fetch right now); worker_output_rejected means
+  // the worker contract itself is broken and a Retry would just hit the
+  // same broken envelope again.
+  offs.push(
+    transport.on('assessment.worker_output_rejected', (ev) => {
+      const p = (ev.payload as Record<string, unknown> | null) ?? null;
+      if (!p) return;
+      const runId = readString(p, ['run_id', 'runId']);
+      if (!runId) return;
+      const meta = readRunMeta(p);
+      const reason = readString(p, ['reason']) ?? 'schema_invalid';
+      const code = readString(p, ['code']) ?? 'unknown';
+      const detail = readString(p, ['detail', 'message']) ?? 'Worker output rejected.';
+      const path = readString(p, ['path']);
+      const sample = readString(p, ['sample']);
+      const passRaw = p['pass'];
+      const maxPassesRaw = p['max_passes'] ?? p['maxPasses'];
+      const pass = typeof passRaw === 'number' ? passRaw : undefined;
+      const maxPasses = typeof maxPassesRaw === 'number' ? maxPassesRaw : undefined;
+      useAssessment.getState().recordWorkerOutputRejection({
+        run_id: runId,
+        ...(meta.worker_session_id !== undefined
+          ? { worker_session_id: meta.worker_session_id }
+          : {}),
+        ...(meta.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
+        ...(meta.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
+        ...(meta.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
+        reason,
+        code,
+        detail,
+        ...(path !== undefined ? { path } : {}),
+        ...(pass !== undefined ? { pass } : {}),
+        ...(maxPasses !== undefined ? { max_passes: maxPasses } : {}),
+        ...(sample !== undefined ? { sample } : {}),
+        ts: new Date().toISOString(),
+      });
+    }),
+  );
+
   offs.push(
     transport.on('assessment.sweep.started', (ev) => {
       const sweep = readSweepRecord(ev.payload);
