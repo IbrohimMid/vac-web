@@ -1,4 +1,5 @@
 import { GateRibbon } from '../Gates/GateRibbon';
+import { ResumeStatus } from './ResumeStatus';
 import { SeverityIcon } from '../SeverityIcon';
 import { useSession } from '../../stores/session';
 import { useSystemPulse } from '../../stores/systemPulse';
@@ -27,6 +28,7 @@ export function Topbar({ transport }: { transport?: TransportHandle | null | und
         </span>
       )}
       <GateRibbon transport={transport} />
+      <ResumeStatus />
       <div style={{ flex: 1 }} />
       <nav style={{ display: 'flex', gap: 8 }}>
         {facets.map((f) => (
