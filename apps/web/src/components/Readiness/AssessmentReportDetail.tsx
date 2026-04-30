@@ -9,7 +9,7 @@
 // mount. We deliberately do NOT touch useAttachments here — that store is
 // composer chat context, not finding selection.
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { CompareCard } from './CompareCard';
 import { FindingsList } from './FindingsList';
 import { RunDetailsCard } from './RunDetailsCard';
@@ -17,7 +17,9 @@ import { VerdictCard } from './VerdictCard';
 import { useAssessment, type Finding } from '../../stores/assessment';
 import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useCockpit } from '../../stores/cockpit';
+import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import { requestAssessmentFetchReport } from '../../domain/assessment/queries';
 
 interface Props {
   runId: string;
@@ -31,6 +33,14 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   const selected = useAssessmentReport((s) => s.selectedFindingIds);
   const toggleFinding = useAssessmentReport((s) => s.toggleFinding);
   const setRoute = useCockpit((s) => s.setRoute);
+  const sessionId = useSession((s) => s.sessionId);
+  const requested = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (run || requested.current === runId || !transport || !sessionId) return;
+    requested.current = runId;
+    void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => {});
+  }, [run, transport, sessionId, runId]);
 
   const runFindings = useMemo<Finding[]>(() => {
     const list: Finding[] = [];
@@ -42,7 +52,7 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
     return (
       <div style={{ padding: 'var(--pad)' }}>
         <p className="muted" style={{ fontSize: 13 }}>
-          Run not found. It may have been cleared.
+          Loading report...
         </p>
         <button className="btn ghost" onClick={onBack}>
           ← Back
@@ -134,7 +144,7 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
         <aside style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
           <VerdictCard verdict={run.verdict} findings={runFindings} />
           <RunDetailsCard run={run} validatedFindings={validatedCount} />
-          <CompareCard run={run} />
+          <CompareCard run={run} transport={transport} />
         </aside>
       </div>
     </div>

@@ -1,13 +1,17 @@
 // 4-tab diff view comparing two runs of the same swarm.
 // Resolved / persistent / regressed / new, keyed by identity_hash.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { computeDiff, type DiffBucket } from '../../stores/assessmentDiff';
 import { useAssessment, type Finding } from '../../stores/assessment';
+import { useSession } from '../../stores/session';
+import type { TransportHandle } from '../../transport';
+import { requestAssessmentDiff } from '../../domain/assessment/queries';
 
 interface Props {
   prevRunId: string;
   nextRunId: string;
+  transport: TransportHandle | null;
 }
 
 const BUCKET_LABEL: Record<DiffBucket, string> = {
@@ -24,9 +28,18 @@ const BUCKET_COLOR: Record<DiffBucket, string> = {
   new: 'var(--sev-warn)',
 };
 
-export function AssessmentDiff({ prevRunId, nextRunId }: Props) {
+export function AssessmentDiff({ prevRunId, nextRunId, transport }: Props) {
   const findings = useAssessment((s) => s.findings);
+  const cachedDiff = useAssessment((s) => s.diffs.get(`${prevRunId}\x00${nextRunId}`));
+  const sessionId = useSession((s) => s.sessionId);
+
+  useEffect(() => {
+    if (cachedDiff || !transport || !sessionId) return;
+    void requestAssessmentDiff(transport, sessionId, prevRunId, nextRunId).catch(() => {});
+  }, [cachedDiff, transport, sessionId, prevRunId, nextRunId]);
+
   const diff = useMemo(() => {
+    if (cachedDiff) return cachedDiff;
     const prev: Finding[] = [];
     const next: Finding[] = [];
     for (const f of findings.values()) {
@@ -34,7 +47,7 @@ export function AssessmentDiff({ prevRunId, nextRunId }: Props) {
       else if (f.run_id === nextRunId) next.push(f);
     }
     return computeDiff(prev, next);
-  }, [findings, prevRunId, nextRunId]);
+  }, [cachedDiff, findings, prevRunId, nextRunId]);
 
   const [tab, setTab] = useState<DiffBucket>('regressed');
   const visible = diff.entries.filter((e) => e.bucket === tab);

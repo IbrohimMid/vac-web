@@ -12,10 +12,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { ASSESSOR_FAMILIES, type AssessorFamily } from '../../stores/assessment';
 import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
 import { useSession } from '../../stores/session';
-import type { TransportHandle } from '../../transport';
+import type { AvailableAgent, TransportHandle } from '../../transport';
+import { describeAssessmentAgent, pickAssessmentAgentId } from '../../domain/assessment/agentSelection';
+import {
+  requestAssessmentSweepRun,
+  type AssessmentDepth,
+} from '../../domain/assessment/queries';
 import { Icon } from './primitives';
-
-type Depth = 'quick' | 'standard' | 'full';
 
 interface Props {
   transport: TransportHandle | null;
@@ -38,7 +41,7 @@ const FAMILY_OPTIONS: Array<{ id: AssessorFamily | 'all'; label: string; sub: st
   },
 ];
 
-const DEPTH_PRESETS: Array<{ id: Depth; label: string; eta: string }> = [
+const DEPTH_PRESETS: Array<{ id: AssessmentDepth; label: string; eta: string }> = [
   { id: 'quick', label: 'Quick', eta: '~1m' },
   { id: 'standard', label: 'Standard', eta: '~5m' },
   { id: 'full', label: 'Full', eta: '~15m' },
@@ -60,9 +63,25 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
   // #185 on the run-sweep drawer.
   const connectorMap = useConnectors((s) => s.items);
   const connectors = useMemo(() => Array.from(connectorMap.values()), [connectorMap]);
+  const advertisedAgents: AvailableAgent[] = useMemo(
+    () => transport?.availableAgents?.() ?? [],
+    [transport],
+  );
+  const defaultAgentId = useMemo(
+    () => pickAssessmentAgentId(advertisedAgents),
+    [advertisedAgents],
+  );
   const [family, setFamily] = useState<AssessorFamily | 'all'>('rtd');
-  const [depth, setDepth] = useState<Depth>('standard');
+  const [depth, setDepth] = useState<AssessmentDepth>('standard');
+  const [agentId, setAgentId] = useState<string>(defaultAgentId);
   const [running, setRunning] = useState(false);
+  const selectedAgent = advertisedAgents.find((agent) => agent.id === agentId);
+
+  useEffect(() => {
+    setAgentId((current) =>
+      advertisedAgents.some((agent) => agent.id === current) ? current : defaultAgentId,
+    );
+  }, [advertisedAgents, defaultAgentId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -79,12 +98,20 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
     if (!transport || !sessionId || running) return;
     setRunning(true);
     try {
-      const targets: AssessorFamily[] =
-        family === 'all' ? ASSESSOR_FAMILIES : [family as AssessorFamily];
-      // Dispatch sequentially so the bridge can stagger; mock-engine handles
-      // each independently and the UI activeRunId follows the most recent.
-      for (const swarm of targets) {
-        await transport.send(sessionId, 'assessment.run', { swarm, depth });
+      if (family === 'all') {
+        await requestAssessmentSweepRun(transport, sessionId, {
+          families: ASSESSOR_FAMILIES,
+          depth,
+          ...(agentId ? { agent_id: agentId } : {}),
+          agent_role: 'assessment-sweep',
+        });
+      } else {
+        await transport.send(sessionId, 'assessment.run', {
+          swarm: family as AssessorFamily,
+          depth,
+          ...(agentId ? { agent_id: agentId } : {}),
+          agent_role: 'assessment-worker',
+        });
       }
       onClose();
     } catch {
@@ -165,6 +192,41 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
             gap: 'var(--gap)',
           }}
         >
+          <Section label="Assessment agent" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <select
+              aria-label="Assessment agent"
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+              style={{
+                minHeight: 32,
+                padding: '0 10px',
+                border: '1px solid var(--line)',
+                borderRadius: 6,
+                background: 'var(--panel)',
+              }}
+            >
+              {advertisedAgents.length === 0 ? (
+                <option value="">
+                  Bridge default agent
+                </option>
+              ) : (
+                advertisedAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.label}
+                    {agent.default ? ' (default)' : ''}
+                    {agent.installed === false ? ' • not installed' : ''}
+                  </option>
+                ))
+              )}
+            </select>
+            <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--ink-3)' }}>
+              {selectedAgent
+                ? describeAssessmentAgent(selectedAgent)
+                : 'Bridge default agent will be used when no advertised agent is selected.'}
+            </div>
+          </div>
+
           <Section label="What should VAC look at?" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {FAMILY_OPTIONS.map((o) => (

@@ -229,11 +229,14 @@ function ConfigStatusChip() {
   const status = useSessionHistory((s) => s.configStatus);
   const diagnostics = useSessionHistory((s) => s.configDiagnostics);
   const reloading = useSessionHistory((s) => s.configReloading);
+  const retained = useSessionHistory((s) => s.configActiveSnapshotRetained);
   if (status === 'unknown') return null;
   const ok = status === 'valid';
   const tone: 'ok' | 'crit' = ok ? 'ok' : 'crit';
   const label = reloading
     ? 'Config: reloading\u2026'
+    : retained
+    ? 'Config: reload failed'
     : ok
     ? 'Config: valid'
     : 'Config: invalid';
@@ -242,6 +245,8 @@ function ConfigStatusChip() {
         .slice(0, 5)
         .map((d) => `${d.scope}/${d.path}: ${d.message}`)
         .join('\n') + (diagnostics.length > 5 ? `\n\u2026 +${diagnostics.length - 5} more` : '')
+    : retained
+    ? 'Reload failed; active config snapshot is unchanged and runtime is using the last successful snapshot.'
     : ok
     ? 'Config snapshot loaded successfully.'
     : 'Bridge config validation failed; runtime is using last good snapshot.';

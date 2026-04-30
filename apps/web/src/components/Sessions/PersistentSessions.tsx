@@ -42,6 +42,8 @@ export function PersistentSessions({ transport }: Props) {
   const configStatus = useSessionHistory((s) => s.configStatus);
   const configReloading = useSessionHistory((s) => s.configReloading);
   const configLoadedAt = useSessionHistory((s) => s.configLoadedAt);
+  const configActiveSnapshotRetained = useSessionHistory((s) => s.configActiveSnapshotRetained);
+  const configLastReloadFailedAt = useSessionHistory((s) => s.configLastReloadFailedAt);
   const vacVersion = useSessionHistory((s) => s.vacVersion);
   const agentsSummary = useSessionHistory((s) => s.agentsSummary);
   const mcpSummary = useSessionHistory((s) => s.mcpSummary);
@@ -66,10 +68,15 @@ export function PersistentSessions({ transport }: Props) {
       <div
         role="alert"
         aria-label="Resume policy config invalid"
-        title={configDiagnostics.map((d) => `${d.path}: ${d.message}`).join('\n') || 'Bridge reports the live snapshot is invalid.'}
+        title={
+          configDiagnostics.map((d) => `${d.path}: ${d.message}`).join('\n') ||
+          (configActiveSnapshotRetained
+            ? 'Reload failed; runtime is still using the previous active snapshot.'
+            : 'Bridge reports the live snapshot is invalid.')
+        }
         style={configChipStyle}
       >
-        ⚠️ Config invalid
+        ⚠️ {configActiveSnapshotRetained ? 'Reload failed' : 'Config invalid'}
         {configDiagnostics.length > 0 ? (
           <span style={chipDetailStyle}> ({configDiagnostics.length})</span>
         ) : null}
@@ -185,6 +192,13 @@ export function PersistentSessions({ transport }: Props) {
         </span>
       </header>
       {policyPreview}
+      {configActiveSnapshotRetained ? (
+        <div role="status" style={retainedSnapshotStyle}>
+          Active config unchanged. Runtime is still using the last successful snapshot
+          {configLoadedAt ? ` from ${formatDate(configLoadedAt)}` : ''}
+          {configLastReloadFailedAt ? `; reload failed at ${formatDate(configLastReloadFailedAt)}` : ''}.
+        </div>
+      ) : null}
       {diagnosticList}
     </section>
   ) : null;
@@ -268,13 +282,18 @@ export function PersistentSessions({ transport }: Props) {
                 resume.kind === 'replaying') &&
               'vac_session_id' in resume &&
               resume.vac_session_id === r.vac_session_id;
+            const defaultMode = resumePolicy?.default_mode ?? 'replay_only';
+            const defaultLabel = busy ? 'Resuming\u2026' : 'Resume default';
+            const defaultTitle = resumePolicy
+              ? defaultResumeTitle(resumePolicy)
+              : 'Resume using the bridge default policy. Policy not loaded yet; replay-only is used as the safe fallback.';
             const replayLabel = busy
               ? resume.kind === 'replaying'
                 ? `Replaying${
                     'replayed' in resume && resume.replayed > 0 ? ` (${resume.replayed})` : '\u2026'
                   }`
                 : 'Resuming\u2026'
-              : 'Resume (replay)';
+              : 'Replay only';
             const nativeLabel = busy
               ? resume.kind === 'loading_native'
                 ? 'Loading\u2026'
@@ -319,6 +338,17 @@ export function PersistentSessions({ transport }: Props) {
                 <td style={td}>{formatDate(r.updated_at)}</td>
                 <td style={td}>{r.native_resume_supported ? 'yes' : 'replay'}</td>
                 <td style={td}>
+                  <button
+                    onClick={() =>
+                      transport &&
+                      requestHistoryResume(transport, r.vac_session_id, defaultMode)
+                    }
+                    disabled={!transport || busy}
+                    aria-label={`Resume ${r.vac_session_id} using default policy`}
+                    title={defaultTitle}
+                  >
+                    {defaultLabel}
+                  </button>{' '}
                   <button
                     onClick={() =>
                       transport &&
@@ -418,6 +448,16 @@ const rowWarningStyle: React.CSSProperties = {
   color: '#cc9900',
   fontSize: 12,
   fontWeight: 600,
+};
+const retainedSnapshotStyle: React.CSSProperties = {
+  marginTop: 8,
+  padding: '6px 8px',
+  borderRadius: 4,
+  background: 'rgba(220, 153, 0, 0.12)',
+  color: '#cc9900',
+  border: '1px solid rgba(220, 153, 0, 0.35)',
+  fontSize: 12,
+  lineHeight: 1.4,
 };
 // Stage R3 — resume-policy preview surface. Visually quieter than the
 // health chip (which signals an active failure) so the operator reads
@@ -526,6 +566,14 @@ function diagSeverityStyle(
     fontWeight: 700,
     color: severity === 'warning' ? '#cc9900' : '#cc4444',
   };
+}
+
+function defaultResumeTitle(policy: NonNullable<ReturnType<typeof useSessionHistory.getState>['resumePolicy']>): string {
+  const fallback =
+    policy.default_mode === 'native_or_replay'
+      ? ` Native fallback: ${policy.native_fallback}.`
+      : '';
+  return `Resume using policy default: ${policy.default_mode}.${fallback} MCP drift: ${policy.mcp_server_drift}.`;
 }
 
 function warningLabel(reason: string): string {

@@ -1,6 +1,6 @@
 // Readiness Hub: verdict header + 5 scorecards + virtualized findings list.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AssessmentDiff } from './AssessmentDiff';
 import { AssessmentReportDetail } from './AssessmentReportDetail';
 import { FindingsList } from './FindingsList';
@@ -15,7 +15,17 @@ import {
 } from '../../stores/assessment';
 import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useSession } from '../../stores/session';
-import type { TransportHandle } from '../../transport';
+import type { AvailableAgent, TransportHandle } from '../../transport';
+import {
+  describeAssessmentAgent,
+  pickAssessmentAgentId,
+} from '../../domain/assessment/agentSelection';
+import {
+  requestAssessmentFetchReport,
+  requestAssessmentListRuns,
+  requestAssessmentReplay,
+  requestAssessmentSweepCancel,
+} from '../../domain/assessment/queries';
 
 const CATEGORIES: Category[] = ['technical', 'product', 'ux', 'release', 'ops'];
 
@@ -67,6 +77,14 @@ function ReadinessHubMain({ transport }: Props) {
   const activeRunId = useAssessment((s) => s.activeRunId);
   const findings = useAssessment((s) => s.findings);
   const sessionId = useSession((s) => s.sessionId);
+  const advertisedAgents: AvailableAgent[] = useMemo(
+    () => transport?.availableAgents?.() ?? [],
+    [transport],
+  );
+  const defaultAssessmentAgentId = useMemo(
+    () => pickAssessmentAgentId(advertisedAgents),
+    [advertisedAgents],
+  );
 
   const [minSev, setMinSev] = useState<Severity>('info');
   const [categoryFilter, setCategoryFilter] = useState<Category | 'all'>('all');
@@ -88,13 +106,41 @@ function ReadinessHubMain({ transport }: Props) {
 
   const [familyToRun, setFamilyToRun] = useState<AssessorFamily>('rtd');
 
+  useEffect(() => {
+    if (!transport || !sessionId) return;
+    void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => {});
+  }, [transport, sessionId]);
+
   const run = async (swarm: AssessorFamily) => {
     if (!transport || !sessionId) return;
     try {
-      await transport.send(sessionId, 'assessment.run', { swarm });
+      await transport.send(sessionId, 'assessment.run', {
+        swarm,
+        ...(defaultAssessmentAgentId ? { agent_id: defaultAssessmentAgentId } : {}),
+        agent_role: 'assessment-worker',
+      });
     } catch {
       /* ignore */
     }
+  };
+
+  const compareRun = (runId: string) => {
+    const run = runs.get(runId);
+    if (!run) return;
+    const idx = runOrder.indexOf(run.id);
+    let priorRunId: string | null = null;
+    for (let i = idx - 1; i >= 0; i--) {
+      const id = runOrder[i];
+      if (!id) continue;
+      const candidate = runs.get(id);
+      if (candidate && candidate.swarm === run.swarm && candidate.status === 'completed') {
+        priorRunId = id;
+        break;
+      }
+    }
+    if (!priorRunId) return;
+    useAssessment.getState().setActive(run.id);
+    setDiffMode(true);
   };
 
   const cancel = async () => {
@@ -137,6 +183,23 @@ function ReadinessHubMain({ transport }: Props) {
         <button onClick={() => run(familyToRun)} disabled={!transport || active?.status === 'running'}>
           Run {familyToRun}
         </button>
+        {defaultAssessmentAgentId && (
+          <span
+            className="badge"
+            title={describeAssessmentAgent(
+              advertisedAgents.find((agent) => agent.id === defaultAssessmentAgentId) ??
+                advertisedAgents[0] ??
+                {
+                  id: defaultAssessmentAgentId,
+                  label: defaultAssessmentAgentId,
+                  kind: 'unknown',
+                  default: false,
+                },
+            )}
+          >
+            worker: {defaultAssessmentAgentId}
+          </span>
+        )}
         {active?.status === 'running' && <button onClick={cancel}>Cancel</button>}
       </header>
       {runOrder.length === 0 ? (
@@ -171,42 +234,57 @@ function ReadinessHubMain({ transport }: Props) {
             </div>
           )}
           {diffMode && priorRunId && active ? (
-            <AssessmentDiff prevRunId={priorRunId} nextRunId={active.id} />
+            <AssessmentDiff prevRunId={priorRunId} nextRunId={active.id} transport={transport} />
           ) : null}
           {!diffMode && (
             <>
-          <Filters
-            minSev={minSev}
-            setMinSev={setMinSev}
-            categoryFilter={categoryFilter}
-            setCategoryFilter={setCategoryFilter}
-            count={filtered.length}
-          />
-          <FindingsList findings={filtered} transport={transport} />
+              <Filters
+                minSev={minSev}
+                setMinSev={setMinSev}
+                categoryFilter={categoryFilter}
+                setCategoryFilter={setCategoryFilter}
+                count={filtered.length}
+              />
+              <FindingsList findings={filtered} transport={transport} />
             </>
           )}
-          <RecentAssessmentsTimeline />
         </>
       )}
+      <RecentAssessmentsTimeline transport={transport} onCompareRun={compareRun} />
     </div>
   );
 }
 
-function RecentAssessmentsTimeline() {
+function RecentAssessmentsTimeline({
+  transport,
+  onCompareRun,
+}: {
+  transport: TransportHandle | null;
+  onCompareRun(runId: string): void;
+}) {
   const runs = useAssessment((s) => s.runs);
   const runOrder = useAssessment((s) => s.runOrder);
+  const sweeps = useAssessment((s) => s.sweeps);
+  const sweepOrder = useAssessment((s) => s.sweepOrder);
   const findings = useAssessment((s) => s.findings);
+  const activeSweepId = useAssessment((s) => s.activeSweepId);
+  const sessionId = useSession((s) => s.sessionId);
   const enterReport = useAssessmentReport((s) => s.enterReport);
-  // Most recent 6 completed runs, newest first.
+
   const rows = runOrder
     .slice()
     .reverse()
     .map((id) => runs.get(id))
     .filter((r): r is NonNullable<typeof r> => !!r)
     .slice(0, 6);
-  if (rows.length === 0) return null;
+  const sweepRows = sweepOrder
+    .slice()
+    .reverse()
+    .map((id) => sweeps.get(id))
+    .filter((sweep): sweep is NonNullable<typeof sweep> => !!sweep)
+    .slice(0, 6);
+  if (rows.length === 0 && sweepRows.length === 0) return null;
 
-  // Per-run finding counts for the right-side detail.
   const countByRun = new Map<string, { crit: number; high: number; total: number }>();
   for (const f of findings.values()) {
     const cur = countByRun.get(f.run_id) ?? { crit: 0, high: 0, total: 0 };
@@ -223,65 +301,227 @@ function RecentAssessmentsTimeline() {
     return '';
   };
 
+  const openRunReport = async (runId: string) => {
+    if (transport && sessionId) {
+      try {
+        await requestAssessmentFetchReport(transport, sessionId, runId);
+      } catch {
+        // hydrate best-effort via existing store if backend is unavailable
+      }
+    }
+    enterReport(runId);
+  };
+
+  const replayRun = async (runId: string) => {
+    if (!transport || !sessionId) return;
+    try {
+      await requestAssessmentReplay(transport, sessionId, runId);
+    } catch {
+      // no-op
+    }
+    enterReport(runId);
+  };
+
+  const cancelSweep = async (sweepId: string) => {
+    if (!transport || !sessionId) return;
+    try {
+      await requestAssessmentSweepCancel(transport, sessionId, sweepId);
+    } catch {
+      // no-op
+    }
+  };
+
+  const primaryRunIdForSweep = (sweepId: string): string | null => {
+    const sweep = sweeps.get(sweepId);
+    if (!sweep) return null;
+    for (const runId of [...sweep.run_ids].reverse()) {
+      if (runs.has(runId)) return runId;
+    }
+    return sweep.run_ids.at(-1) ?? null;
+  };
+
   return (
     <section style={{ marginTop: 18 }}>
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
-          marginBottom: 8,
-        }}
-      >
-        <h3 style={{ margin: 0, fontSize: 14 }}>Recent assessments</h3>
-        <span className="muted" style={{ fontSize: 12 }}>
-          last {rows.length}
-        </span>
-      </header>
-      <div className="timeline-card">
-        {rows.map((r) => {
-          const counts = countByRun.get(r.id) ?? { crit: 0, high: 0, total: 0 };
-          const sevDot =
-            counts.crit > 0 ? 'crit' : counts.high > 0 ? 'high' : counts.total > 0 ? 'med' : 'low';
-          return (
-            <div key={r.id} className="timeline-row">
-              <span className={`sev-dot ${sevDot}`}></span>
-              <span className="when">
-                {r.started_at} ·{' '}
-                <span className="actor">{r.swarm.toUpperCase()}</span>
-              </span>
-              <span>
-                <strong>{r.swarm} · {r.status}</strong>
-                {' '}
-                <span className="muted">
-                  {counts.total} finding{counts.total === 1 ? '' : 's'}
-                  {counts.crit > 0 && ` · ${counts.crit} critical`}
-                  {counts.high > 0 && ` · ${counts.high} high`}
-                </span>
-              </span>
-              {r.verdict && (
-                <span className={`badge ${verdictBadge(r.verdict)}`}>
-                  {r.verdict}
-                </span>
-              )}
-              <button
-                className="btn sm ghost"
-                onClick={() => enterReport(r.id)}
-                style={{ marginLeft: 'auto', fontSize: 11 }}
-                aria-label={`View report for run ${r.id}`}
-              >
-                View report
-              </button>
-            </div>
-          );
-        })}
-      </div>
+      {sweepRows.length > 0 && (
+        <>
+          <header
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 14 }}>Sweep history</h3>
+            <span className="muted" style={{ fontSize: 12 }}>
+              last {sweepRows.length}
+            </span>
+          </header>
+          <div className="timeline-card" style={{ marginBottom: 14 }}>
+            {sweepRows.map((sweep) => {
+              const sweepRunId = primaryRunIdForSweep(sweep.id);
+              const primaryRun = sweepRunId ? runs.get(sweepRunId) : null;
+              const counts = primaryRun ? countByRun.get(primaryRun.id) ?? { crit: 0, high: 0, total: 0 } : { crit: 0, high: 0, total: 0 };
+              const sevDot =
+                counts.crit > 0 ? 'crit' : counts.high > 0 ? 'high' : counts.total > 0 ? 'med' : 'low';
+              const familiesLabel = sweep.families.length > 0 ? sweep.families.join(' · ') : 'sweep';
+              const isActive = activeSweepId === sweep.id;
+              return (
+                <div
+                  key={sweep.id}
+                  className="timeline-row"
+                  style={{
+                    borderLeft: isActive ? '3px solid var(--accent)' : undefined,
+                    paddingLeft: isActive ? 9 : undefined,
+                  }}
+                >
+                  <span className={`sev-dot ${sevDot}`}></span>
+                  <span className="when">
+                    {sweep.started_at} · <span className="actor">{familiesLabel}</span>
+                  </span>
+                  <span>
+                    <strong>{sweep.id.slice(0, 12)}</strong>{' '}
+                    <span className="muted">
+                      {sweep.status}
+                      {sweep.counts && typeof sweep.counts === 'object'
+                        ? ` · ${Object.values(sweep.counts).reduce((acc, value) => acc + (typeof value === 'number' ? value : 0), 0)} signals`
+                        : ''}
+                    </span>
+                    {primaryRun && (
+                      <span className="badge" style={{ marginLeft: 6 }}>
+                        {primaryRun.swarm}
+                      </span>
+                    )}
+                  </span>
+                  {sweep.verdict && <span className={`badge ${verdictBadge(sweep.verdict)}`}>{sweep.verdict}</span>}
+                  {isActive && <span className="badge accent">active</span>}
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => sweepRunId && void openRunReport(sweepRunId)}
+                      disabled={!sweepRunId}
+                      aria-label={`Open report for sweep ${sweep.id}`}
+                    >
+                      Open report
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => sweepRunId && void replayRun(sweepRunId)}
+                      disabled={!sweepRunId}
+                      aria-label={`Replay sweep ${sweep.id}`}
+                    >
+                      Replay
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => sweepRunId && onCompareRun(sweepRunId)}
+                      disabled={!sweepRunId}
+                      aria-label={`Compare sweep ${sweep.id}`}
+                    >
+                      Compare
+                    </button>
+                    {sweep.status === 'running' && (
+                      <button
+                        className="btn sm ghost"
+                        onClick={() => void cancelSweep(sweep.id)}
+                        aria-label={`Cancel sweep ${sweep.id}`}
+                      >
+                        Cancel sweep
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {rows.length > 0 && (
+        <>
+          <header
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 14 }}>Recent assessments</h3>
+            <span className="muted" style={{ fontSize: 12 }}>
+              last {rows.length}
+            </span>
+          </header>
+          <div className="timeline-card">
+            {rows.map((r) => {
+              const counts = countByRun.get(r.id) ?? { crit: 0, high: 0, total: 0 };
+              const sevDot =
+                counts.crit > 0 ? 'crit' : counts.high > 0 ? 'high' : counts.total > 0 ? 'med' : 'low';
+              return (
+                <div key={r.id} className="timeline-row">
+                  <span className={`sev-dot ${sevDot}`}></span>
+                  <span className="when">
+                    {r.started_at} · <span className="actor">{r.swarm.toUpperCase()}</span>
+                  </span>
+                  <span>
+                    <strong>
+                      {r.swarm} · {r.status}
+                    </strong>
+                    {r.agent_id && (
+                      <span className="badge" style={{ marginLeft: 6 }}>
+                        {r.agent_id}
+                      </span>
+                    )}
+                    {' '}
+                    <span className="muted">
+                      {counts.total} finding{counts.total === 1 ? '' : 's'}
+                      {counts.crit > 0 && ` · ${counts.crit} critical`}
+                      {counts.high > 0 && ` · ${counts.high} high`}
+                    </span>
+                  </span>
+                  {r.verdict && <span className={`badge ${verdictBadge(r.verdict)}`}>{r.verdict}</span>}
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => void openRunReport(r.id)}
+                      aria-label={`View report for run ${r.id}`}
+                    >
+                      View report
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => void replayRun(r.id)}
+                      aria-label={`Replay run ${r.id}`}
+                    >
+                      Replay
+                    </button>
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => onCompareRun(r.id)}
+                      aria-label={`Compare run ${r.id}`}
+                    >
+                      Compare
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
 function VerdictHeader({ run }: { run: { verdict?: Verdict; status: string; swarm: string } }) {
   const v = run.verdict ?? 'unknown';
+  const extendedRun = run as typeof run & {
+    agent_id?: string;
+    agent_kind?: string;
+    worker_session_id?: string;
+    verdict_detail?: { status: string; delivery_state?: string; reason?: string };
+    failure?: { status: string; reason: string; detail?: string };
+  };
   return (
     <div
       style={{
@@ -295,6 +535,21 @@ function VerdictHeader({ run }: { run: { verdict?: Verdict; status: string; swar
         {run.swarm} · {v}
       </strong>
       <span style={{ marginLeft: 8, color: 'var(--text-2)', fontSize: 12 }}>{run.status}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        {extendedRun.agent_id && <span className="badge">{extendedRun.agent_id}</span>}
+        {extendedRun.agent_kind && <span className="badge">{extendedRun.agent_kind}</span>}
+        {extendedRun.worker_session_id && (
+          <span className="badge">worker {extendedRun.worker_session_id.slice(0, 8)}</span>
+        )}
+        {extendedRun.verdict_detail?.delivery_state && (
+          <span className="badge">{extendedRun.verdict_detail.delivery_state}</span>
+        )}
+        {extendedRun.failure?.reason && (
+          <span className={`badge ${extendedRun.failure.status === 'cancelled' ? 'warn' : 'crit'}`}>
+            {extendedRun.failure.reason}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -334,6 +589,12 @@ function Scorecards({ score }: { score: Record<Category, number> | undefined }) 
 function ProgressBar({ run }: { run: { progress: { completed: number; total: number; current?: string }; status: string } | null }) {
   if (!run) return null;
   const pct = run.progress.total === 0 ? 0 : (run.progress.completed / run.progress.total) * 100;
+  const detail = run.progress.current ?? (run.progress as { phase?: string }).phase ?? (run.progress as { reason?: string }).reason;
+  const passLabel =
+    typeof (run.progress as { pass?: number }).pass === 'number' &&
+    typeof (run.progress as { max_passes?: number }).max_passes === 'number'
+      ? ` · pass ${(run.progress as { pass?: number }).pass}/${(run.progress as { max_passes?: number }).max_passes}`
+      : '';
   return (
     <div style={{ marginBottom: 8 }}>
       <div
@@ -353,9 +614,10 @@ function ProgressBar({ run }: { run: { progress: { completed: number; total: num
           }}
         />
       </div>
-      {run.progress.current && (
+      {detail && (
         <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>
-          {run.progress.completed}/{run.progress.total} · {run.progress.current}
+          {run.progress.completed}/{run.progress.total} · {detail}
+          {passLabel}
         </div>
       )}
     </div>
@@ -405,4 +667,3 @@ function Filters({
     </div>
   );
 }
-

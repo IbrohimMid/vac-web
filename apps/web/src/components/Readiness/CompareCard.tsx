@@ -3,18 +3,23 @@
 // resolved/persistent/regressed/new counts on the report match the
 // AssessmentDiff toggle elsewhere in the hub.
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { computeDiff } from '../../stores/assessmentDiff';
 import { useAssessment, type Finding, type Run } from '../../stores/assessment';
+import { useSession } from '../../stores/session';
+import type { TransportHandle } from '../../transport';
+import { requestAssessmentDiff } from '../../domain/assessment/queries';
 
 interface Props {
   run: Run;
+  transport: TransportHandle | null;
 }
 
-export function CompareCard({ run }: Props) {
+export function CompareCard({ run, transport }: Props) {
   const allRuns = useAssessment((s) => s.runs);
   const runOrder = useAssessment((s) => s.runOrder);
   const findings = useAssessment((s) => s.findings);
+  const sessionId = useSession((s) => s.sessionId);
 
   // Most-recent prior completed run of the same swarm.
   const priorRunId = useMemo<string | null>(() => {
@@ -28,8 +33,16 @@ export function CompareCard({ run }: Props) {
     }
     return null;
   }, [run.id, run.swarm, allRuns, runOrder]);
+  const diffKey = priorRunId ? `${priorRunId}\x00${run.id}` : null;
+  const cachedDiff = useAssessment((s) => (diffKey ? s.diffs.get(diffKey) : undefined));
+
+  useEffect(() => {
+    if (!priorRunId || cachedDiff || !transport || !sessionId) return;
+    void requestAssessmentDiff(transport, sessionId, priorRunId, run.id).catch(() => {});
+  }, [cachedDiff, transport, sessionId, priorRunId, run.id]);
 
   const diff = useMemo(() => {
+    if (cachedDiff) return cachedDiff;
     if (!priorRunId) return null;
     const prevList: Finding[] = [];
     const nextList: Finding[] = [];
@@ -38,7 +51,7 @@ export function CompareCard({ run }: Props) {
       else if (f.run_id === run.id) nextList.push(f);
     }
     return computeDiff(prevList, nextList);
-  }, [priorRunId, run.id, findings]);
+  }, [cachedDiff, priorRunId, run.id, findings]);
 
   return (
     <div className="card">
