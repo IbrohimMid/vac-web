@@ -322,7 +322,10 @@ impl RawResumePolicy {
             }
         }
 
-        if diags.iter().any(|d| matches!(d.severity, DiagnosticSeverity::Error)) {
+        if diags
+            .iter()
+            .any(|d| matches!(d.severity, DiagnosticSeverity::Error))
+        {
             Err(diags)
         } else {
             Ok(policy)
@@ -333,9 +336,7 @@ impl RawResumePolicy {
 /// Convenience: load + normalize from a path. Missing file is *not*
 /// an error — it returns the default policy plus a warning-style
 /// trace, so a fresh checkout boots without YAML.
-pub fn load_from_path(
-    path: &std::path::Path,
-) -> Result<SessionResumePolicy, Vec<Diagnostic>> {
+pub fn load_from_path(path: &std::path::Path) -> Result<SessionResumePolicy, Vec<Diagnostic>> {
     let body = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -382,7 +383,10 @@ session_resume:
   retention_days: 90
   max_events: 50000
 "#;
-        let p = RawResumePolicy::from_yaml(yaml).unwrap().normalize().unwrap();
+        let p = RawResumePolicy::from_yaml(yaml)
+            .unwrap()
+            .normalize()
+            .unwrap();
         assert_eq!(p.default_mode, ResumeDefaultMode::AcpLoad);
         assert_eq!(p.native_fallback, NativeFallbackPolicy::Fail);
         assert_eq!(p.mcp_server_drift, McpDriftPolicy::Ignore);
@@ -416,7 +420,10 @@ version: 1
 session_resume:
   retention_days: 0
 "#;
-        let err = RawResumePolicy::from_yaml(yaml).unwrap().normalize().unwrap_err();
+        let err = RawResumePolicy::from_yaml(yaml)
+            .unwrap()
+            .normalize()
+            .unwrap_err();
         assert_eq!(err[0].code, "out_of_range");
         assert!(err[0].message.contains("retention_days"));
     }
@@ -439,7 +446,10 @@ session_resume:
   native_fallback: maybe
   retention_days: 99999
 "#;
-        let err = RawResumePolicy::from_yaml(yaml).unwrap().normalize().unwrap_err();
+        let err = RawResumePolicy::from_yaml(yaml)
+            .unwrap()
+            .normalize()
+            .unwrap_err();
         assert_eq!(err.len(), 3);
     }
 

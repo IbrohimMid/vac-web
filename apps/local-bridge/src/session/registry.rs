@@ -430,7 +430,7 @@ impl SessionRegistry {
         // value (post `inherits_from` resolution + consistency check),
         // *not* the raw YAML field, so an attacker can't bypass the
         // gate by tweaking only the YAML.
-        let live_class = serde_json::to_value(&profile.class)
+        let live_class = serde_json::to_value(profile.class)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string));
         let mut warnings: Vec<ResumeValidationWarning> = Vec::new();

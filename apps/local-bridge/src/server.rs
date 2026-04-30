@@ -3,7 +3,6 @@
 use crate::audit::AuditFacility;
 use crate::auth::{AuthState, PairingStore};
 use crate::config::{ConfigSnapshot, SessionResumePolicy};
-use tokio::sync::RwLock;
 use crate::handoff::HandoffService;
 use crate::session::persistence::{PersistenceHealth, SharedPersistence};
 use crate::session::SessionRegistry;
@@ -11,6 +10,7 @@ use axum::{routing::get, routing::post, Json, Router};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::RwLock;
 
 pub type AppStateHandle = Arc<AppState>;
 

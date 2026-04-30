@@ -3,8 +3,10 @@
 use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
-use local_bridge::config::{loader as config_loader, resume_policy, ConfigSnapshot, LoadOutcome, LoaderPaths, SessionResumePolicy};
-use tokio::sync::RwLock;
+use local_bridge::config::{
+    loader as config_loader, resume_policy, ConfigSnapshot, LoadOutcome, LoaderPaths,
+    SessionResumePolicy,
+};
 use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::persistence::{FilePersistence, PersistenceHealth, SharedPersistence};
@@ -13,6 +15,7 @@ use local_bridge::tunnel::{run_tunnel_supervisor, TunnelConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::RwLock;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

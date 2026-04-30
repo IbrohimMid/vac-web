@@ -16,6 +16,8 @@ const SESSIONLESS_COMMANDS: &[&str] = &[
     "session.history.forget",
     "registry.sync",
     "registry.add",
+    "config.validate",
+    "config.reload",
 ];
 
 const KNOWN_COMMANDS: &[&str] = &[
@@ -62,10 +64,12 @@ const KNOWN_COMMANDS: &[&str] = &[
     "overlay.dismiss",
     "overlay.dismiss_all",
     "assessment.run",
+    "assessment.sweep.run",
     "assessment.list_runs",
     "assessment.fetch_report",
     "assessment.fetch_evidence_preview",
     "assessment.cancel",
+    "assessment.sweep.cancel",
     "assessment.replay",
     "assessment.diff",
     "handoff.create",
@@ -96,6 +100,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "connector.health",
     "registry.sync",
     "registry.add",
+    "config.validate",
+    "config.reload",
 ];
 
 /// Map command type → required tool capability.

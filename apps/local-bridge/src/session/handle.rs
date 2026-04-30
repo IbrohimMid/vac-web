@@ -645,7 +645,7 @@ impl SessionHandle {
             profile_core::profile::CapabilityProfile::load(&opts.profile_id, &opts.profile_root)
                 .ok()
                 .and_then(|p| {
-                    serde_json::to_value(&p.class)
+                    serde_json::to_value(p.class)
                         .ok()
                         .and_then(|v| v.as_str().map(str::to_string))
                 });
@@ -2072,7 +2072,7 @@ impl SessionHandle {
         // persisted class snapshot. Serializes the Class enum through
         // serde so the on-disk value matches the lowercase wire form
         // (`assessor` / `executor`).
-        let profile_class_for_meta_acp = serde_json::to_value(&profile.class)
+        let profile_class_for_meta_acp = serde_json::to_value(profile.class)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string));
 

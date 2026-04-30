@@ -171,6 +171,10 @@ pub struct ConfigSnapshot {
     /// Errors never appear in a *successful* snapshot; the loader
     /// returns them via `LoadOutcome::Failed` instead.
     pub diagnostics: Vec<Diagnostic>,
+    /// True after a reload failed while a previous valid snapshot is still installed.
+    pub active_snapshot_retained: bool,
+    /// Timestamp of the latest failed reload, when `active_snapshot_retained` is true.
+    pub last_reload_failed_at: Option<String>,
 }
 
 impl Default for ConfigSnapshot {
@@ -183,6 +187,8 @@ impl Default for ConfigSnapshot {
             mcp: McpServersSummary::default(),
             vac_version: 0,
             diagnostics: vec![],
+            active_snapshot_retained: false,
+            last_reload_failed_at: None,
         }
     }
 }
@@ -296,6 +302,8 @@ pub fn load(paths: &LoaderPaths) -> LoadOutcome {
         mcp,
         vac_version,
         diagnostics: diags,
+        active_snapshot_retained: false,
+        last_reload_failed_at: None,
     })
 }
 
@@ -307,10 +315,7 @@ enum ReadResult<T> {
     Err(Vec<Diagnostic>),
 }
 
-fn read_optional_yaml<T: for<'de> Deserialize<'de>>(
-    path: &Path,
-    scope: &str,
-) -> ReadResult<T> {
+fn read_optional_yaml<T: for<'de> Deserialize<'de>>(path: &Path, scope: &str) -> ReadResult<T> {
     let body = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ReadResult::Missing,

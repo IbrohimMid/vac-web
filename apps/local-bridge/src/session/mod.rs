@@ -1,7 +1,7 @@
 //! Session manager: spawn child process (mock-engine or vac serve), multiplex events.
 
-mod assessment_validation;
-mod handle;
+pub(crate) mod assessment_validation;
+pub(crate) mod handle;
 pub mod persistence;
 mod registry;
 
