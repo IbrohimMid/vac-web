@@ -5,6 +5,7 @@ use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
 use local_bridge::handoff::HandoffService;
 use local_bridge::server::{build_app, AppState};
+use local_bridge::session::persistence::{FilePersistence, PersistenceHealth, SharedPersistence};
 use local_bridge::session::SessionRegistry;
 use local_bridge::tunnel::{run_tunnel_supervisor, TunnelConfig};
 use std::path::PathBuf;
@@ -56,6 +57,49 @@ async fn main() -> anyhow::Result<()> {
     let handoff = Arc::new(HandoffService::new());
     let sessions = SessionRegistry::with_runtime_and_profiles(agents, profile_root.clone());
     sessions.attach_audit(Arc::clone(&audit));
+
+    // Phase 2 — wire durable session persistence. Defaults to
+    // `$XDG_DATA_HOME/vac-web/bridge/sessions` (or
+    // `$HOME/.local/share/vac-web/bridge/sessions`). Override via
+    // `VAC_SESSIONS_DIR` for tests / packaging. If `FilePersistence::open`
+    // fails (e.g. read-only fs), the bridge logs and continues without
+    // persistence so the live session surface keeps working.
+    let sessions_dir = std::env::var("VAC_SESSIONS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs_data_home()
+                .join("vac-web")
+                .join("bridge")
+                .join("sessions")
+        });
+    let persistence_health = PersistenceHealth::new();
+    let persistence: Option<SharedPersistence> = match FilePersistence::open(&sessions_dir) {
+        Ok(fp) => {
+            tracing::info!(sessions_dir = %sessions_dir.display(), "session persistence enabled");
+            let shared: SharedPersistence = Arc::new(fp);
+            sessions.attach_persistence(Arc::clone(&shared));
+            sessions.attach_persistence_health(persistence_health.clone());
+            Some(shared)
+        }
+        Err(e) => {
+            tracing::warn!(
+                sessions_dir = %sessions_dir.display(),
+                error = %e,
+                "session persistence disabled — FilePersistence::open failed"
+            );
+            // Stage X6 P2-B: even when persistence is disabled, the
+            // open() failure itself is a degraded health signal worth
+            // surfacing so the cockpit can render the chip on the
+            // first `session.history.list` round trip.
+            persistence_health.record_failure(
+                "meta_save_failed",
+                format!("FilePersistence::open: {e}"),
+                None,
+            );
+            None
+        }
+    };
+
     let state = Arc::new(AppState {
         started_at: Instant::now(),
         sessions,
@@ -64,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
         pairing: PairingStore::new(),
         profile_root,
         handoff,
+        persistence,
+        persistence_health,
     });
 
     // Optional outbound-dial tunnel (Phase 7): opt-in via VAC_RELAY_URL. When
@@ -109,6 +155,20 @@ fn dirs_config_home() -> PathBuf {
         .unwrap_or_else(|_| {
             std::env::var("HOME")
                 .map(|h| PathBuf::from(h).join(".config"))
+                .unwrap_or_else(|_| PathBuf::from("/tmp"))
+        })
+}
+
+/// Resolve `$XDG_DATA_HOME` (POSIX user data root) with the standard
+/// fallback chain: `$XDG_DATA_HOME` → `$HOME/.local/share` → `/tmp`.
+/// Used by Phase 2 session persistence to host the durable JSONL
+/// transcript under `<data>/vac-web/bridge/sessions/`.
+fn dirs_data_home() -> PathBuf {
+    std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".local").join("share"))
                 .unwrap_or_else(|_| PathBuf::from("/tmp"))
         })
 }

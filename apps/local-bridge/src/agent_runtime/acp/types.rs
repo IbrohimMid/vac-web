@@ -85,6 +85,55 @@ pub struct NewSessionResponse {
     pub meta: Value,
 }
 
+// --- session/load (Stage X6 batch 4-1) ---
+//
+// `session/load` resumes a previously persisted ACP session by
+// re-establishing it on the agent side and replaying its history via
+// `session/update` notifications **before** the response resolves.
+// See ACP schema (`@agentclientprotocol/sdk` >= 0.20.x):
+// https://agentclientprotocol.com/protocol/session-setup#loading-sessions
+//
+// Adapter capability discovery: the bridge SHOULD only attempt this
+// call when `initialize.agentCapabilities.loadSession == true`. If we
+// try it anyway, well-behaved adapters return `-32601` (method not
+// found); we map that to `LoadSessionUnsupported` in the bridge so
+// the resume FSM can fall back to replay-only.
+//
+// Adapter-side rejection (e.g. unknown sessionId, bad cwd) comes back
+// as `-32602` (invalid params) which we map to `LoadSessionRejected`.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadSessionRequest {
+    /// The agent-side session id we want to re-attach to. Must match
+    /// what the agent emitted from a prior `session/new`.
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    /// Project working directory for the resumed session. ACP requires
+    /// this even on load so the agent can re-anchor relative paths.
+    pub cwd: String,
+    /// MCP servers to (re)attach. May differ from the original list
+    /// (e.g. user added/removed servers). Empty array is valid.
+    #[serde(rename = "mcpServers")]
+    pub mcp_servers: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadSessionResponse {
+    /// Optional model list snapshot, mirrored from `session/new`.
+    #[serde(default)]
+    pub models: Value,
+    /// Optional mode list snapshot.
+    #[serde(default)]
+    pub modes: Value,
+    /// Optional config-options snapshot.
+    #[serde(default)]
+    pub config_options: Value,
+    /// Vendor metadata pass-through (e.g. claude `_meta`).
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
 // --- session/prompt ---
 
 #[derive(Debug, Clone, Serialize)]

@@ -3,6 +3,7 @@
 use crate::audit::AuditFacility;
 use crate::auth::{AuthState, PairingStore};
 use crate::handoff::HandoffService;
+use crate::session::persistence::{PersistenceHealth, SharedPersistence};
 use crate::session::SessionRegistry;
 use axum::{routing::get, routing::post, Json, Router};
 use serde_json::json;
@@ -19,6 +20,19 @@ pub struct AppState {
     pub pairing: PairingStore,
     pub profile_root: std::path::PathBuf,
     pub handoff: Arc<HandoffService>,
+    /// Phase 2 persistence: shared file-backed (or in-memory test)
+    /// `SessionPersistence` impl. `None` disables durable history;
+    /// when set, the registry threads it into every spawned session
+    /// via `SpawnOptions`, and Phase 3 `session.history.*` /
+    /// `session.resume` translator paths read directly from this
+    /// handle.
+    pub persistence: Option<SharedPersistence>,
+    /// Stage X6 P2-B — process-global persistence health signal.
+    /// Cheap-clone shared with every [`PersistenceSink`] so an
+    /// `append_event` / `save_meta` failure on any session flips the
+    /// flag here, and the translator's `session.history.list` arm can
+    /// surface that as a `health` field on the listed payload.
+    pub persistence_health: PersistenceHealth,
 }
 
 impl AppState {

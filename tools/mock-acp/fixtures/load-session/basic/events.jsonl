@@ -1,0 +1,3 @@
+{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"resumed prompt"}}
+{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"resumed reply chunk 1"}}
+{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"resumed reply chunk 2"}}

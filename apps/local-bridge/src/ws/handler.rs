@@ -203,9 +203,17 @@ async fn handle_incoming(
     let (ack, events) = dispatch_command(cmd, state.clone()).await;
     let _ = out_tx.send(serde_ack_from(ack)).await;
     for ev in events {
-        // When session.create returns session.ready, spawn a subscriber task so
-        // subsequent broadcast events from the engine reach this client live.
-        if ev.event_type == "session.ready" && subscribed.insert(ev.session_id.clone()) {
+        // When session.create returns session.ready (or session.resume
+        // returns session.resumed for the native handoff path), spawn
+        // a subscriber task so subsequent broadcast events from the
+        // engine reach this client live. Stage X6 batch B — native
+        // resume drains the per-handle ring on dispatch return for the
+        // first batch of resume lifecycle events; the auto-subscribe
+        // below catches any *late* events (e.g. delayed transcript.delta
+        // from the session/load fixture pump) without requiring the
+        // FE to issue a follow-up command.
+        let auto_subscribe = matches!(ev.event_type.as_str(), "session.ready" | "session.resumed");
+        if auto_subscribe && subscribed.insert(ev.session_id.clone()) {
             subscribe_to_session(&ev.session_id, state.clone(), out_tx.clone());
         }
         let _ = out_tx.send(serde_event(ev)).await;

@@ -110,6 +110,22 @@ struct Args {
     /// `terminal/create` with `command = <flag value>` and emits a
     /// scripted `tool_call_update` carrying the terminalId.
     request_terminal: Option<String>,
+    /// Stage X6 batch 4-2 — `session/load` fixture support.
+    /// When set to `Some(dir)`:
+    ///   - `initialize` advertises `agentCapabilities.loadSession = true`.
+    ///   - On a `session/load` request, the mock streams every line of
+    ///     `<dir>/events.jsonl` as a `session/update` notification
+    ///     (each line is a JSON object that is dropped into the
+    ///     `update` field), then resolves the `session/load` response.
+    ///
+    /// The fixture directory layout is documented in
+    /// `tools/mock-acp/fixtures/load-session/README.md`.
+    load_session_fixture: Option<String>,
+    /// Stage X6 batch 4-2 — when set, every `session/load` is rejected
+    /// with JSON-RPC `-32602` and the supplied string as
+    /// `error.data.reason`. Used to drive the bridge's
+    /// `LoadSessionError::Rejected` branch deterministically.
+    reject_load: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -135,6 +151,8 @@ fn parse_args() -> Args {
             "--request-fs-read" => a.request_fs_read = argv.next(),
             "--request-fs-write" => a.request_fs_write = argv.next(),
             "--request-terminal" => a.request_terminal = argv.next(),
+            "--load-session" => a.load_session_fixture = argv.next(),
+            "--reject-load" => a.reject_load = argv.next(),
             "--profile" | "--session-id" | "--project" => {
                 let _ = argv.next();
                 a.cli_passthrough = true;
@@ -226,6 +244,13 @@ async fn main() -> Result<()> {
                     }),
                     None => json!([]),
                 };
+                // Stage X6 batch 4-2 — advertise loadSession when a
+                // fixture is configured OR a forced rejection is wired
+                // up. Either way the bridge is allowed to call
+                // `session/load`; the response itself decides the
+                // outcome (replay vs Rejected).
+                let advertise_load_session =
+                    args.load_session_fixture.is_some() || args.reject_load.is_some();
                 let resp = json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -234,7 +259,7 @@ async fn main() -> Result<()> {
                         "agentCapabilities": {
                             "promptCapabilities": { "image": false, "embeddedContext": true },
                             "mcpCapabilities": { "http": false, "sse": false },
-                            "loadSession": false,
+                            "loadSession": advertise_load_session,
                             "sessionCapabilities": {}
                         },
                         "agentInfo": {
@@ -264,6 +289,95 @@ async fn main() -> Result<()> {
                     }
                 });
                 writeln_json(&stdout, &resp).await?;
+            }
+            "session/load" => {
+                // Stage X6 batch 4-2 — mock `session/load`. Three
+                // outcomes, decided by CLI flags:
+                //   1. `--reject-load <reason>` set → -32602
+                //      (LoadSessionError::Rejected on the bridge).
+                //   2. `--load-session <dir>` set → stream every line of
+                //      `<dir>/events.jsonl` as a `session/update`
+                //      notification, then resolve the response. The
+                //      bridge is required to have its session/update
+                //      pump running BEFORE the response lands.
+                //   3. neither set → -32601 (Unsupported), so the
+                //      bridge must fall back to replay-only.
+                let session_id = params
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(reason) = args.reject_load.clone() {
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params",
+                            "data": { "reason": reason, "sessionId": session_id }
+                        }
+                    });
+                    writeln_json(&stdout, &resp).await?;
+                } else if let Some(dir) = args.load_session_fixture.clone() {
+                    // Replay events.jsonl line-by-line as session/update
+                    // notifications. Each non-empty line is parsed as a
+                    // JSON value and dropped into the `update` field.
+                    let path = std::path::PathBuf::from(&dir).join("events.jsonl");
+                    match tokio::fs::read_to_string(&path).await {
+                        Ok(contents) => {
+                            for line in contents.lines() {
+                                let line = line.trim();
+                                if line.is_empty() {
+                                    continue;
+                                }
+                                let update: Value = match serde_json::from_str(line) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        warn!(error=%e, line=%line, "skipping malformed fixture line");
+                                        continue;
+                                    }
+                                };
+                                let notif = json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "session/update",
+                                    "params": {
+                                        "sessionId": session_id,
+                                        "update": update,
+                                    }
+                                });
+                                writeln_json(&stdout, &notif).await?;
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                error=%e,
+                                path=%path.display(),
+                                "load-session fixture missing or unreadable; resolving with no replay"
+                            );
+                        }
+                    }
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "modes": null,
+                            "models": null,
+                            "configOptions": null
+                        }
+                    });
+                    writeln_json(&stdout, &resp).await?;
+                } else {
+                    let resp = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32601,
+                            "message": "Method not found",
+                            "data": { "method": "session/load" }
+                        }
+                    });
+                    writeln_json(&stdout, &resp).await?;
+                }
             }
             "session/prompt" => {
                 if args.bad_session_prompt {

@@ -1,5 +1,12 @@
 //! Per-session state + child process handle.
 
+use super::persistence::{
+    PersistedSessionMeta, PersistedSessionStatus, PersistenceHealth, PersistenceNativeResume,
+    PersistenceSink, PersistenceVersion, RedactionMode, SessionPersistence, PERSISTENCE_VERSION,
+};
+// `LoadSessionError` is referenced indirectly via `anyhow::Error::downcast`
+// in `SessionRegistry::resume_native`; it does not need to be in scope here.
+use crate::agent_runtime::acp::types::LoadSessionRequest;
 use crate::agent_runtime::acp::{
     classify_jsonrpc_error, extract_observed_tool_activity, sha256_hex_canonical,
     sha256_hex_canonical_excluding, AcpClient, AcpDebugLog, AcpSessionUpdate,
@@ -407,6 +414,13 @@ pub struct SessionHandle {
     pub acp: Option<Arc<AcpRuntime>>,
     /// Bridge audit sink, shared across ACP and JSON-RPC sessions.
     pub audit: Option<Arc<crate::audit::AuditFacility>>,
+    /// Durable persistence sink. `None` when persistence is disabled
+    /// (legacy callers + tests that don't attach a backend). When
+    /// present, every event going through [`emit_event`] / spawn-time
+    /// helpers is redacted and appended to the session's transcript on
+    /// disk; on session close the reaper / watchdog calls
+    /// [`PersistenceSink::mark_closed`] / [`mark_failed`].
+    pub persistence: Option<PersistenceSink>,
     assessment_validation: Arc<Mutex<AssessmentValidationTracker>>,
 }
 
@@ -426,6 +440,53 @@ pub struct SpawnOptions {
     /// Path to capability profile YAMLs. Used by the ACP spawn path to
     /// load the profile for fs/terminal capability enforcement.
     pub profile_root: PathBuf,
+    /// Optional durable persistence backend. When `Some`, the spawn
+    /// path saves session metadata + every emitted ServerEvent under
+    /// the configured root, and the watchdog/reaper marks the session
+    /// `Closed` / `Failed` on exit. `None` keeps legacy semantics: no
+    /// disk side-effects.
+    pub persistence: Option<Arc<dyn SessionPersistence>>,
+    /// Stage X6 P2-B — process-global persistence health handle.
+    /// Always present; tests that don't go through `SessionRegistry`
+    /// can pass `PersistenceHealth::default()`. Failures recorded
+    /// through this session's [`PersistenceSink`] flip the shared flag
+    /// so the translator's `session.history.list` arm can surface
+    /// `health: "degraded"` on the next listing.
+    pub persistence_health: PersistenceHealth,
+    /// Redaction strictness for persisted event payloads. `Standard`
+    /// strips obvious secret keys + common bearer/sk-/ghp_ shapes;
+    /// `Strict` additionally caps long strings. Defaults to `Standard`
+    /// when omitted by the registry.
+    pub redaction_mode: RedactionMode,
+    /// Stage X6 4-4 — when `Some`, the ACP spawn path skips
+    /// `session/new` and instead calls `session/load` against the
+    /// agent_session_id recorded in the persisted meta. Pumps are
+    /// started **before** the `session/load` RPC so the streamed
+    /// `session/update` notifications aren't dropped. JSON-RPC kinds
+    /// (`Mock`, `VacNative`) ignore this field.
+    pub resume_native: Option<NativeResumeRequest>,
+}
+
+/// Stage X6 4-4 — request a native ACP `session/load` resume instead
+/// of opening a fresh session via `session/new`. The translator + the
+/// `SessionRegistry::resume_native` helper validate the caller's
+/// inputs (registry hit, agent_kind match, profile presence,
+/// project_root trust) before constructing this. The bridge trusts
+/// these fields by the time `SessionHandle::spawn` runs.
+#[derive(Debug, Clone)]
+pub struct NativeResumeRequest {
+    /// VAC-side session id we want to resume. Becomes the new
+    /// `SessionHandle.id` so future `session.resume` traffic keeps
+    /// pointing at the same row in the persistence store.
+    pub vac_session_id: String,
+    /// Agent-side ACP session id from `meta.agent_session_id`. This
+    /// is the value passed to `session/load.params.session_id`.
+    pub agent_session_id: String,
+    /// Resume mode that won the dispatch (`acp_load` or
+    /// `native_or_replay`). Stamped onto `session.resumed.mode` so the
+    /// frontend can distinguish a forced native load from an
+    /// opportunistic upgrade.
+    pub mode: &'static str,
 }
 
 /// Allowlist of agent ids that may use bridge-driven terminal auth.
@@ -575,6 +636,22 @@ impl SessionHandle {
             }
         };
 
+        // Persist `session/new` metadata + build the per-session
+        // sink before we wire up emitter tasks, so the very first
+        // events the session emits land in the durable transcript.
+        let persistence_sink = build_persistence_sink(
+            opts.persistence.as_ref(),
+            &opts.session_id,
+            &opts.profile_id,
+            &opts.project_root,
+            &opts.agent,
+            None,
+            &workflow_spec_id,
+            opts.redaction_mode,
+            opts.persistence_health.clone(),
+            Some(bcast_tx.clone()),
+        );
+
         let handle = Arc::new(Self {
             id: opts.session_id.clone(),
             profile_id: opts.profile_id.clone(),
@@ -589,6 +666,7 @@ impl SessionHandle {
             broadcast: bcast_tx.clone(),
             acp: None,
             audit: opts.audit.clone(),
+            persistence: persistence_sink,
             assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
 
@@ -661,6 +739,13 @@ impl SessionHandle {
             let _ = handle_wait
                 .state
                 .transition(bridge_core::SessionState::Closed);
+            if let Some(sink) = handle_wait.persistence.as_ref() {
+                if crashed {
+                    sink.mark_failed();
+                } else {
+                    sink.mark_closed();
+                }
+            }
         });
 
         // Spawn VIL-style workflow process for this session.
@@ -761,6 +846,7 @@ impl SessionHandle {
                 let handle_id = self.id.clone();
                 let bcast = self.broadcast.clone();
                 let ring = Arc::clone(&self.ring);
+                let persistence = self.persistence.clone();
                 info!(
                     session_id = %handle_id,
                     acp_session_id = %acp.acp_session_id,
@@ -786,6 +872,9 @@ impl SessionHandle {
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             };
+                            if let Some(sink) = persistence.as_ref() {
+                                sink.record(&event);
+                            }
                             emit_to(&ring, &bcast, event).await;
                         }
                         Err(e) => {
@@ -813,6 +902,9 @@ impl SessionHandle {
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             };
+                            if let Some(sink) = persistence.as_ref() {
+                                sink.record(&event);
+                            }
                             emit_to(&ring, &bcast, event).await;
                         }
                     }
@@ -1049,7 +1141,141 @@ impl SessionHandle {
 }
 
 async fn emit_event(handle: &SessionHandleRef, event: ServerEvent) {
+    if let Some(sink) = handle.persistence.as_ref() {
+        sink.record(&event);
+    }
     emit_to(&handle.ring, &handle.broadcast, event).await;
+}
+
+/// Build the durable [`PersistenceSink`] for a freshly-spawned
+/// session. Persists `session/new` metadata via `save_meta` first;
+/// if either persistence is disabled (`None`) or `save_meta` fails,
+/// returns `None` so the live session keeps running with the in-
+/// memory ring + broadcast only. Persistence failures are logged
+/// at `warn`, never propagated as a spawn error — durability is
+/// best-effort.
+#[allow(clippy::too_many_arguments)]
+fn build_persistence_sink(
+    persistence: Option<&Arc<dyn SessionPersistence>>,
+    session_id: &str,
+    profile_id: &str,
+    project_root: &Path,
+    agent: &AgentDefinition,
+    agent_capabilities: Option<&serde_json::Value>,
+    workflow_id: &str,
+    mode: RedactionMode,
+    health: PersistenceHealth,
+    bus: Option<broadcast::Sender<ServerEvent>>,
+) -> Option<PersistenceSink> {
+    let inner = persistence?;
+    let now = chrono::Utc::now();
+    let load_session_supported = agent_capabilities
+        .and_then(|c| c.get("loadSession"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let meta = PersistedSessionMeta {
+        version: PersistenceVersion(PERSISTENCE_VERSION),
+        vac_session_id: session_id.to_string(),
+        agent_session_id: None,
+        agent_id: agent.id.clone(),
+        agent_kind: agent.kind.as_str().to_string(),
+        project_root: project_root.to_path_buf(),
+        profile_id: profile_id.to_string(),
+        workflow_id: Some(workflow_id.to_string()),
+        created_at: now,
+        updated_at: now,
+        status: PersistedSessionStatus::Active,
+        native_resume: PersistenceNativeResume {
+            load_session_supported,
+            last_verified_at: if load_session_supported {
+                Some(now)
+            } else {
+                None
+            },
+        },
+        mcp_servers: Vec::new(),
+        agent_capabilities: agent_capabilities
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    };
+    if let Err(e) = inner.save_meta(&meta) {
+        tracing::warn!(
+            session = %session_id,
+            error = %e,
+            "persistence.save_meta failed at session spawn; running without durable history"
+        );
+        // Stage X6 P2-B: surface the spawn-time save_meta failure on
+        // the shared health handle so the cockpit's chip lights up
+        // even though we fall through to the in-memory-only path.
+        health.record_failure("meta_save_failed", e.to_string(), Some(session_id));
+        return None;
+    }
+    Some(PersistenceSink::with_health(
+        Arc::clone(inner),
+        session_id.to_string(),
+        mode,
+        health,
+        bus,
+    ))
+}
+
+/// Update the persisted `agent_session_id` + `agent_capabilities` on
+/// the existing meta row. Called from `spawn_acp` after
+/// `client.new_session(...)` resolves — the ACP session id is only
+/// known after the adapter responds. Best-effort: a load/save failure
+/// is logged at `warn` and the live session is unaffected.
+fn persist_acp_session_details(
+    persistence: Option<&Arc<dyn SessionPersistence>>,
+    session_id: &str,
+    acp_session_id: &str,
+    agent_capabilities: &serde_json::Value,
+    health: &PersistenceHealth,
+) {
+    let Some(inner) = persistence else {
+        return;
+    };
+    let load_session_supported = agent_capabilities
+        .get("loadSession")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    match inner.load_meta(session_id) {
+        Ok(Some(mut meta)) => {
+            let now = chrono::Utc::now();
+            meta.agent_session_id = Some(acp_session_id.to_string());
+            meta.agent_capabilities = agent_capabilities.clone();
+            meta.updated_at = now;
+            meta.native_resume = PersistenceNativeResume {
+                load_session_supported,
+                last_verified_at: if load_session_supported {
+                    Some(now)
+                } else {
+                    None
+                },
+            };
+            if let Err(e) = inner.save_meta(&meta) {
+                tracing::warn!(
+                    session = %session_id,
+                    error = %e,
+                    "persistence.save_meta failed when stamping ACP session id"
+                );
+                health.record_failure("meta_save_failed", e.to_string(), Some(session_id));
+            }
+        }
+        Ok(None) => {
+            tracing::warn!(
+                session = %session_id,
+                "persistence.load_meta returned None during ACP details stamp; skipping"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                session = %session_id,
+                error = %e,
+                "persistence.load_meta failed during ACP details stamp"
+            );
+            health.record_failure("meta_save_failed", e.to_string(), Some(session_id));
+        }
+    }
 }
 
 /// Audit P2 fix helper: structured payload for `terminal.lifecycle`
@@ -1728,16 +1954,26 @@ impl SessionHandle {
         let init = client.initialize(init_req).await?;
 
         // Open ACP session bound to the project root.
-        let new_req = NewSessionRequest {
-            cwd: opts
-                .project_root
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("project_root not utf-8"))?
-                .to_string(),
-            mcp_servers: opts.agent.mcp_servers.clone(),
+        //
+        // Stage X6 4-4 — when `opts.resume_native` is `Some`, we skip
+        // `session/new` entirely and use the persisted `agent_session_id`
+        // up-front. The actual `session/load` RPC is deferred until
+        // after pumps are spawned (so streamed `session/update`
+        // notifications during replay aren't dropped).
+        let acp_session_id = if let Some(req) = opts.resume_native.as_ref() {
+            req.agent_session_id.clone()
+        } else {
+            let new_req = NewSessionRequest {
+                cwd: opts
+                    .project_root
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("project_root not utf-8"))?
+                    .to_string(),
+                mcp_servers: opts.agent.mcp_servers.clone(),
+            };
+            let new_resp = client.new_session(new_req).await?;
+            new_resp.session_id.clone()
         };
-        let new_resp = client.new_session(new_req).await?;
-        let acp_session_id = new_resp.session_id.clone();
 
         // Wire the rest of the bridge state.
         let state = Arc::new(StateHolder::new());
@@ -1805,6 +2041,31 @@ impl SessionHandle {
             }
         };
 
+        // Persist `session/new` metadata + build the per-session
+        // sink with the agent capabilities we just learned at
+        // `initialize`. ACP-only fact: the agent_session_id is
+        // already known here (returned by `client.new_session`),
+        // so we stamp it onto meta in a follow-up call below.
+        let persistence_sink_acp = build_persistence_sink(
+            opts.persistence.as_ref(),
+            &opts.session_id,
+            &opts.profile_id,
+            &opts.project_root,
+            &opts.agent,
+            Some(&init.agent_capabilities),
+            &workflow_spec_id_acp,
+            opts.redaction_mode,
+            opts.persistence_health.clone(),
+            Some(bcast_tx.clone()),
+        );
+        persist_acp_session_details(
+            opts.persistence.as_ref(),
+            &opts.session_id,
+            &acp_session_id,
+            &init.agent_capabilities,
+            &opts.persistence_health,
+        );
+
         let handle = Arc::new(Self {
             id: opts.session_id.clone(),
             profile_id: opts.profile_id.clone(),
@@ -1819,6 +2080,7 @@ impl SessionHandle {
             broadcast: bcast_tx.clone(),
             acp: Some(Arc::clone(&acp_runtime)),
             audit: opts.audit.clone(),
+            persistence: persistence_sink_acp,
             assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
 
@@ -2120,6 +2382,13 @@ impl SessionHandle {
             let _ = handle_wait
                 .state
                 .transition(bridge_core::SessionState::Closed);
+            if let Some(sink) = handle_wait.persistence.as_ref() {
+                if crashed {
+                    sink.mark_failed();
+                } else {
+                    sink.mark_closed();
+                }
+            }
         });
 
         // Spawn VIL-style workflow process for this session.
@@ -2132,6 +2401,110 @@ impl SessionHandle {
                 bcast_tx.subscribe(),
                 spec,
             );
+        }
+
+        // Stage X6 4-4 — deferred `session/load` RPC for native resume.
+        // Pumps were spawned above so streamed `session/update`
+        // notifications during replay are captured by the update pump
+        // and fanned out via `emit_event` like normal turn traffic.
+        // Errors are wrapped into the anyhow chain so the caller
+        // (`SessionRegistry::resume_native`) can downcast and translate
+        // them to the right failure reason on the wire.
+        if let Some(req) = opts.resume_native.as_ref() {
+            let cwd = opts
+                .project_root
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("project_root not utf-8"))?
+                .to_string();
+            // Stage X6 4-5 — emit `session.resume.initializing` before
+            // we issue the deferred `session/load` RPC. The FE chip
+            // (`apps/web/src/domain/sessions/history.ts`) listens for
+            // this to transition `starting` -> `loading_native` so the
+            // user sees "Loading native…" while the agent streams
+            // `session/update` notifications. The companion success
+            // event `vac.session_resumed_native` is emitted below after
+            // `load_session` resolves.
+            let initializing = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "session.resume.initializing".into(),
+                payload: serde_json::json!({
+                    "vac_session_id": req.vac_session_id,
+                    "mode": req.mode,
+                    "agent_session_id": acp_session_id,
+                }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            };
+            emit_event(&handle, initializing).await;
+            let load_req = LoadSessionRequest {
+                session_id: acp_session_id.clone(),
+                cwd,
+                mcp_servers: opts.agent.mcp_servers.clone(),
+            };
+            match acp_runtime.client.load_session(load_req).await {
+                Ok(_resp) => {
+                    // Synthetic marker on the persistent transcript so
+                    // post-mortem readers can see the native handoff
+                    // happened before any new turn traffic.
+                    let resumed_native_payload = serde_json::json!({
+                        "vac_session_id": req.vac_session_id,
+                        "agent_session_id": acp_session_id,
+                        "agent_id": handle.agent_id,
+                        "resume_mode": req.mode,
+                    });
+                    let marker = ServerEvent {
+                        seq: 0,
+                        session_id: handle.id.clone(),
+                        event_type: "vac.session_resumed_native".into(),
+                        payload: resumed_native_payload,
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    };
+                    emit_event(&handle, marker).await;
+
+                    // User-visible confirmation event. The translator's
+                    // dispatch path expects the bridge to emit
+                    // `session.resumed` (not `session.resume.failed`)
+                    // before returning a successful ack.
+                    let resumed_payload = serde_json::json!({
+                        "vac_session_id": req.vac_session_id,
+                        "mode": req.mode,
+                        "native": true,
+                        "resume_mode": "native",
+                        "replayed_events": serde_json::Value::Null,
+                    });
+                    let resumed = ServerEvent {
+                        seq: 0,
+                        session_id: handle.id.clone(),
+                        event_type: "session.resumed".into(),
+                        payload: resumed_payload,
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    };
+                    emit_event(&handle, resumed).await;
+
+                    // Refresh `last_verified_at` on the persisted meta
+                    // so future native-resume gates skip the
+                    // `load_session_supported=false` branch quickly.
+                    if let Some(persistence) = opts.persistence.as_ref() {
+                        if let Ok(Some(mut meta)) = persistence.load_meta(&req.vac_session_id) {
+                            meta.native_resume.last_verified_at = Some(chrono::Utc::now());
+                            meta.agent_session_id = Some(acp_session_id.clone());
+                            if let Err(e) = persistence.save_meta(&meta) {
+                                warn!(
+                                    session = %req.vac_session_id,
+                                    error = %e,
+                                    "persistence.save_meta failed after native resume"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow::Error::new(e).context("native_resume_failed"));
+                }
+            }
         }
 
         Ok(handle)

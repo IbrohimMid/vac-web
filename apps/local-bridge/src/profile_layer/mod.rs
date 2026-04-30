@@ -12,6 +12,8 @@ const SESSIONLESS_COMMANDS: &[&str] = &[
     "session.create",
     "session.list",
     "session.snapshot",
+    "session.history.list",
+    "session.history.forget",
     "registry.sync",
     "registry.add",
 ];
@@ -24,6 +26,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "session.resume",
     "session.list",
     "session.snapshot",
+    "session.history.list",
+    "session.history.forget",
     "session.rename",
     "session.close",
     "session.authenticate",

@@ -5,6 +5,7 @@ use crate::audit::log_tool_event;
 use crate::handoff::packet::{ExecutionOutcome, TaskExecutionProgress};
 use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
+use crate::session::persistence::SessionHistoryFilter;
 use crate::session::{AuthenticateError, SessionHandleRef};
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::{AuditSeverity, ReplayResult};
@@ -411,6 +412,565 @@ pub async fn dispatch_command(
             )
         }
         "session.resume" => {
+            // Stage X6 batch 4-3 / 4-4 / 4-5 — resume mode dispatch
+            // matrix. Batches 4-4 and 4-5 wired the native ACP
+            // `session/load` path end-to-end (registry +
+            // `spawn_acp(resume_native: Some(…))`) and added the
+            // `session.replay.progress` ticks the FE chip listens for.
+            // | mode             | meta    | caps           | action                                                      |
+            // | ---------------- | ------- | -------------- | ----------------------------------------------------------- |
+            // | absent           | n/a     | n/a            | legacy in-memory ring replay (cmd.session_id)               |
+            // | replay_only      | required| n/a            | persistence replay (Phase 3)                                 |
+            // | acp_load         | missing | n/a            | reject `vac_session_unknown`                                 |
+            // | acp_load         | required| caps=false     | reject `native_resume_unsupported`                           |
+            // | acp_load         | required| caps=true      | spawn + native `session/load`; on Unsupported -> hard reject |
+            // | native_or_replay | missing | n/a            | reject `vac_session_unknown`                                 |
+            // | native_or_replay | required| caps=false     | fallback to persistence replay, resume_mode=replay_only_fallback |
+            // | native_or_replay | required| caps=true      | try native; on Unsupported -> replay_only_fallback           |
+            // | <unknown>        | any     | any            | reject `unknown_resume_mode`                                  |
+            let requested_mode = cmd
+                .payload
+                .get("resume_mode")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let vac_session_id = cmd
+                .payload
+                .get("vac_session_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+
+            // Reject obviously unknown mode strings up front so a typo
+            // can't silently downgrade to legacy ring replay.
+            if let Some(ref m) = requested_mode {
+                if !matches!(m.as_str(), "replay_only" | "acp_load" | "native_or_replay") {
+                    let target_id = vac_session_id
+                        .clone()
+                        .unwrap_or_else(|| cmd.session_id.clone());
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: target_id.clone(),
+                        event_type: "session.resume.failed".into(),
+                        payload: json!({
+                            "vac_session_id": target_id,
+                            "mode": m,
+                            "reason": "unknown_resume_mode",
+                            "requested_mode": m,
+                        }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    state.audit.log(
+                        &target_id,
+                        "session",
+                        AuditSeverity::Warn,
+                        json!({
+                            "event": "resume_failed",
+                            "reason": "unknown_resume_mode",
+                            "requested_mode": m,
+                        }),
+                    );
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "session.unknown_resume_mode".into(),
+                                message: format!("unknown resume_mode `{}`", m),
+                            }),
+                        },
+                        events,
+                    );
+                }
+            }
+
+            // Native-style modes (`acp_load`, `native_or_replay`) require
+            // a persistence layer + a vac_session_id with valid meta.
+            // Branch out before we hit the legacy paths so the failure
+            // reasons stay specific.
+            if matches!(
+                requested_mode.as_deref(),
+                Some("acp_load") | Some("native_or_replay")
+            ) {
+                let mode_str = requested_mode.clone().unwrap();
+                let Some(target_id) = vac_session_id.clone() else {
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "session.resume.failed".into(),
+                        payload: json!({
+                            "vac_session_id": null,
+                            "mode": mode_str,
+                            "reason": "vac_session_unknown",
+                            "detail": "resume_mode requires vac_session_id",
+                        }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "session.vac_session_unknown".into(),
+                                message: format!(
+                                    "resume_mode `{}` requires vac_session_id",
+                                    mode_str
+                                ),
+                            }),
+                        },
+                        events,
+                    );
+                };
+                let Some(persistence) = state.persistence.clone() else {
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "persistence.disabled".into(),
+                                message: "session persistence is not configured".into(),
+                            }),
+                        },
+                        events,
+                    );
+                };
+                let meta = match persistence.load_meta(&target_id) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => {
+                        events.push(ServerEvent {
+                            seq: 0,
+                            session_id: target_id.clone(),
+                            event_type: "session.resume.failed".into(),
+                            payload: json!({
+                                "vac_session_id": target_id,
+                                "mode": mode_str,
+                                "reason": "vac_session_unknown",
+                            }),
+                            v: 1,
+                            ts: chrono::Utc::now().to_rfc3339(),
+                        });
+                        state.audit.log(
+                            &target_id,
+                            "session",
+                            AuditSeverity::Warn,
+                            json!({
+                                "event": "resume_failed",
+                                "reason": "vac_session_unknown",
+                                "mode": mode_str,
+                            }),
+                        );
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "session.vac_session_unknown".into(),
+                                    message: target_id.clone(),
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                    Err(err) => {
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "persistence.load_failed".into(),
+                                    message: err.to_string(),
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                };
+                let caps_supported = meta.native_resume.load_session_supported;
+
+                // acp_load REQUIRES caps=true. caps=false is a hard reject.
+                if mode_str == "acp_load" && !caps_supported {
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: target_id.clone(),
+                        event_type: "session.resume.failed".into(),
+                        payload: json!({
+                            "vac_session_id": target_id,
+                            "mode": mode_str,
+                            "reason": "native_resume_unsupported",
+                            "detail": "agent_capabilities.loadSession=false",
+                        }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    state.audit.log(
+                        &target_id,
+                        "session",
+                        AuditSeverity::Warn,
+                        json!({
+                            "event": "resume_failed",
+                            "reason": "native_resume_unsupported",
+                            "mode": mode_str,
+                        }),
+                    );
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "session.native_resume_unsupported".into(),
+                                message: "agent does not advertise loadSession".into(),
+                            }),
+                        },
+                        events,
+                    );
+                }
+
+                // caps=true (both modes) — attempt native ACP
+                // `session/load` via the registry. Stage X6 4-4 wires
+                // this end-to-end: validate meta, spawn ACP child with
+                // `resume_native: Some(...)`, drive pumps, then issue
+                // `session/load`. The handle emits its own
+                // `session.resume.started` / `session.resumed` /
+                // `vac.session_resumed_native` events from inside
+                // `spawn_acp`, so on Started we just ack ok=true.
+                if caps_supported {
+                    let mode_static: &'static str = match mode_str.as_str() {
+                        "acp_load" => "acp_load",
+                        "native_or_replay" => "native_or_replay",
+                        // Unreachable — we already filtered to these two.
+                        _ => unreachable!("caps_supported branch reached with unexpected mode"),
+                    };
+                    // Stage X6 batch C1 — emit a non-blocking MCP drift
+                    // warning when the persisted session's `mcp_servers`
+                    // differ from what the live agent registry currently
+                    // advertises. We do this BEFORE calling resume_native
+                    // so the FE can render the warning even on hard
+                    // failure paths (caps mismatch / Validation outcomes).
+                    if let Some(drift_event) =
+                        build_mcp_drift_warning(&state, &meta, &target_id, mode_str.as_str())
+                    {
+                        events.push(drift_event);
+                    }
+                    let outcome = state.sessions.resume_native(&meta, mode_static).await;
+                    use crate::session::{ResumeNativeOutcome, ResumeValidationFailure};
+                    match outcome {
+                        ResumeNativeOutcome::Started(handle) => {
+                            // Handle already emitted session.resume.initializing,
+                            // vac.session_resumed_native, replayed fixture
+                            // updates, and session.resumed via spawn_acp.
+                            // Drain the per-session ring and forward those
+                            // events on the dispatch return path so the WS
+                            // client sees them — auto-subscribe doesn't
+                            // attach until *after* dispatch_command returns,
+                            // and the resume lifecycle events are emitted
+                            // *during* spawn. Without this drain the
+                            // cockpit's resume chip would never observe
+                            // `session.resumed`.
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Info,
+                                json!({
+                                    "event": "resume_started",
+                                    "mode": mode_str,
+                                    "resume_mode": "native",
+                                }),
+                            );
+                            let ring = handle.ring.read().await;
+                            if let ReplayResult::Stream(evs) = ring.replay_after(0) {
+                                events.extend(evs.into_iter().map(|(seq, mut ev)| {
+                                    ev.seq = seq;
+                                    ev
+                                }));
+                            }
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: true,
+                                    error: None,
+                                },
+                                events,
+                            );
+                        }
+                        ResumeNativeOutcome::Unsupported if mode_static == "native_or_replay" => {
+                            // Documented matrix outcome — fall through to
+                            // persistence replay with the distinguishing
+                            // `replay_only_fallback` resume_mode.
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Info,
+                                json!({
+                                    "event": "resume_native_unsupported_fallback",
+                                    "mode": mode_str,
+                                }),
+                            );
+                            return resume_persistence_replay(
+                                cmd,
+                                state,
+                                persistence,
+                                target_id,
+                                meta,
+                                "native_or_replay",
+                                "replay_only_fallback",
+                                events,
+                            )
+                            .await;
+                        }
+                        ResumeNativeOutcome::Unsupported => {
+                            // mode_static == "acp_load" — hard reject.
+                            events.push(ServerEvent {
+                                seq: 0,
+                                session_id: target_id.clone(),
+                                event_type: "session.resume.failed".into(),
+                                payload: json!({
+                                    "vac_session_id": target_id,
+                                    "mode": mode_str,
+                                    "reason": "native_resume_unsupported",
+                                    "detail": "agent rejected session/load with method-not-found",
+                                }),
+                                v: 1,
+                                ts: chrono::Utc::now().to_rfc3339(),
+                            });
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": "native_resume_unsupported",
+                                    "mode": mode_str,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "session.native_resume_unsupported".into(),
+                                        message: "agent does not implement session/load".into(),
+                                    }),
+                                },
+                                events,
+                            );
+                        }
+                        ResumeNativeOutcome::Rejected(detail) => {
+                            events.push(ServerEvent {
+                                seq: 0,
+                                session_id: target_id.clone(),
+                                event_type: "session.resume.failed".into(),
+                                payload: json!({
+                                    "vac_session_id": target_id,
+                                    "mode": mode_str,
+                                    "reason": "native_resume_rejected",
+                                    "detail": detail,
+                                }),
+                                v: 1,
+                                ts: chrono::Utc::now().to_rfc3339(),
+                            });
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": "native_resume_rejected",
+                                    "mode": mode_str,
+                                    "detail": detail,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "session.native_resume_rejected".into(),
+                                        message: detail,
+                                    }),
+                                },
+                                events,
+                            );
+                        }
+                        ResumeNativeOutcome::Failed(detail) => {
+                            events.push(ServerEvent {
+                                seq: 0,
+                                session_id: target_id.clone(),
+                                event_type: "session.resume.failed".into(),
+                                payload: json!({
+                                    "vac_session_id": target_id,
+                                    "mode": mode_str,
+                                    "reason": "native_resume_failed",
+                                    "detail": detail,
+                                }),
+                                v: 1,
+                                ts: chrono::Utc::now().to_rfc3339(),
+                            });
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Error,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": "native_resume_failed",
+                                    "mode": mode_str,
+                                    "detail": detail,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: "session.native_resume_failed".into(),
+                                        message: detail,
+                                    }),
+                                },
+                                events,
+                            );
+                        }
+                        ResumeNativeOutcome::Validation(failure) => {
+                            let reason = failure.reason();
+                            // Validation errors that map onto existing
+                            // ack codes get a specific code; otherwise
+                            // we use the generic native_resume_failed
+                            // wrapper so the FE has something to render.
+                            let ack_code = match failure {
+                                ResumeValidationFailure::VacSessionUnknown => {
+                                    "session.vac_session_unknown"
+                                }
+                                ResumeValidationFailure::AgentNotInRegistry => {
+                                    "session.agent_not_in_registry"
+                                }
+                                ResumeValidationFailure::AgentKindMismatch => {
+                                    "session.agent_kind_mismatch"
+                                }
+                                ResumeValidationFailure::ProfileNotFound => {
+                                    "session.profile_not_found"
+                                }
+                                ResumeValidationFailure::ProfileInvalid => {
+                                    "session.profile_invalid"
+                                }
+                                ResumeValidationFailure::AgentKindNotAllowed => {
+                                    "session.agent_kind_not_allowed"
+                                }
+                                ResumeValidationFailure::ProjectRootUnavailable => {
+                                    "session.project_root_unavailable"
+                                }
+                            };
+                            events.push(ServerEvent {
+                                seq: 0,
+                                session_id: target_id.clone(),
+                                event_type: "session.resume.failed".into(),
+                                payload: json!({
+                                    "vac_session_id": target_id,
+                                    "mode": mode_str,
+                                    "reason": reason,
+                                }),
+                                v: 1,
+                                ts: chrono::Utc::now().to_rfc3339(),
+                            });
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": reason,
+                                    "mode": mode_str,
+                                }),
+                            );
+                            return (
+                                ServerAck {
+                                    ack_of: cmd.id.clone(),
+                                    ok: false,
+                                    error: Some(ErrorInfo {
+                                        code: ack_code.into(),
+                                        message: reason.into(),
+                                    }),
+                                },
+                                events,
+                            );
+                        }
+                    }
+                }
+
+                // mode_str must be "native_or_replay" with caps=false
+                // here — fall back to persistence replay with the
+                // distinguishing `replay_only_fallback` resume_mode.
+                debug_assert_eq!(mode_str, "native_or_replay");
+                debug_assert!(!caps_supported);
+                return resume_persistence_replay(
+                    cmd,
+                    state,
+                    persistence,
+                    target_id,
+                    meta,
+                    "native_or_replay",
+                    "replay_only_fallback",
+                    events,
+                )
+                .await;
+            }
+
+            // Persistence-based replay path: when payload includes
+            // vac_session_id and (optional) resume_mode == "replay_only".
+            // Reconstruct transcript from disk via the shared helper.
+            if let Some(target_id) = vac_session_id.clone() {
+                let Some(persistence) = state.persistence.clone() else {
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "persistence.disabled".into(),
+                                message: "session persistence is not configured".into(),
+                            }),
+                        },
+                        events,
+                    );
+                };
+                let meta = match persistence.load_meta(&target_id) {
+                    Ok(Some(m)) => m,
+                    Ok(None) => {
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "session.not_found".into(),
+                                    message: target_id.clone(),
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                    Err(err) => {
+                        return (
+                            ServerAck {
+                                ack_of: cmd.id.clone(),
+                                ok: false,
+                                error: Some(ErrorInfo {
+                                    code: "persistence.load_failed".into(),
+                                    message: err.to_string(),
+                                }),
+                            },
+                            events,
+                        );
+                    }
+                };
+                return resume_persistence_replay(
+                    cmd,
+                    state,
+                    persistence,
+                    target_id,
+                    meta,
+                    "replay_only",
+                    "replay_only",
+                    events,
+                )
+                .await;
+            }
+
             let Some(handle) = state.sessions.get(&cmd.session_id) else {
                 return (
                     ServerAck {
@@ -464,6 +1024,208 @@ pub async fn dispatch_command(
                     error: None,
                 },
                 out,
+            )
+        }
+        "session.history.list" => {
+            // Stage X6 P2-B: surface persistence health on every
+            // listed payload so the cockpit chip can render even when
+            // we never received the live `session.persistence_degraded`
+            // broadcast (cold reload, stale tab, etc.). When persistence
+            // is disabled entirely the FE should still see `healthy`
+            // — "degraded" is reserved for an attached store that has
+            // observed at least one append/save/forget failure.
+            let health_str = if state.persistence_health.is_degraded() {
+                "degraded"
+            } else {
+                "healthy"
+            };
+            let recent_failures: Vec<serde_json::Value> = state
+                .persistence_health
+                .recent_failures()
+                .into_iter()
+                .map(|f| {
+                    json!({
+                        "reason": f.reason,
+                        "detail": f.detail,
+                        "vac_session_id": f.vac_session_id,
+                        "at": f.at,
+                    })
+                })
+                .collect();
+            let Some(persistence) = state.persistence.clone() else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: true,
+                        error: None,
+                    },
+                    vec![ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "session.history.listed".into(),
+                        payload: json!({
+                            "sessions": [],
+                            "persistence": "disabled",
+                            "health": health_str,
+                            "recent_failures": recent_failures,
+                        }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    }],
+                );
+            };
+
+            let project_root = cmd
+                .payload
+                .get("project_root")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from);
+            let agent_id = cmd
+                .payload
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let limit = cmd
+                .payload
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+
+            let filter = SessionHistoryFilter {
+                project_root,
+                agent_id,
+                status: None,
+                limit,
+            };
+
+            let metas = match persistence.list(&filter) {
+                Ok(m) => m,
+                Err(err) => {
+                    return (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: false,
+                            error: Some(ErrorInfo {
+                                code: "persistence.list_failed".into(),
+                                message: err.to_string(),
+                            }),
+                        },
+                        events,
+                    );
+                }
+            };
+
+            let sessions_json: Vec<serde_json::Value> = metas
+                .into_iter()
+                .map(|m| {
+                    json!({
+                        "vac_session_id": m.vac_session_id,
+                        "agent_session_id": m.agent_session_id,
+                        "agent_id": m.agent_id,
+                        "agent_kind": m.agent_kind,
+                        "project_root": m.project_root,
+                        "profile_id": m.profile_id,
+                        "workflow_id": m.workflow_id,
+                        "created_at": m.created_at,
+                        "updated_at": m.updated_at,
+                        "status": m.status,
+                        "native_resume": {
+                            "load_session_supported": m.native_resume.load_session_supported,
+                            "last_verified_at": m.native_resume.last_verified_at,
+                        },
+                    })
+                })
+                .collect();
+
+            events.push(ServerEvent {
+                seq: 0,
+                session_id: cmd.session_id.clone(),
+                event_type: "session.history.listed".into(),
+                payload: json!({
+                    "sessions": sessions_json,
+                    "persistence": "file",
+                    "health": health_str,
+                    "recent_failures": recent_failures,
+                }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            });
+
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                events,
+            )
+        }
+        "session.history.forget" => {
+            let Some(persistence) = state.persistence.clone() else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "persistence.disabled".into(),
+                            message: "session persistence is not configured".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            let Some(target_id) = cmd
+                .payload
+                .get("vac_session_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "protocol.invalid_payload".into(),
+                            message: "vac_session_id required".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            if let Err(err) = persistence.forget(&target_id) {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "persistence.forget_failed".into(),
+                            message: err.to_string(),
+                        }),
+                    },
+                    events,
+                );
+            }
+            state.audit.log(
+                &cmd.session_id,
+                "session",
+                AuditSeverity::Info,
+                json!({ "event": "history.forgotten", "vac_session_id": target_id }),
+            );
+            events.push(ServerEvent {
+                seq: 0,
+                session_id: cmd.session_id.clone(),
+                event_type: "session.history.forgotten".into(),
+                payload: json!({ "vac_session_id": target_id }),
+                v: 1,
+                ts: chrono::Utc::now().to_rfc3339(),
+            });
+            (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: true,
+                    error: None,
+                },
+                events,
             )
         }
         "session.close" => {
@@ -1578,6 +2340,225 @@ async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
     let mut with_seq = event;
     with_seq.seq = seq;
     let _ = handle.broadcast.send(with_seq);
+}
+
+/// Stage X6 batch C1 — compare the persisted session's recorded
+/// `mcp_servers` list with what the live agent runtime registry
+/// currently advertises. Returns a `session.resume.warning` event
+/// (reason `mcp_server_drift`) when they differ; otherwise `None`.
+///
+/// The comparison is intentionally semantic-equality on the JSON
+/// values: the operator changing a server label, swapping order, or
+/// adding/removing entries all surface as drift. Order changes are
+/// considered drift because two MCP advertisements with the same
+/// servers in a different order can resolve to different effective
+/// tool sets when the agent picks the first match for a tool name.
+///
+/// We never block resume on drift — the cockpit renders an amber
+/// chip and the session continues so the user can decide whether to
+/// recreate.
+fn build_mcp_drift_warning(
+    state: &AppStateHandle,
+    meta: &crate::session::persistence::PersistedSessionMeta,
+    target_id: &str,
+    mode: &str,
+) -> Option<ServerEvent> {
+    let registry = state.sessions.agents();
+    let agent = registry.get(&meta.agent_id).ok()?;
+    if meta.mcp_servers == agent.mcp_servers {
+        return None;
+    }
+    state.audit.log(
+        target_id,
+        "session",
+        AuditSeverity::Warn,
+        json!({
+            "event": "resume_mcp_drift",
+            "vac_session_id": target_id,
+            "agent_id": meta.agent_id,
+            "mode": mode,
+            "persisted_count": meta.mcp_servers.len(),
+            "live_count": agent.mcp_servers.len(),
+        }),
+    );
+    Some(ServerEvent {
+        seq: 0,
+        session_id: target_id.to_string(),
+        event_type: "session.resume.warning".into(),
+        payload: json!({
+            "vac_session_id": target_id,
+            "reason": "mcp_server_drift",
+            "mode": mode,
+            "agent_id": meta.agent_id,
+            "persisted": meta.mcp_servers.clone(),
+            "live": agent.mcp_servers.clone(),
+        }),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// Stage X6 4-5 — build a `session.replay.progress` event for the
+/// FE chip. The bridge emits this:
+///   * once with `replayed=0` immediately after `session.resume.started`
+///     (so the chip transitions to `replaying` even on empty
+///     transcripts), and
+///   * once every `PROGRESS_TICK_EVERY` stored events, plus a final
+///     terminal tick before `session.resumed` when the loop didn't
+///     land on a bucket boundary.
+///
+/// Payload contract (matches `apps/web/src/domain/sessions/history.ts`):
+/// ```text
+/// { vac_session_id, mode, replayed }
+/// ```
+fn replay_progress_event(
+    target_id: &str,
+    mode_for_started: &'static str,
+    replayed: usize,
+    ts: &str,
+) -> ServerEvent {
+    ServerEvent {
+        seq: 0,
+        session_id: target_id.to_string(),
+        event_type: "session.replay.progress".into(),
+        payload: json!({
+            "vac_session_id": target_id,
+            "mode": mode_for_started,
+            "replayed": replayed,
+        }),
+        v: 1,
+        ts: ts.to_string(),
+    }
+}
+
+/// Stage X6 batch 4-3 — shared persistence-replay path. Used by both
+/// `replay_only` (direct) and `native_or_replay` (fallback) modes.
+///
+/// `mode_for_started` is the requested mode that drives the
+/// `session.resume.started.mode` and audit `mode` field (e.g.
+/// `"replay_only"` or `"native_or_replay"`).
+/// `resume_mode_resolved` is what the FE state machine treats as the
+/// final outcome (e.g. `"replay_only"` or `"replay_only_fallback"`).
+async fn resume_persistence_replay(
+    cmd: ClientCommand,
+    state: AppStateHandle,
+    persistence: crate::session::persistence::SharedPersistence,
+    target_id: String,
+    meta: crate::session::persistence::PersistedSessionMeta,
+    mode_for_started: &'static str,
+    resume_mode_resolved: &'static str,
+    mut events: Vec<ServerEvent>,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let stored = match persistence.load_events(&target_id, 0) {
+        Ok(evs) => evs,
+        Err(err) => {
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "persistence.load_failed".into(),
+                        message: err.to_string(),
+                    }),
+                },
+                events,
+            );
+        }
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    events.push(ServerEvent {
+        seq: 0,
+        session_id: target_id.clone(),
+        event_type: "session.resume.started".into(),
+        payload: json!({
+            "vac_session_id": target_id,
+            "mode": mode_for_started,
+            "agent_id": meta.agent_id,
+            "profile_id": meta.profile_id,
+            "project_root": meta.project_root,
+        }),
+        v: 1,
+        ts: now.clone(),
+    });
+    // Stage X6 4-5 — emit an initial `replayed=0` progress tick right
+    // after `session.resume.started` so the FE chip can transition
+    // immediately from `starting` → `replaying`, even when the
+    // transcript is empty. Mirrors the contract documented on
+    // `EffectiveResumeMode` in `apps/web/src/stores/sessionHistory.ts`.
+    events.push(replay_progress_event(&target_id, mode_for_started, 0, &now));
+    let replayed = stored.len();
+    // Stage X6 4-5 — emit a `session.replay.progress` tick every Nth
+    // stored event. 25 is small enough for snappy UX on small
+    // histories (you'll see at least one tick after ~25 events) but
+    // big enough that 1k-event sessions only fire ~40 ticks. The
+    // terminal `replayed=N` tick is emitted unconditionally below so
+    // the chip never stalls at a stale count.
+    const PROGRESS_TICK_EVERY: usize = 25;
+    let mut count: usize = 0;
+    for ev in stored {
+        events.push(ServerEvent {
+            seq: ev.seq,
+            session_id: target_id.clone(),
+            event_type: ev.event_type,
+            payload: ev.payload,
+            v: 1,
+            ts: ev.ts.to_rfc3339(),
+        });
+        count += 1;
+        if count % PROGRESS_TICK_EVERY == 0 {
+            events.push(replay_progress_event(
+                &target_id,
+                mode_for_started,
+                count,
+                &chrono::Utc::now().to_rfc3339(),
+            ));
+        }
+    }
+    // Final tick before `session.resumed` so the FE always sees the
+    // exact replayed count (even when the loop didn't land on a
+    // bucket boundary, or when the transcript was empty and the
+    // initial 0-tick is the only one).
+    if replayed > 0 && replayed % PROGRESS_TICK_EVERY != 0 {
+        events.push(replay_progress_event(
+            &target_id,
+            mode_for_started,
+            replayed,
+            &chrono::Utc::now().to_rfc3339(),
+        ));
+    }
+    events.push(ServerEvent {
+        seq: 0,
+        session_id: target_id.clone(),
+        event_type: "session.resumed".into(),
+        payload: json!({
+            "vac_session_id": target_id,
+            "mode": mode_for_started,
+            "native": false,
+            "resume_mode": resume_mode_resolved,
+            "replayed_events": replayed,
+        }),
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    });
+    state.audit.log(
+        &target_id,
+        "session",
+        AuditSeverity::Info,
+        json!({
+            "event": "resumed",
+            "mode": mode_for_started,
+            "resume_mode": resume_mode_resolved,
+            "replayed": replayed,
+        }),
+    );
+    (
+        ServerAck {
+            ack_of: cmd.id.clone(),
+            ok: true,
+            error: None,
+        },
+        events,
+    )
 }
 
 fn build_executor_submit_command(

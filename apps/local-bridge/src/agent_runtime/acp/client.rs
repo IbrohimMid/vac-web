@@ -67,6 +67,70 @@ impl std::fmt::Display for JsonRpcError {
 
 impl std::error::Error for JsonRpcError {}
 
+/// Stage X6 batch 4-1 — typed result of an ACP `session/load` request.
+///
+/// Returned by [`AcpClient::load_session`]. Maps JSON-RPC error codes
+/// onto a closed enum so the resume FSM can branch deterministically
+/// without re-inspecting the underlying [`JsonRpcError`].
+///
+/// - `-32601` (method not found) → [`LoadSessionError::Unsupported`].
+///   The adapter doesn't implement `session/load`. The bridge SHOULD
+///   fall back to replay-only resume.
+/// - `-32602` (invalid params) → [`LoadSessionError::Rejected`]. The
+///   adapter recognized the call but refused this specific session
+///   (unknown id, bad cwd, etc.).
+/// - everything else (including transport / timeout / decode errors)
+///   → [`LoadSessionError::Other`]. The bridge SHOULD treat this as a
+///   hard failure for the resume attempt and surface
+///   `session.resume.failed { reason: "native_resume_unsupported" }`
+///   only after the FE has the chance to retry replay-only.
+#[derive(Debug)]
+pub enum LoadSessionError {
+    Unsupported(JsonRpcError),
+    Rejected(JsonRpcError),
+    Other(anyhow::Error),
+}
+
+impl LoadSessionError {
+    /// Internal helper: extract a `JsonRpcError` from an `anyhow::Error`
+    /// returned by `rpc()` and classify it. Anything that doesn't carry
+    /// a `JsonRpcError` cause stays as `Other`.
+    fn from_anyhow(err: anyhow::Error) -> Self {
+        match err.downcast_ref::<JsonRpcError>() {
+            Some(rpc) if rpc.code == -32601 => Self::Unsupported(rpc.clone()),
+            Some(rpc) if rpc.code == -32602 => Self::Rejected(rpc.clone()),
+            _ => Self::Other(err),
+        }
+    }
+
+    /// Stable bridge-side error code for ack payloads. Mirrors the
+    /// shape used by `classify_jsonrpc_error` for the existing prompt /
+    /// new_session paths.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unsupported(_) => "native_resume_unsupported",
+            Self::Rejected(_) => "native_resume_rejected",
+            Self::Other(_) => "native_resume_failed",
+        }
+    }
+
+    /// Human-readable message for ack / event payloads.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unsupported(e) | Self::Rejected(e) => format!("{}", e),
+            Self::Other(e) => format!("{:#}", e),
+        }
+    }
+}
+
+impl std::fmt::Display for LoadSessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "session/load {}: {}", self.code(), self.message())
+    }
+}
+
+impl std::error::Error for LoadSessionError {}
+
 /// Inbound `session/request_permission` request held open for the
 /// approval bridge. The numeric `id` must round-trip into the JSON-RPC
 /// response that resolves it. See `AcpClient::respond_permission`.
@@ -341,6 +405,31 @@ impl AcpClient {
 
     pub async fn new_session(&self, req: NewSessionRequest) -> Result<NewSessionResponse> {
         self.rpc("session/new", req, Some(REQUEST_TIMEOUT)).await
+    }
+
+    /// Stage X6 batch 4-1 — ACP `session/load` request.
+    ///
+    /// Re-attaches the agent to a previously persisted session. The
+    /// adapter MUST replay any history via `session/update`
+    /// notifications **before** the response resolves — callers should
+    /// already have their `session/update` pump running by the time
+    /// they invoke this method or they will miss the replay.
+    ///
+    /// Errors map JSON-RPC codes to the structured
+    /// [`LoadSessionError`] enum so the resume FSM can decide whether
+    /// to fall back to replay-only ([`LoadSessionError::Unsupported`])
+    /// or surface a hard failure ([`LoadSessionError::Rejected`]).
+    pub async fn load_session(
+        &self,
+        req: LoadSessionRequest,
+    ) -> std::result::Result<LoadSessionResponse, LoadSessionError> {
+        match self
+            .rpc::<_, LoadSessionResponse>("session/load", req, Some(REQUEST_TIMEOUT))
+            .await
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Err(LoadSessionError::from_anyhow(err)),
+        }
     }
 
     /// `session/prompt` is unbounded — prompts can take minutes. The
@@ -638,6 +727,46 @@ pub fn classify_jsonrpc_error(e: &JsonRpcError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x6_b41_load_session_error_classifies_jsonrpc_codes() {
+        // -32601 -> Unsupported
+        let e = anyhow::Error::from(JsonRpcError {
+            code: -32601,
+            message: "method not found".into(),
+            data: Value::Null,
+        });
+        let mapped = LoadSessionError::from_anyhow(e);
+        assert!(matches!(mapped, LoadSessionError::Unsupported(_)));
+        assert_eq!(mapped.code(), "native_resume_unsupported");
+
+        // -32602 -> Rejected
+        let e = anyhow::Error::from(JsonRpcError {
+            code: -32602,
+            message: "unknown sessionId".into(),
+            data: json!({"sessionId": "sess_x"}),
+        });
+        let mapped = LoadSessionError::from_anyhow(e);
+        assert!(matches!(mapped, LoadSessionError::Rejected(_)));
+        assert_eq!(mapped.code(), "native_resume_rejected");
+        assert!(mapped.message().contains("unknown sessionId"));
+
+        // -32603 (or anything else) -> Other
+        let e = anyhow::Error::from(JsonRpcError {
+            code: -32603,
+            message: "internal".into(),
+            data: Value::Null,
+        });
+        let mapped = LoadSessionError::from_anyhow(e);
+        assert!(matches!(mapped, LoadSessionError::Other(_)));
+        assert_eq!(mapped.code(), "native_resume_failed");
+
+        // non-JsonRpc anyhow error -> Other
+        let e = anyhow!("transport closed");
+        let mapped = LoadSessionError::from_anyhow(e);
+        assert!(matches!(mapped, LoadSessionError::Other(_)));
+        assert_eq!(mapped.code(), "native_resume_failed");
+    }
 
     #[test]
     fn classify_known_codes() {
