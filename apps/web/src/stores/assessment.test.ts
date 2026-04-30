@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { freshnessTier, useAssessment, type EvidenceRef, type Sweep } from './assessment';
+import {
+  freshnessTier,
+  queryFailureKey,
+  useAssessment,
+  type EvidenceRef,
+  type QueryFailure,
+  type Sweep,
+} from './assessment';
 import type { DiffResult } from './assessmentDiff';
 
 function reset() {
@@ -170,5 +177,69 @@ describe('freshnessTier', () => {
   });
   it('hard_expire >= 2*ttl', () => {
     expect(freshnessTier(mk(300, 100), now)).toBe('hard_expire');
+  });
+});
+
+describe('queryErrors (P2)', () => {
+  beforeEach(() => reset());
+
+  const failure = (overrides: Partial<QueryFailure> = {}): QueryFailure => ({
+    action: 'fetch_report',
+    reason: 'not_found',
+    message: 'Run not found',
+    ts: 't',
+    targetId: 'r1',
+    ...overrides,
+  });
+
+  it('queryFailureKey composes action and targetId', () => {
+    expect(queryFailureKey('fetch_report', 'r1')).toBe('fetch_report:r1');
+    expect(queryFailureKey('list_runs')).toBe('list_runs');
+  });
+
+  it('recordQueryFailure stores the failure under the keyed entry', () => {
+    useAssessment.getState().recordQueryFailure(failure());
+    const stored = useAssessment.getState().queryErrors.get('fetch_report:r1');
+    expect(stored?.reason).toBe('not_found');
+    expect(stored?.message).toBe('Run not found');
+  });
+
+  it('clearQueryFailure removes only the matching entry', () => {
+    const s = useAssessment.getState();
+    s.recordQueryFailure(failure({ action: 'fetch_report', targetId: 'r1' }));
+    s.recordQueryFailure(failure({ action: 'list_runs', targetId: undefined }));
+    s.clearQueryFailure('fetch_report', 'r1');
+    const after = useAssessment.getState().queryErrors;
+    expect(after.has('fetch_report:r1')).toBe(false);
+    expect(after.has('list_runs')).toBe(true);
+  });
+
+  it('clearAllQueryErrors empties the map', () => {
+    const s = useAssessment.getState();
+    s.recordQueryFailure(failure());
+    s.recordQueryFailure(failure({ action: 'list_runs', targetId: undefined }));
+    s.clearAllQueryErrors();
+    expect(useAssessment.getState().queryErrors.size).toBe(0);
+  });
+
+  it('upsertDiff auto-clears the matching diff failure key', () => {
+    const s = useAssessment.getState();
+    s.recordQueryFailure(
+      failure({ action: 'diff', targetId: 'a\x00b', reason: 'event_log_truncated' }),
+    );
+    expect(useAssessment.getState().queryErrors.has('diff:a\x00b')).toBe(true);
+    const empty: DiffResult = {
+      counts: { resolved: 0, persistent: 0, regressed: 0, new: 0 },
+      entries: [],
+    };
+    s.upsertDiff('a', 'b', empty);
+    expect(useAssessment.getState().queryErrors.has('diff:a\x00b')).toBe(false);
+  });
+
+  it('clear() resets queryErrors', () => {
+    const s = useAssessment.getState();
+    s.recordQueryFailure(failure());
+    s.clear();
+    expect(useAssessment.getState().queryErrors.size).toBe(0);
   });
 });

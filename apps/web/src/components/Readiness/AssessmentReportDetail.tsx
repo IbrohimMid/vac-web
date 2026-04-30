@@ -14,12 +14,12 @@ import { CompareCard } from './CompareCard';
 import { FindingsList } from './FindingsList';
 import { RunDetailsCard } from './RunDetailsCard';
 import { VerdictCard } from './VerdictCard';
-import { useAssessment, type Finding } from '../../stores/assessment';
+import { useAssessment, queryFailureKey, type Finding } from '../../stores/assessment';
 import { useAssessmentReport } from '../../stores/assessmentReport';
 import { useCockpit } from '../../stores/cockpit';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
-import { requestAssessmentFetchReport } from '../../domain/assessment/queries';
+import { reasonLabel, requestAssessmentFetchReport } from '../../domain/assessment/queries';
 
 interface Props {
   runId: string;
@@ -30,6 +30,10 @@ interface Props {
 export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   const run = useAssessment((s) => s.runs.get(runId));
   const findings = useAssessment((s) => s.findings);
+  const fetchReportError = useAssessment((s) =>
+    s.queryErrors.get(queryFailureKey('fetch_report', runId)),
+  );
+  const clearQueryFailure = useAssessment((s) => s.clearQueryFailure);
   const selected = useAssessmentReport((s) => s.selectedFindingIds);
   const toggleFinding = useAssessmentReport((s) => s.toggleFinding);
   const setRoute = useCockpit((s) => s.setRoute);
@@ -42,6 +46,13 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
     void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => {});
   }, [run, transport, sessionId, runId]);
 
+  const retryFetchReport = () => {
+    if (!transport || !sessionId) return;
+    clearQueryFailure('fetch_report', runId);
+    requested.current = null;
+    void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => {});
+  };
+
   const runFindings = useMemo<Finding[]>(() => {
     const list: Finding[] = [];
     for (const f of findings.values()) if (f.run_id === runId) list.push(f);
@@ -50,13 +61,38 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
 
   if (!run) {
     return (
-      <div style={{ padding: 'var(--pad)' }}>
-        <p className="muted" style={{ fontSize: 13 }}>
-          Loading report...
-        </p>
-        <button className="btn ghost" onClick={onBack}>
-          ← Back
-        </button>
+      <div style={padStyle}>
+        {fetchReportError ? (
+          <div role="alert" className="card" style={errorCardStyle}>
+            <strong style={errorTitleStyle}>
+              {reasonLabel(fetchReportError.reason)}
+            </strong>
+            <p className="muted" style={errorMessageStyle}>
+              {fetchReportError.message}
+            </p>
+            <div style={errorButtonRowStyle}>
+              <button
+                className="btn sm"
+                onClick={retryFetchReport}
+                disabled={!transport || !sessionId}
+              >
+                Retry
+              </button>
+              <button className="btn sm ghost" onClick={onBack}>
+                ← Back
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="muted" style={loadingStyle}>
+              Loading report...
+            </p>
+            <button className="btn ghost" onClick={onBack}>
+              ← Back
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -72,33 +108,26 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   const rejectedCount = run.validation?.rejected ?? 0;
 
   return (
-    <div style={{ padding: 'var(--pad)' }}>
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          marginBottom: 'var(--gap)',
-        }}
-      >
+    <div style={shellStyle}>
+      <header style={headerStyle}>
         <button className="btn ghost" onClick={onBack}>
           ← Readiness
         </button>
-        <span className="muted" style={{ fontSize: 13 }}>
+        <span className="muted" style={separatorStyle}>
           /
         </span>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>
+        <span style={titleStyle}>
           {run.swarm.toUpperCase()} report
         </span>
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="muted" style={statusStyle}>
           · {run.status}
         </span>
-        <div style={{ flex: 1 }} />
+        <div style={spacerStyle} />
         <button
           className="btn primary"
           onClick={goToHandoff}
           disabled={selectedCount === 0}
-          style={{ opacity: selectedCount === 0 ? 0.5 : 1 }}
+          style={primaryButtonStyle}
         >
           Create handoff ({selectedCount})
         </button>
@@ -106,24 +135,13 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
 
       <div className="report-grid" style={reportGridStyle}>
         <div>
-          <div
-            className="findings-toolbar"
-            style={{
-              display: 'flex',
-              gap: 8,
-              padding: '8px 0',
-              borderBottom: '1px solid var(--line-soft)',
-              marginBottom: 8,
-              alignItems: 'center',
-              fontSize: 12,
-            }}
-          >
+          <div className="findings-toolbar" style={toolbarStyle}>
             <span className="badge accent">{selectedCount} selected</span>
             <span className="muted">
               {validatedCount} validated finding{validatedCount === 1 ? '' : 's'} in this run
             </span>
             {rejectedCount > 0 && <span className="badge warn">{rejectedCount} rejected</span>}
-            <div style={{ flex: 1 }} />
+            <div style={spacerStyle} />
             <button
               className="btn sm ghost"
               onClick={() => useAssessmentReport.getState().clearSelection()}
@@ -141,7 +159,7 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
           />
         </div>
 
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)' }}>
+        <aside style={asideStyle}>
           <VerdictCard verdict={run.verdict} findings={runFindings} />
           <RunDetailsCard run={run} validatedFindings={validatedCount} />
           <CompareCard run={run} transport={transport} />
@@ -151,6 +169,46 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   );
 }
 
+const padStyle: React.CSSProperties = { padding: 'var(--pad)' };
+const errorCardStyle: React.CSSProperties = {
+  borderColor: 'var(--sev-error)',
+  padding: 12,
+};
+const errorTitleStyle: React.CSSProperties = { color: 'var(--sev-error)' };
+const errorMessageStyle: React.CSSProperties = { margin: '6px 0 10px' };
+const errorButtonRowStyle: React.CSSProperties = { display: 'flex', gap: 8 };
+const loadingStyle: React.CSSProperties = { fontSize: 13 };
+const shellStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--gap)',
+  padding: 'var(--pad)',
+};
+const headerStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  paddingBottom: 'var(--gap)',
+  borderBottom: '1px solid var(--border-1)',
+};
+const separatorStyle: React.CSSProperties = { fontSize: 13 };
+const titleStyle: React.CSSProperties = { fontWeight: 600, fontSize: 15 };
+const statusStyle: React.CSSProperties = { fontSize: 12.5 };
+const spacerStyle: React.CSSProperties = { flex: 1 };
+const primaryButtonStyle: React.CSSProperties = { whiteSpace: 'nowrap' };
+const toolbarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '6px 0',
+  marginBottom: 8,
+  borderBottom: '1px dashed var(--border-1)',
+};
+const asideStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 'var(--gap)',
+};
 const reportGridStyle: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 1fr) 320px',

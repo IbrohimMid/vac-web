@@ -170,6 +170,46 @@ export interface Sweep {
   failure?: RunFailure;
 }
 
+// P2 failure UX: query failures from `assessment.*` ack errors.
+// Reasons map from backend ack codes:
+//   - assessment.not_found             -> 'not_found'
+//   - persistence.disabled             -> 'backend_unavailable'
+//   - assessment.invalid_payload       -> 'invalid_payload'
+//   - assessment.query_failed          -> 'event_log_truncated' (load_events failed)
+//   - <transport timeout / disconnect> -> 'timeout'
+//   - anything else                    -> 'unknown'
+export type QueryFailureReason =
+  | 'not_found'
+  | 'event_log_truncated'
+  | 'backend_unavailable'
+  | 'invalid_payload'
+  | 'timeout'
+  | 'unknown';
+
+export type QueryAction =
+  | 'list_runs'
+  | 'fetch_report'
+  | 'replay'
+  | 'diff'
+  | 'fetch_evidence_preview'
+  | 'sweep.run'
+  | 'sweep.cancel'
+  | 'run';
+
+export interface QueryFailure {
+  action: QueryAction;
+  reason: QueryFailureReason;
+  message: string;
+  ts: string;
+  /** Optional target identifier (run id, sweep id, evidence id, or composite). */
+  targetId?: string;
+}
+
+/** Compose a stable key for `queryErrors` lookups. */
+export function queryFailureKey(action: QueryAction, targetId?: string): string {
+  return targetId ? `${action}:${targetId}` : action;
+}
+
 interface AssessmentSlice {
   runs: Map<string, Run>;
   runOrder: string[];
@@ -182,6 +222,8 @@ interface AssessmentSlice {
   evidence: Map<string, EvidenceRef>;
   diffs: Map<string, DiffResult>;
   diffOrder: string[];
+  /** P2: keyed by `queryFailureKey(action, targetId)`. */
+  queryErrors: Map<string, QueryFailure>;
 
   upsertRun(run: Run): void;
   upsertSweep(sweep: Sweep): void;
@@ -244,6 +286,10 @@ interface AssessmentSlice {
   setEvidencePreview(id: string, preview: string): void;
   upsertDiff(baseRunId: string, nextRunId: string, diff: DiffResult): void;
 
+  recordQueryFailure(failure: QueryFailure): void;
+  clearQueryFailure(action: QueryAction, targetId?: string): void;
+  clearAllQueryErrors(): void;
+
   clear(): void;
 }
 
@@ -259,6 +305,7 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
   evidence: new Map(),
   diffs: new Map(),
   diffOrder: [],
+  queryErrors: new Map(),
 
   upsertRun(run) {
     set((s) => {
@@ -532,8 +579,38 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
       const diffs = new Map(s.diffs);
       const diffOrder = diffs.has(key) ? s.diffOrder : [...s.diffOrder, key];
       diffs.set(key, diff);
-      return { diffs, diffOrder };
+      // P2: a successful diff result clears any prior failure for this pair.
+      const errKey = queryFailureKey('diff', `${baseRunId}\x00${nextRunId}`);
+      let queryErrors = s.queryErrors;
+      if (queryErrors.has(errKey)) {
+        queryErrors = new Map(queryErrors);
+        queryErrors.delete(errKey);
+      }
+      return { diffs, diffOrder, queryErrors };
     });
+  },
+
+  recordQueryFailure(failure) {
+    set((s) => {
+      const key = queryFailureKey(failure.action, failure.targetId);
+      const queryErrors = new Map(s.queryErrors);
+      queryErrors.set(key, failure);
+      return { queryErrors };
+    });
+  },
+
+  clearQueryFailure(action, targetId) {
+    set((s) => {
+      const key = queryFailureKey(action, targetId);
+      if (!s.queryErrors.has(key)) return s;
+      const queryErrors = new Map(s.queryErrors);
+      queryErrors.delete(key);
+      return { queryErrors };
+    });
+  },
+
+  clearAllQueryErrors() {
+    set((s) => (s.queryErrors.size === 0 ? s : { queryErrors: new Map() }));
   },
 
   clear() {
@@ -549,6 +626,7 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
       evidence: new Map(),
       diffs: new Map(),
       diffOrder: [],
+      queryErrors: new Map(),
     });
   },
 }));
