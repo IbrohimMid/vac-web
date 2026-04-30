@@ -15,6 +15,9 @@ use std::sync::Arc;
 use tracing::warn;
 use ulid::Ulid;
 
+mod assessment;
+mod assessment_query;
+
 fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
     let mut payload = json!({
         "id": handle.id,
@@ -447,6 +450,17 @@ pub async fn dispatch_command(
                 events,
             )
         }
+        "assessment.run" => assessment::dispatch_assessment_run(&cmd, &state).await,
+        "assessment.sweep.run" => assessment::dispatch_assessment_sweep_run(&cmd, &state).await,
+        "assessment.cancel" => assessment::dispatch_assessment_cancel(&cmd, &state).await,
+        "assessment.sweep.cancel" => assessment::dispatch_assessment_sweep_cancel(&cmd, &state).await,
+        "assessment.list_runs" => assessment_query::dispatch_assessment_list_runs(&cmd, &state).await,
+        "assessment.fetch_report" => assessment_query::dispatch_assessment_fetch_report(&cmd, &state).await,
+        "assessment.replay" => assessment_query::dispatch_assessment_replay(&cmd, &state).await,
+        "assessment.diff" => assessment_query::dispatch_assessment_diff(&cmd, &state).await,
+        "assessment.fetch_evidence_preview" => {
+            assessment_query::dispatch_assessment_fetch_evidence_preview(&cmd, &state).await
+        }
         "session.resume" => {
             // Stage X6 batch 4-3 / 4-4 / 4-5 — resume mode dispatch
             // matrix. Batches 4-4 and 4-5 wired the native ACP
@@ -481,11 +495,12 @@ pub async fn dispatch_command(
             // When there's no `vac_session_id` we keep the legacy
             // in-memory ring path — that's a different code path that
             // doesn't even consult persistence.
-            let requested_mode: Option<String> = match (raw_requested_mode.as_deref(), vac_session_id.as_deref()) {
-                (Some(_), _) => raw_requested_mode.clone(),
-                (None, Some(_)) => Some(state.resume_policy.default_mode.as_str().to_string()),
-                (None, None) => None,
-            };
+            let requested_mode: Option<String> =
+                match (raw_requested_mode.as_deref(), vac_session_id.as_deref()) {
+                    (Some(_), _) => raw_requested_mode.clone(),
+                    (None, Some(_)) => Some(state.resume_policy.default_mode.as_str().to_string()),
+                    (None, None) => None,
+                };
 
             // Reject obviously unknown mode strings up front so a typo
             // can't silently downgrade to legacy ring replay.
@@ -792,7 +807,13 @@ pub async fn dispatch_command(
                                 events,
                             );
                         }
-                        ResumeNativeOutcome::Unsupported if mode_static == "native_or_replay" && matches!(state.resume_policy.native_fallback, crate::config::NativeFallbackPolicy::Fail) => {
+                        ResumeNativeOutcome::Unsupported
+                            if mode_static == "native_or_replay"
+                                && matches!(
+                                    state.resume_policy.native_fallback,
+                                    crate::config::NativeFallbackPolicy::Fail
+                                ) =>
+                        {
                             // Stage R3 — `native_fallback: fail` makes the
                             // unsupported case explicit instead of silently
                             // downshifting to persistence replay. Same shape
@@ -2491,7 +2512,16 @@ pub async fn dispatch_command(
     }
 }
 
-async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
+async fn emit_session_event_inner(
+    handle: &SessionHandleRef,
+    event: ServerEvent,
+    persist: bool,
+) {
+    if persist {
+        if let Some(sink) = handle.persistence.as_ref() {
+            sink.record(&event);
+        }
+    }
     let seq = {
         let mut ring = handle.ring.write().await;
         ring.push(event.clone())
@@ -2499,6 +2529,14 @@ async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
     let mut with_seq = event;
     with_seq.seq = seq;
     let _ = handle.broadcast.send(with_seq);
+}
+
+pub(crate) async fn emit_session_event(handle: &SessionHandleRef, event: ServerEvent) {
+    emit_session_event_inner(handle, event, true).await;
+}
+
+pub(crate) async fn emit_session_event_live(handle: &SessionHandleRef, event: ServerEvent) {
+    emit_session_event_inner(handle, event, false).await;
 }
 
 /// Stage X6 batch C1 — compare the persisted session's recorded
@@ -3326,6 +3364,8 @@ fn config_snapshot_payload(snap: &crate::config::ConfigSnapshot) -> serde_json::
             "servers": snap.mcp.servers,
         },
         "diagnostics": snap.diagnostics,
+        "active_snapshot_retained": snap.active_snapshot_retained,
+        "last_reload_failed_at": snap.last_reload_failed_at,
     })
 }
 
@@ -3421,15 +3461,22 @@ async fn dispatch_config_reload(
             // `config.validate` calls reflect the failed state, but
             // keep the previous policy + summaries — operators still
             // need a working bridge while they fix the YAML.
-            {
+            let failed_at = chrono::Utc::now().to_rfc3339();
+            let last_successful_loaded_at = {
                 let mut guard = state.config_snapshot.write().await;
                 guard.ok = false;
                 guard.diagnostics = diags.clone();
-            }
+                guard.active_snapshot_retained = true;
+                guard.last_reload_failed_at = Some(failed_at.clone());
+                guard.loaded_at.clone()
+            };
             let payload = json!({
                 "scope": "config",
                 "ok": false,
                 "diagnostics": diags,
+                "active_snapshot_retained": true,
+                "last_reload_failed_at": failed_at,
+                "last_successful_loaded_at": last_successful_loaded_at,
             });
             (
                 ServerAck {

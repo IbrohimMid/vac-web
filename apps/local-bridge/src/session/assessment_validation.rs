@@ -100,25 +100,30 @@ pub fn validate_candidate(
         ));
     }
 
-    let identity_hash = required_string(candidate, &["identityHash", "identity_hash"])?;
-    if identity_hash.trim().is_empty() {
-        return Err(rejection(
-            "identity_hash_missing",
-            "identity hash must not be empty".to_string(),
-        ));
-    }
-    let Some(hex) = identity_hash.strip_prefix("sha256:") else {
-        return Err(rejection(
-            "identity_hash_invalid",
-            "identity hash must use sha256:<64 hex>".to_string(),
-        ));
+    let identity_hash = match optional_string(candidate, &["identityHash", "identity_hash"]) {
+        Some(raw) if raw.trim().is_empty() => {
+            return Err(rejection(
+                "identity_hash_missing",
+                "identity hash must not be empty".to_string(),
+            ));
+        }
+        Some(raw) => {
+            let Some(hex) = raw.strip_prefix("sha256:") else {
+                return Err(rejection(
+                    "identity_hash_invalid",
+                    "identity hash must use sha256:<64 hex>".to_string(),
+                ));
+            };
+            if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(rejection(
+                    "identity_hash_invalid",
+                    "identity hash must use sha256:<64 hex>".to_string(),
+                ));
+            }
+            raw
+        }
+        None => format!("sha256:{candidate_hash}"),
     };
-    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(rejection(
-            "identity_hash_invalid",
-            "identity hash must use sha256:<64 hex>".to_string(),
-        ));
-    }
 
     let evidence_entries = required_array(candidate, &["evidence"])?;
     if evidence_entries.is_empty() {
@@ -765,6 +770,30 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.reason, "identity_hash_invalid");
+    }
+
+    #[test]
+    fn computes_missing_identity_hash() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "src/handlers/charge.rs", "line 1\n");
+        let mut tracker = AssessmentValidationTracker::default();
+        let cand = candidate_with("src/handlers/charge.rs", 1, |candidate| {
+            candidate.as_object_mut().unwrap().remove("identityHash");
+        });
+        let expected = format!("sha256:{}", sha256_hex_canonical(&cand));
+        let validated = validate_candidate(
+            root,
+            &mut tracker,
+            "run_01",
+            &cand,
+            "assessment.candidate_received",
+        )
+        .unwrap();
+        assert_eq!(
+            validated.finding_event["identity_hash"].as_str().unwrap(),
+            expected
+        );
     }
 
     #[test]
