@@ -219,6 +219,7 @@ function ReadinessHubMain({ transport }: Props) {
         <h2 style={{ margin: 0, fontSize: 18 }}>Readiness</h2>
         <span style={{ flex: 1 }} />
         <select
+          data-testid="assessment-family-select"
           value={familyToRun}
           onChange={(e) => setFamilyToRun(e.target.value as AssessorFamily)}
           aria-label="Assessor family"
@@ -229,7 +230,11 @@ function ReadinessHubMain({ transport }: Props) {
             </option>
           ))}
         </select>
-        <button onClick={() => run(familyToRun)} disabled={!transport || active?.status === 'running'}>
+        <button
+          data-testid="run-assessment-button"
+          onClick={() => run(familyToRun)}
+          disabled={!transport || active?.status === 'running'}
+        >
           Run {familyToRun}
         </button>
         {defaultAssessmentAgentId && (
@@ -249,10 +254,14 @@ function ReadinessHubMain({ transport }: Props) {
             worker: {defaultAssessmentAgentId}
           </span>
         )}
-        {active?.status === 'running' && <button onClick={cancel}>Cancel</button>}
+        {active?.status === 'running' && (
+          <button data-testid="assessment-cancel-button" onClick={cancel}>
+            Cancel
+          </button>
+        )}
       </header>
       {headerErrors.length > 0 && (
-        <div role="alert" style={hubErrorStackStyle}>
+        <div role="alert" data-testid="assessment-query-error-banner" style={hubErrorStackStyle}>
           {headerErrors.map((failure) => (
             <div
               key={`${failure.action}:${failure.targetId ?? ''}:${failure.ts}`}
@@ -269,6 +278,7 @@ function ReadinessHubMain({ transport }: Props) {
                 failure.action === 'sweep.cancel') && (
                 <button
                   className="btn xs"
+                  data-testid="assessment-query-error-retry"
                   onClick={() => retryHeaderError(failure)}
                   disabled={!transport || !sessionId}
                 >
@@ -292,6 +302,7 @@ function ReadinessHubMain({ transport }: Props) {
       ) : (
         <>
           <select
+            data-testid="assessment-active-run-select"
             aria-label="Active run"
             value={activeRunId ?? ''}
             onChange={(e) => useAssessment.getState().setActive(e.target.value || null)}
@@ -452,6 +463,8 @@ function RecentAssessmentsTimeline({
               return (
                 <div
                   key={sweep.id}
+                  data-testid="assessment-sweep-row"
+                  data-sweep-id={sweep.id}
                   className="timeline-row"
                   style={{
                     borderLeft: isActive ? '3px solid var(--accent)' : undefined,
@@ -506,6 +519,7 @@ function RecentAssessmentsTimeline({
                     {sweep.status === 'running' && (
                       <button
                         className="btn sm ghost"
+                        data-testid="assessment-sweep-cancel-button"
                         onClick={() => void cancelSweep(sweep.id)}
                         aria-label={`Cancel sweep ${sweep.id}`}
                       >
@@ -541,7 +555,7 @@ function RecentAssessmentsTimeline({
               const sevDot =
                 counts.crit > 0 ? 'crit' : counts.high > 0 ? 'high' : counts.total > 0 ? 'med' : 'low';
               return (
-                <div key={r.id} className="timeline-row">
+                <div key={r.id} data-testid="assessment-run-row" data-run-id={r.id} className="timeline-row">
                   <span className={`sev-dot ${sevDot}`}></span>
                   <span className="when">
                     {r.started_at} · <span className="actor">{r.swarm.toUpperCase()}</span>

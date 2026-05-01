@@ -214,6 +214,7 @@ function App() {
                 actions={
                   <button
                     className="btn primary"
+                    data-testid="run-assessment-sweep-button"
                     onClick={() => setRunDrawerOpen(true)}
                     disabled={!transport}
                   >

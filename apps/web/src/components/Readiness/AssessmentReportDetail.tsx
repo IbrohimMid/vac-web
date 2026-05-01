@@ -124,7 +124,7 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   const rejectedCount = run.validation?.rejected ?? 0;
 
   return (
-    <div style={shellStyle}>
+    <div data-testid="assessment-report-detail" style={shellStyle}>
       {workerOutputRejection ? (
         <div
           role="alert"

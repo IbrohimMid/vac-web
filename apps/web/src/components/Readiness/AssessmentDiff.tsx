@@ -63,7 +63,7 @@ export function AssessmentDiff({ prevRunId, nextRunId, transport }: Props) {
   const visible = diff.entries.filter((e) => e.bucket === tab);
 
   return (
-    <div style={shellStyle}>
+    <div data-testid="assessment-diff-view" style={shellStyle}>
       {diffError && !cachedDiff && (
         <div role="alert" style={errorBannerStyle}>
           <strong style={errorTitleStyle}>{reasonLabel(diffError.reason)}</strong>

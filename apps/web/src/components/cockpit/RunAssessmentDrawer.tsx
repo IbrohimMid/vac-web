@@ -138,6 +138,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="Run assessment"
+        data-testid="run-assessment-drawer"
         style={{
           position: 'fixed',
           right: 0,
@@ -195,6 +196,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
           <Section label="Assessment agent" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <select
+              data-testid="assessment-agent-select"
               aria-label="Assessment agent"
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
@@ -246,6 +248,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                 <input
                   type="radio"
                   name="family"
+                  data-testid={`assessment-family-${o.id}`}
                   checked={family === o.id}
                   onChange={() => setFamily(o.id)}
                   style={{ marginTop: 3, accentColor: 'var(--accent)' }}
@@ -272,6 +275,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
             {DEPTH_PRESETS.map((d) => (
               <button
                 key={d.id}
+                data-testid={`assessment-depth-${d.id}`}
                 onClick={() => setDepth(d.id)}
                 className={`btn ${depth === d.id ? 'primary' : ''}`}
                 style={{ flex: 1 }}
@@ -325,6 +329,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
           <div style={{ flex: 1 }} />
           <button
             className="btn primary"
+            data-testid="assessment-run-submit"
             onClick={run}
             disabled={!transport || !sessionId || running}
             style={{ opacity: !transport || !sessionId || running ? 0.5 : 1 }}

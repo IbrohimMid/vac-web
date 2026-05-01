@@ -54,3 +54,41 @@ server on `127.0.0.1:0`, replies to the documented messages, and
 streams scripted events. It uses the same `protocol-rs`-derived TS
 types the real client uses, so any drift in the protocol surfaces as
 a compile error in CI long before the suite runs.
+
+## Testid contract (N4)
+
+The sweep cockpit exposes a small, intentional set of stable
+`data-testid` hooks for end-to-end and visual-regression tests.
+Keep this list in sync with `ReadinessHub.tsx`,
+`RunAssessmentDrawer.tsx`, `AssessmentDiff.tsx`,
+`AssessmentReportDetail.tsx`, and `main.tsx`.
+
+| testid | Where | What it points at |
+|--------|-------|-------------------|
+| `run-assessment-sweep-button` | `main.tsx` (Readiness surface header) | The primary "Run sweep" CTA that opens `RunAssessmentDrawer`. |
+| `run-assessment-drawer` | `RunAssessmentDrawer.tsx` | The drawer `<aside role="dialog">`. Lets specs scope queries to the open drawer. |
+| `assessment-agent-select` | drawer | `<select>` for picking the assessment agent. |
+| `assessment-family-${id}` | drawer | One radio input per family (`rtd`, `security`, `cost`, `all`, ...). The id suffix is the family id. |
+| `assessment-depth-${id}` | drawer | One button per depth preset (`quick`, `standard`, `deep`, ...). |
+| `assessment-run-submit` | drawer footer | The drawer's primary submit button. |
+| `assessment-family-select` | `ReadinessHub.tsx` header | Inline `<select>` for the single-family quick-run path. |
+| `run-assessment-button` | hub header | Inline "Run {family}" button next to the family select. |
+| `assessment-cancel-button` | hub header | Cancel button shown while the active run is `running`. |
+| `assessment-query-error-banner` | hub header | The `role="alert"` stack rendered when `queryErrors` are non-empty. |
+| `assessment-query-error-retry` | inside the banner | Retry CTA on a recoverable query failure. |
+| `assessment-active-run-select` | hub body | `<select>` for switching the active run. |
+| `assessment-sweep-row` | sweep history timeline | One row per sweep. Carries `data-sweep-id` for disambiguation. |
+| `assessment-sweep-cancel-button` | sweep row | Cancel button on a `running` sweep row. |
+| `assessment-run-row` | recent assessments timeline | One row per run. Carries `data-run-id` for disambiguation. |
+| `assessment-diff-view` | `AssessmentDiff.tsx` root | The 4-tab diff shell (resolved / persistent / regressed / new). |
+| `assessment-report-detail` | `AssessmentReportDetail.tsx` outer shell | The two-column report view. |
+| `assessment-worker-output-rejection` | inside the report shell (N3) | The warn-tone banner rendered when `assessment.worker_output_rejected` lands for the visible run. Carries the Replay + Dismiss CTAs. |
+
+### Why testids and not text
+
+Text selectors are still used for assertions about *what the cockpit
+renders* ("the row says `TLS missing on staging endpoint`", "the
+banner mentions persistence", "finding text streams in"). Testids are
+used for navigation — "click the Run button", "click the Cancel button
+on the running sweep". If a spec is selecting an action element by
+text, that's a refactor target.

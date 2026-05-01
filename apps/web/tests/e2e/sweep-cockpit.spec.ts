@@ -17,11 +17,11 @@
  *      store reads),
  *   4. asserts on user-visible strings.
  *
- * Selectors prefer ARIA roles + accessible names. Where the DOM does
- * not yet expose stable testids (the Readiness hub uses inline rich
- * text without `data-testid` today), specs match on the strings
- * `ReadinessHub` actually renders. If the UI copy changes, update the
- * specs intentionally.
+ * Selectors prefer stable `data-testid` hooks for action targets
+ * (Run / Run sweep / Cancel / Retry buttons, sweep-history rows).
+ * Content assertions (row labels, finding text, banner copy) stay on
+ * `getByText` because the spec is verifying that the UI renders that
+ * exact copy. The testid contract is documented in `README.md`.
  */
 
 import { test, expect, Page } from '@playwright/test'
@@ -75,7 +75,7 @@ test.describe('sweep cockpit', () => {
 
 	test('running a single-family assessment shows live progress', async ({ page }) => {
 		bridge = await bootCockpit(page)
-		await page.getByRole('button', { name: /run/i }).first().click()
+		await page.getByTestId('run-assessment-button').click()
 		await expect(page.getByText(/discovery|pass 1\/2/i)).toBeVisible()
 		await expect(page.getByText('Mock finding from live run', { exact: false })).toBeVisible()
 		await expect(page.getByText(/completed|pass 2\/2/i)).toBeVisible()
@@ -83,15 +83,15 @@ test.describe('sweep cockpit', () => {
 
 	test('sweep run streams progress per family', async ({ page }) => {
 		bridge = await bootCockpit(page)
-		await page.getByRole('button', { name: /sweep/i }).first().click()
+		await page.getByTestId('run-assessment-sweep-button').click()
 		await expect(page.getByText(/rtd[\s\S]*security|security[\s\S]*rtd/i)).toBeVisible()
 		await expect(page.getByText(/2\s*\/\s*2|completed/i)).toBeVisible()
 	})
 
 	test('cancelling a sweep transitions it to cancelled', async ({ page }) => {
 		bridge = await bootCockpit(page)
-		await page.getByRole('button', { name: /sweep/i }).first().click()
-		const cancelBtn = page.getByRole('button', { name: /cancel/i }).first()
+		await page.getByTestId('run-assessment-sweep-button').click()
+		const cancelBtn = page.getByTestId('assessment-sweep-cancel-button').first()
 		await cancelBtn.click()
 		await expect(page.getByText('cancelled', { exact: false })).toBeVisible()
 	})
@@ -107,7 +107,7 @@ test.describe('sweep cockpit', () => {
 			],
 		})
 		await expect(page.getByText(/persistence|backend unavailable/i)).toBeVisible()
-		const retry = page.getByRole('button', { name: /retry/i }).first()
+		const retry = page.getByTestId('assessment-query-error-retry').first()
 		await expect(retry).toBeVisible()
 		await retry.click()
 		// Banner stays because the mock keeps returning the failure for the
