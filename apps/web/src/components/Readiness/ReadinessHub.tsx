@@ -93,6 +93,14 @@ export function ReadinessHub({ transport }: Props) {
   return <ReadinessHubMain transport={transport} />;
 }
 
+
+function verdictBadgeClass(v: string | undefined) {
+  if (v === 'pass') return 'ok';
+  if (v === 'warn') return 'warn';
+  if (v === 'fail') return 'crit';
+  return '';
+}
+
 function ReadinessHubMain({ transport }: Props) {
   const runs = useAssessment((s) => s.runs);
   const runOrder = useAssessment((s) => s.runOrder);
@@ -215,51 +223,79 @@ function ReadinessHubMain({ transport }: Props) {
   }, [findings, active, minSev, categoryFilter]);
 
   return (
-    <div style={{ padding: 8 }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Readiness</h2>
-        <span style={{ flex: 1 }} />
-        <select
-          data-testid="assessment-family-select"
-          value={familyToRun}
-          onChange={(e) => setFamilyToRun(e.target.value as AssessorFamily)}
-          aria-label="Assessor family"
-        >
-          {ASSESSOR_FAMILIES.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </select>
-        <button
-          data-testid="run-assessment-button"
-          onClick={() => run(familyToRun)}
-          disabled={!transport || active?.status === 'running'}
-        >
-          Run {familyToRun}
-        </button>
-        {defaultAssessmentAgentId && (
-          <span
-            className="badge"
-            title={describeAssessmentAgent(
-              advertisedAgents.find((agent) => agent.id === defaultAssessmentAgentId) ??
-              advertisedAgents[0] ??
-              {
-                id: defaultAssessmentAgentId,
-                label: defaultAssessmentAgentId,
-                kind: 'unknown',
-                default: false,
-              },
+    <div className="readiness-shell">
+      <header className="readiness-hero">
+        <div className="readiness-hero-top">
+          <div className="readiness-title-block">
+            <h2>Readiness Hub</h2>
+            <div className="subtitle">
+              Run assessment workflows, inspect evidence-backed findings, and recover reports from the assessment index.
+            </div>
+          </div>
+          <div className="readiness-actions">
+            <select
+              className="readiness-action-select"
+              data-testid="assessment-family-select"
+              value={familyToRun}
+              onChange={(e) => setFamilyToRun(e.target.value as AssessorFamily)}
+              aria-label="Assessor family"
+            >
+              {ASSESSOR_FAMILIES.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn primary"
+              data-testid="run-assessment-button"
+              onClick={() => run(familyToRun)}
+              disabled={!transport || active?.status === 'running'}
+            >
+              Run {familyToRun}
+            </button>
+            {active?.status === 'running' && (
+              <button className="btn ghost" data-testid="assessment-cancel-button" onClick={cancel}>
+                Cancel active run
+              </button>
             )}
-          >
-            worker: {defaultAssessmentAgentId}
-          </span>
-        )}
-        {active?.status === 'running' && (
-          <button data-testid="assessment-cancel-button" onClick={cancel}>
-            Cancel
-          </button>
-        )}
+          </div>
+        </div>
+        <div className="readiness-hero-meta">
+          {active ? (
+            <>
+              <span className={`badge ${active.verdict ? verdictBadgeClass(active.verdict) : ''}`}>
+                {active.verdict ? `Verdict: ${active.verdict}` : `Status: ${active.status}`}
+              </span>
+              <AssessmentProvenanceChip
+                {...(active as typeof active & {
+                  query_source?: 'index' | 'event_log';
+                  fallback_reason?: 'index_missing' | 'index_incomplete' | 'index_error' | null;
+                })}
+                testId="assessment-provenance-chip"
+              />
+            </>
+          ) : (
+            <span className="badge">No active run</span>
+          )}
+          {defaultAssessmentAgentId && (
+            <span
+              className="badge"
+              title={describeAssessmentAgent(
+                advertisedAgents.find((agent) => agent.id === defaultAssessmentAgentId) ??
+                advertisedAgents[0] ??
+                {
+                  id: defaultAssessmentAgentId,
+                  label: defaultAssessmentAgentId,
+                  kind: 'unknown',
+                  default: false,
+                },
+              )}
+            >
+              Default worker: {defaultAssessmentAgentId}
+            </span>
+          )}
+        </div>
       </header>
       {headerErrors.length > 0 && (
         <div role="alert" data-testid="assessment-query-error-banner" style={hubErrorStackStyle}>
@@ -297,18 +333,20 @@ function ReadinessHubMain({ transport }: Props) {
         </div>
       )}
       {runOrder.length === 0 ? (
-        <div style={{ color: 'var(--text-2)', padding: 16 }}>
-          No runs yet — pick a family and click Run.
+        <div className="readiness-empty">
+          <strong>No assessment runs yet.</strong>
+          <div>Pick a family for a single-family run, or use the drawer to launch a multi-family Gemini ACP sweep.</div>
         </div>
       ) : (
         <>
-          <select
-            data-testid="assessment-active-run-select"
-            aria-label="Active run"
-            value={activeRunId ?? ''}
-            onChange={(e) => useAssessment.getState().setActive(e.target.value || null)}
-            style={{ marginBottom: 8 }}
-          >
+          <div className="readiness-control-strip">
+            <select
+              className="readiness-active-select"
+              data-testid="assessment-active-run-select"
+              aria-label="Active run"
+              value={activeRunId ?? ''}
+              onChange={(e) => useAssessment.getState().setActive(e.target.value || null)}
+            >
             {runOrder.map((id) => {
               const r = runs.get(id);
               return (
@@ -317,7 +355,9 @@ function ReadinessHubMain({ transport }: Props) {
                 </option>
               );
             })}
-          </select>
+            </select>
+            <span className="muted">Active report context</span>
+          </div>
           {active && <VerdictHeader run={active} />}
           {active && <Scorecards score={active.score} />}
           <ProgressBar run={active ?? null} />
@@ -388,13 +428,6 @@ function RecentAssessmentsTimeline({
     else if (f.severity === 'high') cur.high++;
     countByRun.set(f.run_id, cur);
   }
-
-  const verdictBadge = (v: string | undefined) => {
-    if (v === 'pass') return 'ok';
-    if (v === 'warn') return 'warn';
-    if (v === 'fail') return 'crit';
-    return '';
-  };
 
   const openRunReport = async (runId: string) => {
     if (transport && sessionId) {
@@ -477,9 +510,9 @@ function RecentAssessmentsTimeline({
                   <span className="when">
                     {sweep.started_at} · <span className="actor">{familiesLabel}</span>
                   </span>
-                  <span>
-                    <strong>{sweep.id.slice(0, 12)}</strong>{' '}
-                    <span className="muted">
+                  <span className="assessment-row-main">
+                    <span className="assessment-row-title">Multi-family sweep · {sweep.id.slice(0, 12)}</span>
+                    <span className="assessment-row-meta">
                       {sweep.status} · {sweepPolicyLabel}
                       {typeof sweep.running_count === 'number' || typeof sweep.pending_count === 'number'
                         ? ` · ${sweep.running_count ?? 0} running · ${sweep.pending_count ?? 0} pending · ${sweep.completed_count ?? sweep.progress.completed} done`
@@ -488,15 +521,11 @@ function RecentAssessmentsTimeline({
                         ? ` · ${Object.values(sweep.counts).reduce((acc, value) => acc + (typeof value === 'number' ? value : 0), 0)} signals`
                         : ''}
                     </span>
-                    {primaryRun && (
-                      <span className="badge" style={{ marginLeft: 6 }}>
-                        {primaryRun.swarm}
-                      </span>
-                    )}
+                    {primaryRun && <span className="badge">Primary run: {primaryRun.swarm}</span>}
                   </span>
-                  {sweep.verdict && <span className={`badge ${verdictBadge(sweep.verdict)}`}>{sweep.verdict}</span>}
+                  {sweep.verdict && <span className={`badge ${verdictBadgeClass(sweep.verdict)}`}>{sweep.verdict}</span>}
                   {isActive && <span className="badge accent">active</span>}
-                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div className="assessment-row-actions">
                     <button
                       className="btn sm ghost"
                       onClick={() => sweepRunId && void openRunReport(sweepRunId)}
@@ -565,24 +594,17 @@ function RecentAssessmentsTimeline({
                   <span className="when">
                     {r.started_at} · <span className="actor">single-family run · {r.swarm.toUpperCase()}</span>
                   </span>
-                  <span>
-                    <strong>
-                      {r.swarm} · {r.status}
-                    </strong>
-                    {r.agent_id && (
-                      <span className="badge" style={{ marginLeft: 6 }}>
-                        {r.agent_id}
-                      </span>
-                    )}
-                    {' '}
-                    <span className="muted">
+                  <span className="assessment-row-main">
+                    <span className="assessment-row-title">{r.swarm.toUpperCase()} · {r.status}</span>
+                    <span className="assessment-row-meta">
                       {counts.total} finding{counts.total === 1 ? '' : 's'}
                       {counts.crit > 0 && ` · ${counts.crit} critical`}
                       {counts.high > 0 && ` · ${counts.high} high`}
                     </span>
+                    {r.agent_id && <span className="badge">Worker: {r.agent_id}</span>}
                   </span>
-                  {r.verdict && <span className={`badge ${verdictBadge(r.verdict)}`}>{r.verdict}</span>}
-                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {r.verdict && <span className={`badge ${verdictBadgeClass(r.verdict)}`}>{r.verdict}</span>}
+                  <div className="assessment-row-actions">
                     <button
                       className="btn sm ghost"
                       onClick={() => void openRunReport(r.id)}
@@ -627,34 +649,26 @@ function VerdictHeader({ run }: { run: { verdict?: Verdict; status: string; swar
     fallback_reason?: 'index_missing' | 'index_incomplete' | 'index_error' | null;
   };
   return (
-    <div
-      style={{
-        padding: 12,
-        borderRadius: 6,
-        border: `1px solid ${VERDICT_COLOR[v]}`,
-        marginBottom: 8,
-      }}
-    >
-      <strong style={{ color: VERDICT_COLOR[v], textTransform: 'uppercase' }}>
-        {run.swarm} · {v}
-      </strong>
-      <span style={{ marginLeft: 8, color: 'var(--text-2)', fontSize: 12 }}>{run.status}</span>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-        <AssessmentProvenanceChip
-          {...extendedRun}
-          testId="assessment-provenance-chip"
-        />
-        {extendedRun.agent_id && <span className="badge">{extendedRun.agent_id}</span>}
-        {extendedRun.agent_kind && <span className="badge">{extendedRun.agent_kind}</span>}
-        {extendedRun.worker_session_id && (
-          <span className="badge">worker {extendedRun.worker_session_id.slice(0, 8)}</span>
-        )}
+    <div className={`readiness-verdict-card ${verdictBadgeClass(v)}`}>
+      <div className="readiness-verdict-main">
+        <strong style={{ color: VERDICT_COLOR[v] }}>{run.swarm} · {v}</strong>
+        <span className="badge">{run.status}</span>
         {extendedRun.verdict_detail?.delivery_state && (
-          <span className="badge">{extendedRun.verdict_detail.delivery_state}</span>
+          <span className="badge accent">{extendedRun.verdict_detail.delivery_state}</span>
         )}
         {extendedRun.failure?.reason && (
           <span className={`badge ${extendedRun.failure.status === 'cancelled' ? 'warn' : 'crit'}`}>
             {extendedRun.failure.reason}
+          </span>
+        )}
+      </div>
+      <div className="readiness-debug-chips">
+        <AssessmentProvenanceChip {...extendedRun} testId="assessment-provenance-chip" />
+        {extendedRun.agent_id && <span className="badge debug-only">Worker: {extendedRun.agent_id}</span>}
+        {extendedRun.agent_kind && <span className="badge debug-only">{extendedRun.agent_kind}</span>}
+        {extendedRun.worker_session_id && (
+          <span className="badge debug-only" title={extendedRun.worker_session_id}>
+            session {extendedRun.worker_session_id.slice(0, 8)}
           </span>
         )}
       </div>
@@ -679,7 +693,7 @@ function Scorecards({ score }: { score: Record<Category, number> | undefined }) 
             key={c}
             style={{
               padding: 8,
-              border: '1px solid var(--border-1, #2a2a2a)',
+              border: '1px solid var(--line)',
               borderRadius: 6,
             }}
           >

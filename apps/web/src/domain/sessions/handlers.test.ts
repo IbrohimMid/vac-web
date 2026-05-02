@@ -39,19 +39,7 @@ function mockTransport() {
 
 describe('session handlers', () => {
   beforeEach(() => {
-    useSession.setState({
-      sessionId: null,
-      profileId: null,
-      projectRoot: null,
-      workflowId: null,
-      workflowName: null,
-      agentId: null,
-      agentKind: null,
-      authMethods: [],
-      authStatus: 'idle',
-      authError: null,
-      lastAuthMethodId: null,
-    });
+    useSession.getState().clear();
     useSessions.setState({ rows: [] });
   });
 
@@ -85,6 +73,52 @@ describe('session handlers', () => {
     const authMethod = useSession.getState().authMethods[0]!;
     expect(authMethod.type).toBe('agent');
     expect(authMethod.name).toBe('Log in with Claude Code');
+
+    off();
+  });
+
+
+  it('captures ACP model metadata and available slash commands', () => {
+    const { t, emit } = mockTransport();
+    const off = registerSessionHandlers(t);
+
+    emit('session.ready', {
+      id: 'sess_01',
+      session_id: 'sess_01',
+      profile_id: 'executor.code@1.0.0',
+      agent_id: 'gemini-acp',
+      agent_kind: 'acp',
+      models: [{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 }],
+      modes: [{ id: 'gemini-2.5-pro' }],
+      config_options: [{ id: 'model', value: 'gemini-2.5-pro' }],
+      model_id: 'gemini-2.5-pro',
+    });
+
+    expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-pro');
+    expect(useSession.getState().acpModel.models).toEqual([
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 },
+    ]);
+
+    emit('session.available_commands.updated', {
+      commands: [
+        { name: 'compact', title: 'Compact context', description: 'Summarize old context' },
+        { id: 'memory-show', description: 'Show memory' },
+      ],
+    });
+
+    expect(useSession.getState().acpCommands.map((c) => c.slash)).toEqual([
+      '/compact',
+      '/memory-show',
+    ]);
+    expect(useSession.getState().acpCommands[0]?.title).toBe('Compact context');
+
+    emit('session.mode.updated', { mode_id: 'gemini-2.5-flash' });
+    expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-flash');
+
+    emit('session.config_options.updated', { options: [{ id: 'model', value: 'gemini-2.5-flash' }] });
+    expect(useSession.getState().acpModel.configOptions).toEqual([
+      { id: 'model', value: 'gemini-2.5-flash' },
+    ]);
 
     off();
   });

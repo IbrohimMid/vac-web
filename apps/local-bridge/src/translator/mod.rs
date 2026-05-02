@@ -1,5 +1,6 @@
 //! Command dispatch (WS client → session) + envelope translation.
 
+use crate::agent_runtime::acp::types::{SetConfigOptionRequest, SetSessionModeRequest};
 use crate::agent_runtime::acp::{sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS};
 use crate::audit::log_tool_event;
 use crate::handoff::packet::{ExecutionOutcome, TaskExecutionProgress};
@@ -39,6 +40,9 @@ fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
         let obj = payload.as_object_mut().unwrap();
         obj.insert("agent_capabilities".into(), acp.agent_capabilities.clone());
         obj.insert("agent_info".into(), acp.agent_info.clone());
+        obj.insert("models".into(), acp.models.clone());
+        obj.insert("modes".into(), acp.modes.clone());
+        obj.insert("config_options".into(), acp.config_options.clone());
     }
     payload
 }
@@ -414,6 +418,182 @@ pub async fn dispatch_command(
                 },
                 events,
             )
+        }
+        "session.mode.set" => {
+            let Some(handle) = state.sessions.get(&cmd.session_id) else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            let Some(acp) = handle.acp.as_ref() else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_acp".into(),
+                            message: "session.mode.set requires an ACP session".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            let Some(mode_id) = cmd
+                .payload
+                .get("mode_id")
+                .or_else(|| cmd.payload.get("modeId"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.mode_id_required".into(),
+                            message: "mode_id is required".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            match acp
+                .client
+                .set_session_mode(SetSessionModeRequest {
+                    session_id: acp.acp_session_id.clone(),
+                    mode_id: mode_id.clone(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "session.mode.updated".into(),
+                        payload: json!({ "mode_id": mode_id, "source": "client" }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        events,
+                    )
+                }
+                Err(err) => (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.mode_set_failed".into(),
+                            message: err.to_string(),
+                        }),
+                    },
+                    events,
+                ),
+            }
+        }
+        "session.config_option.set" => {
+            let Some(handle) = state.sessions.get(&cmd.session_id) else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_found".into(),
+                            message: cmd.session_id.clone(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            let Some(acp) = handle.acp.as_ref() else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.not_acp".into(),
+                            message: "session.config_option.set requires an ACP session".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            let Some(option_id) = cmd
+                .payload
+                .get("option_id")
+                .or_else(|| cmd.payload.get("optionId"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            else {
+                return (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.option_id_required".into(),
+                            message: "option_id is required".into(),
+                        }),
+                    },
+                    events,
+                );
+            };
+            let value = cmd
+                .payload
+                .get("value")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            match acp
+                .client
+                .set_config_option(SetConfigOptionRequest {
+                    session_id: acp.acp_session_id.clone(),
+                    option_id: option_id.clone(),
+                    value: value.clone(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    events.push(ServerEvent {
+                        seq: 0,
+                        session_id: cmd.session_id.clone(),
+                        event_type: "session.config_options.updated".into(),
+                        payload: json!({ "option_id": option_id, "value": value, "source": "client" }),
+                        v: 1,
+                        ts: chrono::Utc::now().to_rfc3339(),
+                    });
+                    (
+                        ServerAck {
+                            ack_of: cmd.id.clone(),
+                            ok: true,
+                            error: None,
+                        },
+                        events,
+                    )
+                }
+                Err(err) => (
+                    ServerAck {
+                        ack_of: cmd.id.clone(),
+                        ok: false,
+                        error: Some(ErrorInfo {
+                            code: "session.config_option_set_failed".into(),
+                            message: err.to_string(),
+                        }),
+                    },
+                    events,
+                ),
+            }
         }
         "config.policy.get" => {
             // Stage R3 — expose the active session-resume policy to the

@@ -69,7 +69,7 @@ export function Workbench({ panes }: Props) {
         style={{
           display: 'flex',
           gap: 2,
-          borderBottom: '1px solid var(--border-1, #2a2a2a)',
+          borderBottom: '1px solid var(--line)',
         }}
       >
         {TABS.map((t) => {

@@ -134,6 +134,39 @@ pub struct LoadSessionResponse {
     pub meta: Value,
 }
 
+// --- session/set_mode + session/set_config_option ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SetSessionModeRequest {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    #[serde(rename = "modeId")]
+    pub mode_id: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionModeResponse {
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SetConfigOptionRequest {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    #[serde(rename = "optionId")]
+    pub option_id: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetConfigOptionResponse {
+    #[serde(default, rename = "_meta")]
+    pub meta: Value,
+}
+
 // --- session/prompt ---
 
 #[derive(Debug, Clone, Serialize)]

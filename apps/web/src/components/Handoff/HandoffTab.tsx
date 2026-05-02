@@ -24,7 +24,7 @@ export function HandoffTab({ transport }: Props) {
     <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 8 }}>
       <aside
         aria-label="Packet list"
-        style={{ borderRight: '1px solid var(--border-1, #2a2a2a)', paddingRight: 6 }}
+        style={{ borderRight: '1px solid var(--line)', paddingRight: 6 }}
       >
         <button
           onClick={() => {

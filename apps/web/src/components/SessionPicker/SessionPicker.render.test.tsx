@@ -1,16 +1,20 @@
 // @vitest-environment happy-dom
 /// <reference types="@testing-library/jest-dom" />
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionPicker } from './SessionPicker';
 import { useSession } from '../../stores/session';
+import { useAgentSession } from '../../stores/agentSession';
+import { useTranscript } from '../../stores/transcript';
 import type { AvailableAgent, TransportHandle } from '../../transport';
 
 // SessionPicker reads `agentId` from useSession to decide whether the
 // active-session badge should render. Resetting the slice keeps each
 // test isolated.
 function resetSession() {
+  useAgentSession.getState().clear();
+  useTranscript.getState().clear();
   useSession.setState({
     sessionId: null,
     profileId: null,
@@ -171,6 +175,93 @@ describe('SessionPicker provider picker', () => {
     // working.
     render(<SessionPicker transport={makeTransport([CLAUDE, GEMINI])} />);
     expect(screen.queryByTestId('agent-install-hint')).toBeNull();
+  });
+
+
+  it('continues an active Gemini session in another advertised CLI agent', async () => {
+    useSession.setState({
+      sessionId: 'sess_gemini',
+      profileId: 'executor.code@1.0.0',
+      projectRoot: '/repo',
+      workflowId: 'build.observe-tools',
+      workflowName: 'Tool Observation',
+      agentId: 'gemini-acp',
+      agentKind: 'acp',
+      authMethods: [],
+      authStatus: 'idle',
+      authError: null,
+      lastAuthMethodId: null,
+    });
+    useAgentSession.getState().beginTurn({
+      sessionId: 'sess_gemini',
+      userText: 'audit repo saya secara menyeluruh',
+      provider: 'gemini-acp',
+      at: '2026-05-02T00:00:00.000Z',
+    });
+    useAgentSession.getState().appendAssistantDelta(
+      'sess_gemini',
+      'Initial audit started with Gemini.',
+      '2026-05-02T00:00:01.000Z',
+    );
+
+    const handlers = new Map<string, Parameters<TransportHandle['on']>[1]>();
+    const send = vi.fn(async () => ({ ackOf: 'cmd_x', ok: true }));
+    const transport: TransportHandle = {
+      send,
+      on: (type, handler) => {
+        handlers.set(type, handler);
+        return () => handlers.delete(type);
+      },
+      availableAgents: () => [CLAUDE, GEMINI],
+      close: () => {},
+    };
+
+    render(<SessionPicker transport={transport} />);
+
+    expect(screen.getByTestId('cross-agent-continuation')).toHaveTextContent(
+      'Continue with another CLI agent',
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Continue in selected agent/ }));
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const createCall = send.mock.calls[0] as unknown as [string, string, Record<string, unknown>];
+    expect(createCall[1]).toBe('session.create');
+    expect(createCall[2]).toMatchObject({
+      profile_id: 'executor.code@1.0.0',
+      project_root: '/repo',
+      workflow_id: 'build.observe-tools',
+      agent_id: 'claude-acp',
+      continuation_of: 'sess_gemini',
+    });
+
+    const ready = handlers.get('session.ready');
+    expect(ready).toBeTruthy();
+    ready?.({
+      seq: 1,
+      session_id: 'sess_claude',
+      type: 'session.ready',
+      payload: {
+        session_id: 'sess_claude',
+        profile_id: 'executor.code@1.0.0',
+        project_root: '/repo',
+        workflow_id: 'build.observe-tools',
+        agent_id: 'claude-acp',
+        agent_kind: 'acp',
+      },
+      v: 1,
+      ts: '2026-05-02T00:00:02.000Z',
+    });
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    const submitCall = send.mock.calls[1] as unknown as [string, string, Record<string, unknown>];
+    expect(submitCall[0]).toBe('sess_claude');
+    expect(submitCall[1]).toBe('message.submit');
+    expect(submitCall[2].text).toContain('cross-agent continuation');
+    expect(submitCall[2].text).toContain('Source VAC session: sess_gemini');
+    expect(submitCall[2].text).toContain('Source agent: gemini-acp');
+    expect(submitCall[2].text).toContain('Target agent: claude-acp');
+    expect(submitCall[2].text).toContain('audit repo saya secara menyeluruh');
+    expect(submitCall[2]).toMatchObject({ attachments: [], mentions: [] });
   });
 
   it('renders the warning without an install_hint sentence when the bridge omitted it', () => {

@@ -106,6 +106,12 @@ pub struct AcpRuntime {
     pub(crate) agent_capabilities: serde_json::Value,
     /// Agent info from initialize response.
     pub(crate) agent_info: serde_json::Value,
+    /// ACP session/new model list snapshot. Shape is adapter-defined.
+    pub(crate) models: serde_json::Value,
+    /// ACP session/new mode list snapshot. Shape is adapter-defined.
+    pub(crate) modes: serde_json::Value,
+    /// ACP session/new config options snapshot. Shape is adapter-defined.
+    pub(crate) config_options: serde_json::Value,
     /// Active terminal handles for ACP terminal/* methods.
     #[allow(dead_code)]
     pub(crate) terminals: Arc<
@@ -2020,20 +2026,31 @@ impl SessionHandle {
         // up-front. The actual `session/load` RPC is deferred until
         // after pumps are spawned (so streamed `session/update`
         // notifications during replay aren't dropped).
-        let acp_session_id = if let Some(req) = opts.resume_native.as_ref() {
-            req.agent_session_id.clone()
-        } else {
-            let new_req = NewSessionRequest {
-                cwd: opts
-                    .project_root
-                    .to_str()
-                    .ok_or_else(|| anyhow::anyhow!("project_root not utf-8"))?
-                    .to_string(),
-                mcp_servers: opts.agent.mcp_servers.clone(),
+        let (acp_session_id, acp_models, acp_modes, acp_config_options) =
+            if let Some(req) = opts.resume_native.as_ref() {
+                (
+                    req.agent_session_id.clone(),
+                    serde_json::Value::Null,
+                    serde_json::Value::Null,
+                    serde_json::Value::Null,
+                )
+            } else {
+                let new_req = NewSessionRequest {
+                    cwd: opts
+                        .project_root
+                        .to_str()
+                        .ok_or_else(|| anyhow::anyhow!("project_root not utf-8"))?
+                        .to_string(),
+                    mcp_servers: opts.agent.mcp_servers.clone(),
+                };
+                let new_resp = client.new_session(new_req).await?;
+                (
+                    new_resp.session_id.clone(),
+                    new_resp.models,
+                    new_resp.modes,
+                    new_resp.config_options,
+                )
             };
-            let new_resp = client.new_session(new_req).await?;
-            new_resp.session_id.clone()
-        };
 
         // Wire the rest of the bridge state.
         let state = Arc::new(StateHolder::new());
@@ -2064,6 +2081,9 @@ impl SessionHandle {
             auth_methods,
             agent_capabilities: init.agent_capabilities.clone(),
             agent_info: init.agent_info.clone(),
+            models: acp_models,
+            modes: acp_modes,
+            config_options: acp_config_options,
             terminals: Arc::new(dashmap::DashMap::new()),
             pending_approvals: dashmap::DashMap::new(),
             permission_timeout_ms: opts.agent.permission_timeout_ms,

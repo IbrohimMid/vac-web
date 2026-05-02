@@ -12,6 +12,9 @@ export interface ActionSpec {
   palette_visible: boolean;
   required_capabilities: string[];
   available_when?: string | null;
+  source?: 'vac' | 'acp';
+  insert_text?: string | null;
+  acp_command?: unknown;
 }
 
 interface RegistrySlice {

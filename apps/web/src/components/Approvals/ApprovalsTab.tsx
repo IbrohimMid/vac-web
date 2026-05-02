@@ -93,7 +93,16 @@ export function ApprovalsTab({ transport }: Props) {
   }
 
   return (
-    <div style={{ padding: 8 }}>
+    <div className="screen-shell">
+      <header className="screen-hero">
+        <div className="screen-hero-row">
+          <div>
+            <h3 className="screen-title">Approvals</h3>
+            <div className="screen-subtitle">Review and approve tool calls before they execute against the local workspace.</div>
+          </div>
+          <span className="badge">{pendingOrder.length} pending</span>
+        </div>
+      </header>
       {pendingOrder.length > 0 && (
         <>
           <div
@@ -109,7 +118,7 @@ export function ApprovalsTab({ transport }: Props) {
               Approve all
             </button>
           </div>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul className="soft-list panel-card">
             {pendingOrder.map((id) => {
               const tc = pending.get(id);
               if (!tc) return null;
@@ -133,7 +142,7 @@ export function ApprovalsTab({ transport }: Props) {
           >
             Resolved approvals ({resolvedOrder.length})
           </div>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul className="soft-list panel-card">
             {resolvedOrder.map((id) => {
               const item = resolved.get(id);
               if (!item) return null;
@@ -160,7 +169,7 @@ function ApprovalRow({
   return (
     <li
       style={{
-        border: '1px solid var(--border-1, #2a2a2a)',
+        border: '1px solid var(--line)',
         borderRadius: 6,
         padding: 8,
         marginBottom: 6,
@@ -223,7 +232,7 @@ function ResolvedApprovalRow({ item }: { item: ApprovalResolution }) {
   return (
     <li
       style={{
-        border: '1px solid var(--border-1, #2a2a2a)',
+        border: '1px solid var(--line)',
         borderRadius: 6,
         padding: 8,
         marginBottom: 6,

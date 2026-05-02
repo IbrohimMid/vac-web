@@ -105,8 +105,9 @@ export function HandoffBuilder({ transport }: Props) {
 
   if (runFindings.length === 0) {
     return (
-      <div style={{ padding: 16, color: 'var(--text-2)' }}>
-        No eligible findings (severity ≥ medium) in the active run.
+      <div className="soft-empty">
+        <strong>No eligible findings.</strong>
+        <div>Run an assessment with medium-or-higher findings before building a handoff packet.</div>
       </div>
     );
   }
@@ -115,12 +116,20 @@ export function HandoffBuilder({ transport }: Props) {
   const sourceRunCount = draft.source_run_ids.length;
 
   return (
-    <div style={{ padding: 8 }}>
-      <h3 style={{ margin: '4px 0' }}>Build handoff packet</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+    <div className="screen-shell">
+      <header className="screen-hero">
+        <div className="screen-hero-row">
+          <div>
+            <h3 className="screen-title">Build handoff packet</h3>
+            <div className="screen-subtitle">Package validated findings, pin context, and generated tasks for executor handoff.</div>
+          </div>
+          <span className="badge">{selected.size} selected</span>
+        </div>
+      </header>
+      <div className="handoff-form-grid">
         <label>
           Title{' '}
-          <input value={title} onChange={(e) => setTitle(e.target.value)} style={{ width: '100%' }} />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} />
         </label>
         <label>
           Author{' '}
@@ -128,7 +137,6 @@ export function HandoffBuilder({ transport }: Props) {
             value={authorName}
             onChange={(e) => setAuthorName(e.target.value)}
             placeholder="your name"
-            style={{ width: '100%' }}
           />
         </label>
         <label>
@@ -146,10 +154,10 @@ export function HandoffBuilder({ transport }: Props) {
           </select>
         </label>
       </div>
-      <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
-        <section style={{ border: '1px solid var(--border-1, #2a2a2a)', borderRadius: 6, padding: 10 }}>
-          <strong>Pin preview</strong>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
+      <div className="handoff-summary-grid">
+        <section className="handoff-section">
+          <h4 className="handoff-section-title">Pin preview</h4>
+          <div className="kv-stack">
             <div>
               repo ref: <code>{draft.pin.repo_ref || '(bridge will derive from project root)'}</code>
             </div>
@@ -178,19 +186,19 @@ export function HandoffBuilder({ transport }: Props) {
             </div>
           </div>
           {pinComputedByBridge && (
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-2)' }}>
+            <div className="panel-subtitle">
               Worktree digest is computed by the bridge when the draft is created.
             </div>
           )}
           {sourceRunCount > 1 && (
-            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--sev-warn)' }}>
+            <div className="handoff-note-warn">
               Selected findings span {sourceRunCount} runs; the draft pin uses the primary run metadata.
             </div>
           )}
         </section>
-        <section style={{ border: '1px solid var(--border-1, #2a2a2a)', borderRadius: 6, padding: 10 }}>
-          <strong>Draft summary</strong>
-          <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
+        <section className="handoff-section">
+          <h4 className="handoff-section-title">Draft summary</h4>
+          <div className="kv-stack">
             <div>source runs: <code>{draft.source_run_ids.length}</code></div>
             <div>accepted findings: <code>{draft.accepted_finding_ids.length}</code></div>
             <div>approval: <code>{draft.approval.required ? 'required' : 'optional'}</code></div>
@@ -200,32 +208,23 @@ export function HandoffBuilder({ transport }: Props) {
           </div>
         </section>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--text-2)', margin: '10px 0 6px' }}>
-        Select findings ({selected.size}):
+      <div className="panel-subtitle" style={{ margin: '10px 0 6px' }}>
+        Select findings ({selected.size})
       </div>
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 240, overflow: 'auto' }}>
+      <ul className="handoff-finding-list">
         {runFindings.map((f) => {
           const carryover = isCarryover(f, activeRunId, selected);
           const fromOtherRun = activeRunId != null && f.run_id !== activeRunId;
           return (
-            <li
-              key={f.id}
-              style={{
-                padding: 6,
-                borderBottom: '1px solid var(--border-1, #2a2a2a)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
+            <li key={f.id} className="handoff-finding-row">
               <input
                 type="checkbox"
                 checked={selected.has(f.id)}
                 onChange={() => toggle(f.id)}
                 aria-label={`Select ${f.title}`}
               />
-              <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{f.severity}</span>
-              <span style={{ flex: 1 }}>{f.title}</span>
+              <span className="badge">{f.severity}</span>
+              <span className="handoff-finding-title">{f.title}</span>
               {carryover && (
                 <span
                   className="badge"
@@ -244,27 +243,22 @@ export function HandoffBuilder({ transport }: Props) {
         })}
       </ul>
       {draft.tasks.length > 0 && (
-        <section style={{ marginTop: 10 }}>
-          <strong>Generated task plan</strong>
-          <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+        <section className="handoff-section" style={{ marginTop: 10 }}>
+          <h4 className="handoff-section-title">Generated task plan</h4>
+          <div style={{ display: 'grid', gap: 8 }}>
             {draft.tasks.map((task) => (
               <details
                 key={task.id}
                 open={draft.tasks.length === 1}
-                style={{
-                  border: '1px solid var(--border-1, #2a2a2a)',
-                  borderRadius: 6,
-                  padding: 8,
-                }}
               >
-                <summary style={{ cursor: 'pointer' }}>
+                <summary>
                   <strong>{task.title}</strong>{' '}
                   <span style={{ color: 'var(--text-2)', fontSize: 11 }}>
                     · {task.est_effort} · {task.evidence_refs.length} evidence ref
                     {task.evidence_refs.length === 1 ? '' : 's'}
                   </span>
                 </summary>
-                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-2)' }}>
+                <div className="kv-stack" style={{ marginTop: 8 }}>
                   <div>
                     rationale: <span style={{ color: 'var(--text-1)' }}>{task.rationale}</span>
                   </div>
@@ -294,9 +288,9 @@ export function HandoffBuilder({ transport }: Props) {
           </div>
         </section>
       )}
-      {error && <div style={{ color: 'var(--sev-error)', marginTop: 6 }}>{error}</div>}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-        <button
+      {error && <div className="handoff-note-error">{error}</div>}
+      <div className="screen-actions" style={{ marginTop: 10 }}>
+        <button className="btn primary"
           onClick={submit}
           disabled={!transport || submitting || !authorName.trim() || selected.size === 0}
         >

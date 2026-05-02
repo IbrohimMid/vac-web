@@ -67,12 +67,20 @@ export function ReleaseTab({ transport }: Props) {
   const targetList = useMemo(() => Array.from(targets.values()), [targets]);
 
   return (
-    <div role="region" aria-label="Release plane" style={{ padding: 8 }}>
-      <h3 style={{ margin: '4px 0' }}>Release plane</h3>
+    <div role="region" aria-label="Release plane" className="screen-shell">
+      <header className="screen-hero">
+        <div className="screen-hero-row">
+          <div>
+            <h3 className="screen-title">Release plane</h3>
+            <div className="screen-subtitle">Coordinate deploy targets, release notes, and post-release monitoring.</div>
+          </div>
+          <span className="badge">{targets.size} targets</span>
+        </div>
+      </header>
       {targetList.length === 0 ? (
-        <div style={{ color: 'var(--text-2)' }}>No deploy targets configured.</div>
+        <div className="soft-empty">No deploy targets configured.</div>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        <ul className="soft-list panel-card">
           {targetList.map((t) => {
             const deployOk = canDeploy(t.environment);
             const publishOk = canPublish();
@@ -83,7 +91,7 @@ export function ReleaseTab({ transport }: Props) {
               <li
                 key={t.id}
                 style={{
-                  border: '1px solid var(--border-1, #2a2a2a)',
+                  border: '1px solid var(--line)',
                   borderRadius: 6,
                   padding: 8,
                   marginBottom: 6,
@@ -117,10 +125,10 @@ export function ReleaseTab({ transport }: Props) {
           })}
         </ul>
       )}
-      <section style={{ marginTop: 12 }}>
-        <h4 style={{ margin: '4px 0' }}>Recent deploys</h4>
+      <section className="panel-card panel-card-pad" style={{ marginTop: 12 }}>
+        <h4 className="panel-title">Recent deploys</h4>
         {deployOrder.length === 0 ? (
-          <div style={{ color: 'var(--text-2)', fontSize: 12 }}>No deploys yet.</div>
+          <div className="panel-subtitle">No deploys yet.</div>
         ) : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {deployOrder
@@ -140,8 +148,8 @@ export function ReleaseTab({ transport }: Props) {
         )}
       </section>
       {notes.size > 0 && (
-        <section style={{ marginTop: 12 }}>
-          <h4 style={{ margin: '4px 0' }}>Release notes drafts</h4>
+        <section className="panel-card panel-card-pad" style={{ marginTop: 12 }}>
+          <h4 className="panel-title">Release notes drafts</h4>
           {Array.from(notes.values()).map((d) => (
             <details key={d.id} style={{ marginBottom: 4 }}>
               <summary>
@@ -163,8 +171,8 @@ export function ReleaseTab({ transport }: Props) {
         </section>
       )}
       {observations.length > 0 && (
-        <section style={{ marginTop: 12 }}>
-          <h4 style={{ margin: '4px 0' }}>Post-release monitor</h4>
+        <section className="panel-card panel-card-pad" style={{ marginTop: 12 }}>
+          <h4 className="panel-title">Post-release monitor</h4>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {observations.slice(-12).map((o) => (
               <li

@@ -53,18 +53,10 @@ export function FindingCard({ finding, transport }: Props) {
   };
 
   return (
-    <article
-      aria-label={finding.title}
-      style={{
-        border: '1px solid var(--border-1, #2a2a2a)',
-        borderRadius: 6,
-        padding: 10,
-        marginBottom: 6,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <article className="finding-card-polished" aria-label={finding.title}>
+      <div className="finding-card-header">
         <SeverityIcon severity={SEV_TO_UI[finding.severity]} />
-        <strong style={{ flex: 1 }}>{finding.title}</strong>
+        <strong className="finding-card-title">{finding.title}</strong>
         {run && (run.query_source || run.fallback_reason !== undefined) && (
           <span
             className="badge info mono"
@@ -80,7 +72,7 @@ export function FindingCard({ finding, transport }: Props) {
             {run.query_source === 'index' ? 'Source: index' : 'Source: event log fallback'}
           </span>
         )}
-        <span style={{ fontSize: 11, color: 'var(--text-2)' }}>
+        <span className="badge">
           {finding.category} · {Math.round(finding.confidence * 100)}%
         </span>
         <button
@@ -91,30 +83,15 @@ export function FindingCard({ finding, transport }: Props) {
           {expanded ? '−' : '+'}
         </button>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4 }}>{finding.summary}</div>
+      <div className="finding-card-summary">{finding.summary}</div>
       {evidence.length > 0 && (
-        <ul
-          style={{
-            listStyle: 'none',
-            padding: 0,
-            margin: '6px 0 0 0',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 4,
-          }}
-        >
+        <ul className="evidence-pill-list">
           {evidence.map(
             (e) => (
               <li
                 key={e.id}
                 onClick={() => fetchPreview(e.id)}
-                style={{
-                  fontSize: 11,
-                  padding: '2px 6px',
-                  background: 'var(--bg-2, #222)',
-                  borderRadius: 8,
-                  cursor: 'pointer',
-                }}
+                className="evidence-pill"
               >
                 <FreshnessBadge evidence={e} />
                 <span className="badge" style={{ marginRight: 4 }}>{sourceLabel(e.connector)}</span>
@@ -158,7 +135,7 @@ export function FindingCard({ finding, transport }: Props) {
                 {e.preview}
               </pre>
             ) : e.preview_error ? (
-              <div key={e.id} role="status" style={{ marginTop: 6, fontSize: 11, color: 'var(--sev-warn)' }}>
+              <div key={e.id} role="status" className="evidence-preview-error">
                 Evidence preview unavailable ({e.preview_failure_reason ?? 'preview_failed'}): {e.preview_error}
               </div>
             ) : null,

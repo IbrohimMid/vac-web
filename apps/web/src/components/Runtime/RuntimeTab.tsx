@@ -47,20 +47,29 @@ export function RuntimeTab({ transport }: Props) {
   };
 
   if (order.length === 0 && acpEntries.length === 0) {
-    return <div style={{ padding: 16, color: 'var(--text-2)' }}>No jobs.</div>;
+    return <div className="soft-empty">No runtime jobs yet.</div>;
   }
 
   const selectedLogs = selected ? (logs.get(selected) ?? []) : [];
 
   return (
-    <div>
+    <div className="screen-shell">
+      <header className="screen-hero">
+        <div className="screen-hero-row">
+          <div>
+            <h3 className="screen-title">Runtime</h3>
+            <div className="screen-subtitle">Track terminal jobs, subprocess output, redaction, and tool execution state.</div>
+          </div>
+          <span className="badge">{order.length} jobs</span>
+        </div>
+      </header>
       {order.length > 0 && (
         <div
           role="region"
           aria-label="Runtime jobs"
           style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 8 }}
         >
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul className="soft-list panel-card">
             {order.map((id) => {
               const j = jobsMap.get(id);
               if (!j) return null;
@@ -70,7 +79,7 @@ export function RuntimeTab({ transport }: Props) {
                   onClick={() => setSelected(id)}
                   style={{
                     padding: 8,
-                    borderBottom: '1px solid var(--border-1, #2a2a2a)',
+                    borderBottom: '1px solid var(--line)',
                     background: selected === id ? 'var(--bg-2, #222)' : 'transparent',
                     cursor: 'pointer',
                   }}

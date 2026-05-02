@@ -432,6 +432,22 @@ impl AcpClient {
         }
     }
 
+    pub async fn set_session_mode(
+        &self,
+        req: SetSessionModeRequest,
+    ) -> Result<SetSessionModeResponse> {
+        self.rpc("session/set_mode", req, Some(REQUEST_TIMEOUT))
+            .await
+    }
+
+    pub async fn set_config_option(
+        &self,
+        req: SetConfigOptionRequest,
+    ) -> Result<SetConfigOptionResponse> {
+        self.rpc("session/set_config_option", req, Some(REQUEST_TIMEOUT))
+            .await
+    }
+
     /// `session/prompt` is unbounded — prompts can take minutes. The
     /// caller controls cancellation via `cancel(...)`.
     pub async fn prompt(&self, req: PromptRequest) -> Result<PromptResponse> {

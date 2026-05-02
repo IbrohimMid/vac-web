@@ -65,7 +65,7 @@ export function ConnectorsTab({ transport }: Props) {
                   alignItems: 'center',
                   gap: 8,
                   padding: 8,
-                  borderBottom: '1px solid var(--border-1, #2a2a2a)',
+                  borderBottom: '1px solid var(--line)',
                 }}
               >
                 <SeverityIcon severity={HEALTH_SEV[c.health]} />
@@ -100,7 +100,7 @@ export function ConnectorsTab({ transport }: Props) {
                 display: 'flex',
                 alignItems: 'center',
                 padding: 8,
-                borderBottom: '1px solid var(--border-1, #2a2a2a)',
+                borderBottom: '1px solid var(--line)',
               }}
             >
               <span style={{ flex: 1, textTransform: 'capitalize' }}>{p}</span>

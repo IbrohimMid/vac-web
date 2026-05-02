@@ -3,6 +3,7 @@
 import { useSessions, type SessionRow, type SessionStatus } from '../../stores/sessions';
 import { useSession } from '../../stores/session';
 import { normalizeAuthMethods } from './auth';
+import { normalizeAcpCommand } from '../../actions/acpCommands';
 import type { TransportHandle } from '../../transport';
 
 function asStatus(raw: string | undefined): SessionStatus {
@@ -42,8 +43,13 @@ interface SessionChangedPayload {
   created_at?: string;
   attached_clients?: number;
   auth_methods?: unknown;
+  models?: unknown;
+  modes?: unknown;
+  config_options?: unknown;
+  configOptions?: unknown;
+  model_id?: string;
+  modelId?: string;
 }
-
 function coerceRow(p: SessionChangedPayload): SessionRow | null {
   if (!p.id) return null;
   return {
@@ -87,6 +93,37 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
       if (p?.workflow_id) {
         useSession.getState().setWorkflowMeta(p.workflow_id, p.workflow_name ?? null);
       }
+      useSession.getState().setAcpModelSnapshot({
+        models: p?.models ?? null,
+        modes: p?.modes ?? null,
+        configOptions: p?.config_options ?? p?.configOptions ?? null,
+        currentModelId: p?.model_id ?? p?.modelId ?? p?.model ?? null,
+      });
+    }),
+  );
+
+  offs.push(
+    transport.on('session.available_commands.updated', (ev) => {
+      const p = (ev.payload ?? {}) as { commands?: unknown };
+      const commands = Array.isArray(p.commands) ? p.commands : [];
+      useSession.getState().setAcpCommands(commands.map(normalizeAcpCommand));
+    }),
+  );
+
+  offs.push(
+    transport.on('session.mode.updated', (ev) => {
+      const p = (ev.payload ?? {}) as { mode_id?: unknown; modeId?: unknown };
+      const modeId = asString(p.mode_id) ?? asString(p.modeId);
+      if (modeId) useSession.getState().setAcpModelSnapshot({ currentModelId: modeId });
+    }),
+  );
+
+  offs.push(
+    transport.on('session.config_options.updated', (ev) => {
+      const p = (ev.payload ?? {}) as { options?: unknown; config_options?: unknown; configOptions?: unknown };
+      useSession.getState().setAcpModelSnapshot({
+        configOptions: p.options ?? p.config_options ?? p.configOptions ?? null,
+      });
     }),
   );
 

@@ -190,6 +190,7 @@ function App() {
       <CockpitTopbar
         onCmdK={() => useOverlays.getState().open('command_palette', { transport })}
         onTweaks={openTweaks}
+        transport={transport}
       />
       <Sidebar />
       <main className="main">

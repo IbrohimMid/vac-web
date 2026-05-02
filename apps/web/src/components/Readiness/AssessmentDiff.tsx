@@ -160,7 +160,7 @@ const listStyle: React.CSSProperties = {
 };
 const itemStyle: React.CSSProperties = {
   padding: 6,
-  borderBottom: '1px solid var(--border-1, #2a2a2a)',
+  borderBottom: '1px solid var(--line)',
   fontSize: 13,
   display: 'flex',
   flexDirection: 'column',

@@ -85,7 +85,7 @@ const LIST_STYLE: React.CSSProperties = {
 };
 
 const ROW_STYLE: React.CSSProperties = {
-  border: '1px solid #ddd',
+  border: '1px solid var(--line)',
   borderRadius: 4,
   padding: '8px 12px',
   display: 'flex',

@@ -55,7 +55,7 @@ export function PairingRelay({ relayUrl, deviceId, sessionId }: Props) {
     <section
       aria-label="Pair remote device"
       style={{
-        border: '1px solid var(--border-1, #2a2a2a)',
+        border: '1px solid var(--line)',
         borderRadius: 6,
         padding: 12,
         margin: 8,

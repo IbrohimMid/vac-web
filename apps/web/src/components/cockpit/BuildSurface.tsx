@@ -229,7 +229,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport, collapsed,
           {tab === 'runtime' && <RuntimeTab transport={transport} />}
           {tab === 'plan' && <PlanView transport={transport} />}
           {tab === 'workflow' && (
-            <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
+            <Suspense fallback={<div className="build-loading">Loading…</div>}>
               <WorkflowRail onSelectArtifactTarget={(target) => setTab(target as WBTabId)} />
             </Suspense>
           )}
@@ -245,7 +245,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport, collapsed,
 
 function TabFallback() {
   return (
-    <div style={{ padding: 18, color: 'var(--ink-3)', fontSize: 13 }}>Loading…</div>
+    <div className="build-loading">Loading…</div>
   );
 }
 
@@ -253,7 +253,7 @@ function TabFallback() {
 // list + builder + dispatch. Keeps a single source of truth for handoff state.
 function PlanView({ transport }: { transport: TransportHandle }) {
   return (
-    <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+    <div className="build-placeholder" style={{ minHeight: 0 }}>
       <HandoffTab transport={transport} />
     </div>
   );
@@ -304,7 +304,7 @@ function AgentsView() {
   ];
 
   return (
-    <div style={{ flex: 1, padding: 18, overflowY: 'auto' }}>
+    <div className="build-placeholder">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
         {lanes.map((a) => {
           const running = a.state === 'running';
@@ -350,15 +350,15 @@ function AgentsView() {
 function VilView() {
   // VIL semantic IR view — placeholder until upstream `vil-expr` integration.
   return (
-    <div style={{ flex: 1, padding: 18, overflowY: 'auto', fontSize: 13 }}>
+    <div className="build-placeholder">
       <div className="card">
         <div className="card-hd">
           <Icon name="vil" size={14} style={{ color: 'var(--accent-2)' }} />
           <div className="card-title">vil-expr · semantic IR</div>
           <span className="badge">awaiting integration</span>
         </div>
-        <div style={{ padding: 14 }}>
-          <p className="muted" style={{ marginTop: 0 }}>
+        <div className="panel-card-pad">
+          <p className="build-placeholder-copy" style={{ marginTop: 0 }}>
             VIL inspector will render the semantic IR for the current schema +
             invariants once <code>vil-expr</code> ships in upstream
             vac-web/vastar-agentic-cli (tracked separately).
@@ -372,15 +372,15 @@ function VilView() {
 function VwfdView() {
   // VWFD inspector — placeholder until VWFD store/protocol lands.
   return (
-    <div style={{ flex: 1, padding: 18, overflowY: 'auto' }}>
+    <div className="build-placeholder">
       <div className="card">
         <div className="card-hd">
           <Icon name="vil" size={14} style={{ color: 'var(--accent-2)' }} />
           <div className="card-title">VWFD inspector</div>
           <span className="badge">awaiting integration</span>
         </div>
-        <div style={{ padding: 14 }}>
-          <p className="muted" style={{ marginTop: 0 }}>
+        <div className="panel-card-pad">
+          <p className="build-placeholder-copy" style={{ marginTop: 0 }}>
             VWFD (View of What's Flowing Downstream) reassess chains land with
             Phase 8 continuous-readiness data feeds.
           </p>
@@ -410,7 +410,7 @@ function MemoryView() {
     });
   }
   return (
-    <div style={{ flex: 1, padding: 18, overflowY: 'auto' }}>
+    <div className="build-placeholder">
       <div className="muted" style={{ marginBottom: 10, fontSize: 12.5 }}>
         {facts.length} facts derived from current session state
       </div>

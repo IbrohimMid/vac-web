@@ -199,8 +199,10 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
             gap: 'var(--gap)',
           }}
         >
-          <Section label="Assessment agent" />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="assessment-drawer-basic">
+            <div className="assessment-drawer-section-title">Basic setup</div>
+            <Section label="Assessment agent" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <select
               data-testid="assessment-agent-select"
               aria-label="Assessment agent"
@@ -233,9 +235,9 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                 ? describeAssessmentAgent(selectedAgent)
                 : 'Bridge default agent will be used when no advertised agent is selected.'}
             </div>
-          </div>
+            </div>
 
-          <Section label="What should VAC look at?" />
+            <Section label="What should VAC look at?" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {FAMILY_OPTIONS.map((o) => (
               <label
@@ -274,9 +276,9 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                 </div>
               </label>
             ))}
-          </div>
+            </div>
 
-          <Section label="Depth" />
+            <Section label="Depth" />
           <div style={{ display: 'flex', gap: 6 }}>
             {DEPTH_PRESETS.map((d) => (
               <button
@@ -290,13 +292,14 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                 <span style={{ marginLeft: 4, fontSize: 11, opacity: 0.7 }}>{d.eta}</span>
               </button>
             ))}
+            </div>
           </div>
 
           {family === 'all' && (
-            <>
-              <Section label="Sweep policy" />
-              <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <details className="assessment-drawer-advanced" open>
+              <summary>Sweep policy</summary>
+              <div className="assessment-policy-grid">
+                <label className="assessment-policy-row">
                   <span>Mode</span>
                   <select
                     data-testid="assessment-sweep-mode-select"
@@ -308,7 +311,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                     <option value="parallel">Parallel request</option>
                   </select>
                 </label>
-                <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <label className="assessment-policy-row">
                   <span>Concurrency</span>
                   <select
                     data-testid="assessment-sweep-concurrency-select"
@@ -319,7 +322,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                     {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </label>
-                <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <label className="assessment-policy-row">
                   <span>Failure policy</span>
                   <select
                     data-testid="assessment-sweep-failure-policy-select"
@@ -331,11 +334,11 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
                     <option value="stop_on_fail">Stop on fail</option>
                   </select>
                 </label>
-                <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-                  Parallel is recorded as operator intent; current runtime executes children deterministically unless a worker pool is enabled.
-                </p>
+                <div className="assessment-safety-note">
+                  Parallel is recorded as operator intent. Effective runtime stays sequential for deterministic audit ordering.
+                </div>
               </div>
-            </>
+            </details>
           )}
 
           {connectors.length > 0 && (

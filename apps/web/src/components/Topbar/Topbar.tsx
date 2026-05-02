@@ -23,7 +23,7 @@ export function Topbar({ transport }: { transport?: TransportHandle | null | und
     >
       <strong style={{ color: 'var(--text-1)' }}>vac-web</strong>
       {sessionId && (
-        <span style={{ color: 'var(--text-2, #666)', fontFamily: 'monospace' }}>
+        <span style={{ color: 'var(--text-2, var(--ink-3))', fontFamily: 'monospace' }}>
           {sessionId.slice(0, 16)}…
         </span>
       )}

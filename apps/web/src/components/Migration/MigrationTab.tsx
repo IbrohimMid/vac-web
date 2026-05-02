@@ -48,12 +48,13 @@ export function MigrationTab({ transport }: Props) {
         </button>
       </header>
       {order.length === 0 ? (
-        <div style={{ color: 'var(--text-2)', padding: 16 }}>
-          No migration packets yet. Click "New draft" to start.
+        <div className="soft-empty">
+          <strong>No migration packets yet.</strong>
+          <div>Click New draft to start a migration packet.</div>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 8, marginTop: 8 }}>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul className="soft-list panel-card">
             {order.map((id) => {
               const p = packets.get(id);
               if (!p) return null;

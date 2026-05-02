@@ -54,11 +54,20 @@ export function ReviewTab({ transport }: Props) {
   const hasAnything = files.length > 0 || acpDiffs.length > 0;
 
   if (!hasAnything) {
-    return <div style={{ padding: 16, color: 'var(--text-2)' }}>No pending changes.</div>;
+    return <div className="soft-empty">No pending changes.</div>;
   }
 
   return (
-    <div role="region" aria-label="Changeset review" style={{ padding: 8 }}>
+    <div role="region" aria-label="Changeset review" className="screen-shell">
+      <header className="screen-hero">
+        <div className="screen-hero-row">
+          <div>
+            <h3 className="screen-title">Changeset review</h3>
+            <div className="screen-subtitle">Inspect pending file changes and review diffs before applying or reverting work.</div>
+          </div>
+          <span className="badge">{files.length} files</span>
+        </div>
+      </header>
       {files.length > 0 && (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -67,7 +76,7 @@ export function ReviewTab({ transport }: Props) {
               Revert all
             </button>
           </div>
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul className="soft-list panel-card">
             {files.map((f) => (
               <li
                 key={f.path}
@@ -76,7 +85,7 @@ export function ReviewTab({ transport }: Props) {
                   alignItems: 'center',
                   gap: 8,
                   padding: '6px 8px',
-                  borderBottom: '1px solid var(--border-1, #2a2a2a)',
+                  borderBottom: '1px solid var(--line)',
                   cursor: 'pointer',
                 }}
                 onClick={() => open(f.path)}

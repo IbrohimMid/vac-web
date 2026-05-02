@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ContentEditable, buildMentionChip, type ContentEditableHandle } from './ContentEditable';
 import { MentionPicker } from './MentionPicker';
 import { SlashPalette } from './SlashPalette';
+import { isAcpCommandAction } from '../../actions/acpCommands';
 import { markUsed } from '../../actions/recency';
 import type { ActionSpec } from '../../actions/registry';
 import { useAttachments } from '../../stores/attachments';
@@ -54,7 +55,9 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
   const sessionId = useSession((s) => s.sessionId);
   const provider = useSession((s) => s.agentId);
   const attachments = useAttachments((s) => s.items);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
 
   const mentionQuery = useMemo(() => {
     if (!pickerOpen) return '';
@@ -69,6 +72,44 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
     if (!pickerOpen) return;
     if (!text.includes('@')) setPickerOpen(false);
   }, [text, pickerOpen]);
+
+  const updateSlashQuery = (value: string, caret: number | null) => {
+    const before = value.slice(0, caret ?? value.length);
+    setSlashQuery(matchTrigger(before, '/'));
+  };
+
+  const replaceSlashTrigger = (insertText: string) => {
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? text.length;
+    const before = text.slice(0, caret);
+    const triggerStart = before.lastIndexOf('/');
+    const next = triggerStart >= 0
+      ? `${text.slice(0, triggerStart)}${insertText}${text.slice(caret)}`
+      : insertText;
+    setText(next);
+    setSlashQuery(null);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const pos = (triggerStart >= 0 ? triggerStart : 0) + insertText.length;
+      textareaRef.current?.setSelectionRange(pos, pos);
+    });
+  };
+
+  const invokeSlashAction = (action: ActionSpec) => {
+    markUsed(action.id);
+    if (isAcpCommandAction(action)) {
+      replaceSlashTrigger(action.insert_text ?? `${action.slash_alias ?? '/'} `);
+      return;
+    }
+    if (transport && sessionId) {
+      transport.send(sessionId, 'palette.invoke_action', { actionId: action.id, args: {} }).catch(() => {
+        /* notify lane handles */
+      });
+    }
+    setText('');
+    setSlashQuery(null);
+  };
+
 
   const submit = async () => {
     if (!sessionId || submitting || !text.trim()) return;
@@ -91,7 +132,9 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === '@') {
       setPickerOpen(true);
-    } else if (e.key === 'Enter' && !e.shiftKey && !pickerOpen) {
+    } else if (e.key === 'Escape' && slashQuery !== null) {
+      setSlashQuery(null);
+    } else if (e.key === 'Enter' && !e.shiftKey && !pickerOpen && slashQuery === null) {
       e.preventDefault();
       submit();
     }
@@ -107,6 +150,13 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
       onRemoveAttachment={(id) => useAttachments.getState().remove(id)}
     >
       <div style={{ position: 'relative' }}>
+        {slashQuery !== null && (
+          <SlashPalette
+            query={slashQuery}
+            onInvoke={invokeSlashAction}
+            onClose={() => setSlashQuery(null)}
+          />
+        )}
         {pickerOpen && mentionQuery && (
           <MentionPicker
             transport={transport}
@@ -123,8 +173,13 @@ function TextareaComposer({ transport }: { transport: TransportHandle }) {
           />
         )}
         <textarea
+          ref={textareaRef}
+          aria-label="Composer"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            updateSlashQuery(e.target.value, e.target.selectionStart);
+          }}
           onKeyDown={onKey}
           disabled={submitting || !sessionId}
           placeholder={
@@ -209,6 +264,13 @@ function ExperimentalComposer({ transport }: { transport: TransportHandle }) {
 
   const invokeSlashAction = (action: ActionSpec) => {
     markUsed(action.id);
+    if (isAcpCommandAction(action)) {
+      const trigger = `/${slashQuery ?? ''}`;
+      editorRef.current?.replaceTriggerText(trigger, action.insert_text ?? `${action.slash_alias ?? '/'} `);
+      setSlashQuery(null);
+      setHasContent(true);
+      return;
+    }
     if (transport && sessionId) {
       transport
         .send(sessionId, 'palette.invoke_action', { actionId: action.id, args: {} })

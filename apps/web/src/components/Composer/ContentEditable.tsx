@@ -14,6 +14,7 @@ export interface ContentEditableHandle {
   /** Insert a mention chip at the current selection, replacing the trigger
    *  range (`@queryText`) the caller passed in, then place caret after the chip. */
   insertChip(triggerText: string, chip: HTMLElement): void;
+  replaceTriggerText(triggerText: string, text: string): void;
   focus(): void;
   clear(): void;
 }
@@ -47,6 +48,7 @@ export const ContentEditable = forwardRef<ContentEditableHandle, Props>(
     useImperativeHandle(ref, () => ({
       root: () => rootRef.current,
       insertChip: (triggerText, chip) => insertChipAtTrigger(rootRef.current, triggerText, chip),
+      replaceTriggerText: (triggerText, text) => replaceTriggerTextAtCaret(rootRef.current, triggerText, text),
       focus: () => rootRef.current?.focus(),
       clear: () => {
         if (rootRef.current) {
@@ -222,6 +224,29 @@ function collect(
     if (collect(child, stopNode, stopOffset, out, false)) return true;
   }
   return false;
+}
+
+
+function replaceTriggerTextAtCaret(root: HTMLDivElement | null, triggerText: string, text: string): void {
+  if (!root) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== 3) {
+    range.insertNode(document.createTextNode(text));
+    range.collapse(false);
+    return;
+  }
+  const before = (node.nodeValue ?? '').slice(0, range.startOffset);
+  if (before.endsWith(triggerText)) {
+    range.setStart(node, before.length - triggerText.length);
+    range.deleteContents();
+  }
+  range.insertNode(document.createTextNode(text));
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 function insertChipAtTrigger(

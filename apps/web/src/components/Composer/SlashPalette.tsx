@@ -3,6 +3,7 @@
 // candidate set + scoring stays identical to the ⌘K palette.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { acpCommandToAction } from '../../actions/acpCommands';
 import { filterActions } from '../../actions/filterActions';
 import { type Context } from '../../actions/predicate';
 import { useActions, type ActionSpec } from '../../actions/registry';
@@ -18,6 +19,7 @@ interface Props {
 export function SlashPalette({ query, onInvoke, onClose }: Props) {
   const actions = useActions((s) => s.actions);
   const sessionId = useSession((s) => s.sessionId);
+  const acpCommands = useSession((s) => s.acpCommands);
   const streaming = useComposer((s) => s.submitting);
   const [cursor, setCursor] = useState(0);
   const onInvokeRef = useRef(onInvoke);
@@ -35,9 +37,14 @@ export function SlashPalette({ query, onInvoke, onClose }: Props) {
     [sessionId, streaming],
   );
 
+  const slashActions = useMemo(
+    () => [...actions, ...acpCommands.map(acpCommandToAction)],
+    [actions, acpCommands],
+  );
+
   const rows = useMemo(
-    () => filterActions({ actions, query, mode: 'slash', ctx, limit: 8 }),
-    [actions, query, ctx],
+    () => filterActions({ actions: slashActions, query, mode: 'slash', ctx, limit: 12 }),
+    [slashActions, query, ctx],
   );
 
   useEffect(() => setCursor(0), [query]);
@@ -111,6 +118,7 @@ export function SlashPalette({ query, onInvoke, onClose }: Props) {
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent-2)' }}>
             {row.action.slash_alias}
           </span>
+          {row.action.source === 'acp' && <span className="badge rail-badge-tight">ACP</span>}
           <span style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 500, fontSize: 13 }}>{row.action.label}</div>
             {row.action.description && (

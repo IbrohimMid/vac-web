@@ -33,14 +33,13 @@ export function Rail() {
             {t}
             {t === 'Activity' && (
               <span
-                className="badge accent"
-                style={{ padding: '0 5px', fontSize: 10, height: 14, lineHeight: '14px' }}
+                className="badge accent rail-badge-tight"
               >
                 live
               </span>
             )}
             {t === 'Notify' && stickyCount > 0 && (
-              <span style={{ color: 'var(--crit)' }}>•</span>
+              <span className="badge crit rail-badge-tight">!</span>
             )}
           </div>
         ))}
@@ -59,17 +58,13 @@ function RailActivity() {
   const entries = useActivity((s) => s.entries);
   if (entries.length === 0) {
     return (
-      <div className="muted" style={{ fontSize: 12.5, padding: '6px 0' }}>
-        No activity yet.
-      </div>
+      <div className="rail-empty">No activity yet.</div>
     );
   }
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)' }}>
-          Live activity
-        </div>
+      <div className="rail-section-head">
+        <div className="rail-section-title">Live activity</div>
         <span className="badge ok">
           <span className="dot" style={{ background: 'currentColor' }}></span>
           Streaming
@@ -115,16 +110,14 @@ function RailNotify() {
   const items = [...Array.from(sticky.values()), ...persistent];
   if (items.length === 0) {
     return (
-      <div className="muted" style={{ fontSize: 12.5, padding: '6px 0' }}>
-        No notifications.
-      </div>
+      <div className="rail-empty">No notifications.</div>
     );
   }
   return (
     <>
       {items.slice(0, 12).map((n) => (
-        <div key={n.id} className="notif-item">
-          <div className="row" style={{ gap: 6 }}>
+        <div key={n.id} className="rail-card">
+          <div className="rail-row">
             <span className={`badge ${n.severity === 'error' ? 'crit' : n.severity}`}>
               {n.subsystem}
             </span>
@@ -175,7 +168,7 @@ function RailContext() {
         Array.from(connectors.values())
           .slice(0, 6)
           .map((c) => (
-            <div key={c.id} className="evidence-card" style={{ marginBottom: 6 }}>
+            <div key={c.id} className="rail-card">
               <Icon name={connectorIcon(c.provider)} size={14} />
               <div className="flex1">
                 <div style={{ fontSize: 12.5, fontWeight: 500 }}>{c.label}</div>
@@ -208,7 +201,7 @@ function RailContext() {
             Active changeset
           </div>
           {files.slice(0, 5).map((f) => (
-            <div key={f.path} className="evidence-card">
+            <div key={f.path} className="rail-card">
               <Icon name="file-code" size={14} />
               <div className="flex1">
                 <div style={{ fontSize: 12.5 }}>{f.path}</div>
@@ -254,50 +247,47 @@ function RailMemory() {
         Session-scoped state and exports. Pinned items survive reloads; auto
         items decay if unused.
       </div>
-      <div className="notif-item" style={{ padding: '8px 12px' }}>
-        <div className="row" style={{ gap: 6 }}>
+      <div className="rail-card" style={{ padding: '8px 12px' }}>
+        <div className="rail-row">
           <span
-            className="badge accent"
-            style={{ padding: '1px 6px', fontSize: 10.5 }}
+            className="badge accent rail-badge-tight"
           >
             Pinned
           </span>
         </div>
-        <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.45 }}>
+        <div className="rail-card-copy">
           Session: <code>{session.sessionId ?? '(none)'}</code>
         </div>
       </div>
-      <div className="notif-item" style={{ padding: '8px 12px' }}>
-        <div className="row" style={{ gap: 6 }}>
+      <div className="rail-card" style={{ padding: '8px 12px' }}>
+        <div className="rail-row">
           <span
-            className="badge accent"
-            style={{ padding: '1px 6px', fontSize: 10.5 }}
+            className="badge accent rail-badge-tight"
           >
             Pinned
           </span>
         </div>
-        <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.45 }}>
+        <div className="rail-card-copy">
           Profile: <code>{session.profileId ?? '(none)'}</code>
         </div>
       </div>
-      <div className="notif-item" style={{ padding: '8px 12px' }}>
-        <div className="row" style={{ gap: 6 }}>
+      <div className="rail-card" style={{ padding: '8px 12px' }}>
+        <div className="rail-row">
           <span
-            className="badge accent"
-            style={{ padding: '1px 6px', fontSize: 10.5 }}
+            className="badge accent rail-badge-tight"
           >
             Pinned
           </span>
         </div>
-        <div style={{ fontSize: 12.5, marginTop: 4, lineHeight: 1.45 }}>
+        <div className="rail-card-copy">
           Agent: <code>{session.agentId ?? '(none)'}</code>
           {' · '}
           Kind: <code>{session.agentKind ?? '(none)'}</code>
         </div>
       </div>
       {session.agentKind === 'acp' && (
-        <div className="notif-item" style={{ padding: '8px 12px' }}>
-          <div className="row" style={{ gap: 6, marginBottom: 4 }}>
+        <div className="rail-card" style={{ padding: '8px 12px' }}>
+          <div className="rail-row">
             <span className="badge warn" style={{ padding: '1px 6px', fontSize: 10.5 }}>
               ACP auth
             </span>
@@ -306,32 +296,32 @@ function RailMemory() {
             </span>
           </div>
           {authMethods.length === 0 ? (
-            <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45 }}>
+            <div className="rail-card-copy">
               No auth methods were advertised by the adapter. If the provider later
               reports an auth requirement, the bridge can surface a reauth affordance
               from the same session metadata.
             </div>
           ) : (
             authMethods.map((method) => (
-              <div key={method.id} className="evidence-card" style={{ marginTop: 6 }}>
-                <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <div key={method.id} className="rail-card">
+                <div className="rail-row">
                   <strong style={{ fontSize: 12.5 }}>{method.name}</strong>
-                  <span className="badge accent" style={{ padding: '1px 6px', fontSize: 10.5 }}>
+                  <span className="badge accent rail-badge-tight">
                     {authMethodTypeLabel(method)}
                   </span>
                 </div>
                 {method.description && (
-                  <div className="muted" style={{ fontSize: 12, lineHeight: 1.45, marginTop: 4 }}>
+                  <div className="rail-card-copy">
                     {method.description}
                   </div>
                 )}
                 {method.link && (
-                  <div className="src" style={{ marginTop: 4 }}>
+                  <div className="rail-card-meta">
                     {method.link}
                   </div>
                 )}
                 {method.vars?.length ? (
-                  <div className="src" style={{ marginTop: 4 }}>
+                  <div className="rail-card-meta">
                     vars: {method.vars.map((v) => v.label ?? v.name).join(', ')}
                   </div>
                 ) : null}
