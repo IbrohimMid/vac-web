@@ -16,8 +16,13 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde::Serialize;
 use thiserror::Error;
+
+use crate::session::persistence::PersistedServerEvent;
+
+use super::assessment_writer::record_event;
 
 /// Bumped whenever the table layout changes. Migrations live in
 /// [`AssessmentIndex::migrate`]; each version corresponds to one applied
@@ -74,6 +79,27 @@ pub struct AssessmentSweepRow {
     pub completed_at: Option<String>,
     pub families_csv: String,
     pub payload_json: String,
+}
+
+/// Lightweight summary of the cache index for maintenance/status commands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AssessmentIndexStatus {
+    pub schema_version: u32,
+    pub runs: usize,
+    pub findings: usize,
+    pub sweeps: usize,
+    pub last_indexed_at: Option<String>,
+}
+
+/// Small trait used by [`assessment_writer`](super::assessment_writer) so the
+/// same event-to-row translation can run against either the live SQLite index
+/// or a rebuild transaction.
+pub trait AssessmentIndexStore {
+    fn get_run(&self, run_id: &str) -> Result<Option<AssessmentRunRow>>;
+    fn get_sweep(&self, sweep_id: &str) -> Result<Option<AssessmentSweepRow>>;
+    fn record_run(&self, row: &AssessmentRunRow) -> Result<()>;
+    fn record_finding(&self, row: &AssessmentFindingRow) -> Result<()>;
+    fn record_sweep(&self, row: &AssessmentSweepRow) -> Result<()>;
 }
 
 pub struct AssessmentIndex {
@@ -200,81 +226,85 @@ impl AssessmentIndex {
         Ok(v)
     }
 
+    /// Summarize the current index contents for `assessment.index.status`.
+    pub fn status(&self) -> Result<AssessmentIndexStatus> {
+        let conn = self.lock()?;
+        let schema_version = conn
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let runs = conn.query_row("SELECT COUNT(*) FROM assessment_runs", [], |row| {
+            row.get::<_, i64>(0)
+        })? as usize;
+        let findings = conn.query_row("SELECT COUNT(*) FROM assessment_findings", [], |row| {
+            row.get::<_, i64>(0)
+        })? as usize;
+        let sweeps = conn.query_row("SELECT COUNT(*) FROM assessment_sweeps", [], |row| {
+            row.get::<_, i64>(0)
+        })? as usize;
+        let last_indexed_at = conn
+            .query_row(
+                r#"SELECT ts FROM (
+                     SELECT started_at AS ts FROM assessment_runs
+                     UNION ALL SELECT completed_at AS ts FROM assessment_runs WHERE completed_at IS NOT NULL
+                     UNION ALL SELECT emitted_at AS ts FROM assessment_findings
+                     UNION ALL SELECT started_at AS ts FROM assessment_sweeps
+                     UNION ALL SELECT completed_at AS ts FROM assessment_sweeps WHERE completed_at IS NOT NULL
+                 ) ORDER BY ts DESC LIMIT 1"#,
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        Ok(AssessmentIndexStatus {
+            schema_version,
+            runs,
+            findings,
+            sweeps,
+            last_indexed_at,
+        })
+    }
+
+    /// Rebuild the cache from canonical persisted events.
+    ///
+    /// The work happens inside a single SQLite transaction so a failure
+    /// leaves the previously indexed rows intact.
+    pub fn rebuild_from_events(
+        &self,
+        events: &[PersistedServerEvent],
+    ) -> Result<AssessmentIndexStatus> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM assessment_findings;
+             DELETE FROM assessment_runs;
+             DELETE FROM assessment_sweeps;",
+        )?;
+        for event in events {
+            record_event(&tx, event)?;
+        }
+        tx.commit()?;
+        drop(conn);
+        self.status()
+    }
+
     pub fn record_run(&self, row: &AssessmentRunRow) -> Result<()> {
         let conn = self.lock()?;
-        conn.execute(
-            "INSERT INTO assessment_runs(run_id, session_id, swarm, status, started_at, completed_at, verdict, payload_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(run_id) DO UPDATE SET
-                 session_id = excluded.session_id,
-                 swarm = excluded.swarm,
-                 status = excluded.status,
-                 started_at = excluded.started_at,
-                 completed_at = excluded.completed_at,
-                 verdict = excluded.verdict,
-                 payload_json = excluded.payload_json",
-            params![
-                row.run_id,
-                row.session_id,
-                row.swarm,
-                row.status,
-                row.started_at,
-                row.completed_at,
-                row.verdict,
-                row.payload_json,
-            ],
-        )?;
-        Ok(())
+        record_run_with_conn(&conn, row)
     }
 
     pub fn record_finding(&self, row: &AssessmentFindingRow) -> Result<()> {
         let conn = self.lock()?;
-        conn.execute(
-            "INSERT INTO assessment_findings(finding_id, run_id, identity_hash, severity, category, emitted_at, payload_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(finding_id) DO UPDATE SET
-                 run_id = excluded.run_id,
-                 identity_hash = excluded.identity_hash,
-                 severity = excluded.severity,
-                 category = excluded.category,
-                 emitted_at = excluded.emitted_at,
-                 payload_json = excluded.payload_json",
-            params![
-                row.finding_id,
-                row.run_id,
-                row.identity_hash,
-                row.severity,
-                row.category,
-                row.emitted_at,
-                row.payload_json,
-            ],
-        )?;
-        Ok(())
+        record_finding_with_conn(&conn, row)
     }
 
     pub fn record_sweep(&self, row: &AssessmentSweepRow) -> Result<()> {
         let conn = self.lock()?;
-        conn.execute(
-            "INSERT INTO assessment_sweeps(sweep_id, session_id, status, started_at, completed_at, families_csv, payload_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(sweep_id) DO UPDATE SET
-                 session_id = excluded.session_id,
-                 status = excluded.status,
-                 started_at = excluded.started_at,
-                 completed_at = excluded.completed_at,
-                 families_csv = excluded.families_csv,
-                 payload_json = excluded.payload_json",
-            params![
-                row.sweep_id,
-                row.session_id,
-                row.status,
-                row.started_at,
-                row.completed_at,
-                row.families_csv,
-                row.payload_json,
-            ],
-        )?;
-        Ok(())
+        record_sweep_with_conn(&conn, row)
     }
 
     /// List the most recent runs (newest first), optionally filtered by
@@ -326,25 +356,7 @@ impl AssessmentIndex {
 
     pub fn get_run(&self, run_id: &str) -> Result<Option<AssessmentRunRow>> {
         let conn = self.lock()?;
-        conn.query_row(
-            "SELECT run_id, session_id, swarm, status, started_at, completed_at, verdict, payload_json \
-             FROM assessment_runs WHERE run_id = ?1",
-            params![run_id],
-            |row| {
-                Ok(AssessmentRunRow {
-                    run_id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    swarm: row.get(2)?,
-                    status: row.get(3)?,
-                    started_at: row.get(4)?,
-                    completed_at: row.get(5)?,
-                    verdict: row.get(6)?,
-                    payload_json: row.get(7)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+        get_run_with_conn(&conn, run_id)
     }
 
     pub fn list_findings(&self, run_id: &str) -> Result<Vec<AssessmentFindingRow>> {
@@ -373,37 +385,227 @@ impl AssessmentIndex {
 
     pub fn get_sweep(&self, sweep_id: &str) -> Result<Option<AssessmentSweepRow>> {
         let conn = self.lock()?;
-        conn.query_row(
+        get_sweep_with_conn(&conn, sweep_id)
+    }
+
+    /// List the most recent sweeps (newest first), optionally filtered by
+    /// session. Family filtering is intentionally left to callers because
+    /// `families_csv` is a denormalized compact summary.
+    pub fn list_sweeps(
+        &self,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AssessmentSweepRow>> {
+        let conn = self.lock()?;
+        let limit_i = if limit == 0 { -1 } else { limit as i64 };
+        let mut sql = String::from(
             "SELECT sweep_id, session_id, status, started_at, completed_at, families_csv, payload_json \
-             FROM assessment_sweeps WHERE sweep_id = ?1",
-            params![sweep_id],
-            |row| {
-                Ok(AssessmentSweepRow {
-                    sweep_id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    status: row.get(2)?,
-                    started_at: row.get(3)?,
-                    completed_at: row.get(4)?,
-                    families_csv: row.get(5)?,
-                    payload_json: row.get(6)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+             FROM assessment_sweeps WHERE 1=1",
+        );
+        let mut bound: Vec<String> = Vec::new();
+        if let Some(s) = session_id {
+            sql.push_str(" AND session_id = ?");
+            bound.push(s.to_string());
+        }
+        sql.push_str(" ORDER BY started_at DESC LIMIT ?");
+        let mut params_dyn: Vec<&dyn rusqlite::ToSql> =
+            bound.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        params_dyn.push(&limit_i);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_dyn.as_slice(), |row| {
+            Ok(AssessmentSweepRow {
+                sweep_id: row.get(0)?,
+                session_id: row.get(1)?,
+                status: row.get(2)?,
+                started_at: row.get(3)?,
+                completed_at: row.get(4)?,
+                families_csv: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// Wipe every row but keep schema_version. Used by tests and by the
     /// `assessment.flush_index` admin command (introduced in P3.2).
     pub fn truncate_all(&self) -> Result<()> {
         let conn = self.lock()?;
-        conn.execute_batch(
-            "DELETE FROM assessment_findings;
-             DELETE FROM assessment_runs;
-             DELETE FROM assessment_sweeps;",
-        )?;
-        Ok(())
+        truncate_all_with_conn(&conn)
     }
+}
+
+impl AssessmentIndexStore for AssessmentIndex {
+    fn get_run(&self, run_id: &str) -> Result<Option<AssessmentRunRow>> {
+        AssessmentIndex::get_run(self, run_id)
+    }
+
+    fn get_sweep(&self, sweep_id: &str) -> Result<Option<AssessmentSweepRow>> {
+        AssessmentIndex::get_sweep(self, sweep_id)
+    }
+
+    fn record_run(&self, row: &AssessmentRunRow) -> Result<()> {
+        AssessmentIndex::record_run(self, row)
+    }
+
+    fn record_finding(&self, row: &AssessmentFindingRow) -> Result<()> {
+        AssessmentIndex::record_finding(self, row)
+    }
+
+    fn record_sweep(&self, row: &AssessmentSweepRow) -> Result<()> {
+        AssessmentIndex::record_sweep(self, row)
+    }
+}
+
+impl<'conn> AssessmentIndexStore for Transaction<'conn> {
+    fn get_run(&self, run_id: &str) -> Result<Option<AssessmentRunRow>> {
+        get_run_with_conn(self, run_id)
+    }
+
+    fn get_sweep(&self, sweep_id: &str) -> Result<Option<AssessmentSweepRow>> {
+        get_sweep_with_conn(self, sweep_id)
+    }
+
+    fn record_run(&self, row: &AssessmentRunRow) -> Result<()> {
+        record_run_with_conn(self, row)
+    }
+
+    fn record_finding(&self, row: &AssessmentFindingRow) -> Result<()> {
+        record_finding_with_conn(self, row)
+    }
+
+    fn record_sweep(&self, row: &AssessmentSweepRow) -> Result<()> {
+        record_sweep_with_conn(self, row)
+    }
+}
+
+fn record_run_with_conn(conn: &Connection, row: &AssessmentRunRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO assessment_runs(run_id, session_id, swarm, status, started_at, completed_at, verdict, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(run_id) DO UPDATE SET
+             session_id = excluded.session_id,
+             swarm = excluded.swarm,
+             status = excluded.status,
+             started_at = excluded.started_at,
+             completed_at = excluded.completed_at,
+             verdict = excluded.verdict,
+             payload_json = excluded.payload_json",
+        params![
+            row.run_id,
+            row.session_id,
+            row.swarm,
+            row.status,
+            row.started_at,
+            row.completed_at,
+            row.verdict,
+            row.payload_json,
+        ],
+    )?;
+    Ok(())
+}
+
+fn record_finding_with_conn(conn: &Connection, row: &AssessmentFindingRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO assessment_findings(finding_id, run_id, identity_hash, severity, category, emitted_at, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(finding_id) DO UPDATE SET
+             run_id = excluded.run_id,
+             identity_hash = excluded.identity_hash,
+             severity = excluded.severity,
+             category = excluded.category,
+             emitted_at = excluded.emitted_at,
+             payload_json = excluded.payload_json",
+        params![
+            row.finding_id,
+            row.run_id,
+            row.identity_hash,
+            row.severity,
+            row.category,
+            row.emitted_at,
+            row.payload_json,
+        ],
+    )?;
+    Ok(())
+}
+
+fn record_sweep_with_conn(conn: &Connection, row: &AssessmentSweepRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO assessment_sweeps(sweep_id, session_id, status, started_at, completed_at, families_csv, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(sweep_id) DO UPDATE SET
+             session_id = excluded.session_id,
+             status = excluded.status,
+             started_at = excluded.started_at,
+             completed_at = excluded.completed_at,
+             families_csv = excluded.families_csv,
+             payload_json = excluded.payload_json",
+        params![
+            row.sweep_id,
+            row.session_id,
+            row.status,
+            row.started_at,
+            row.completed_at,
+            row.families_csv,
+            row.payload_json,
+        ],
+    )?;
+    Ok(())
+}
+
+fn get_run_with_conn(conn: &Connection, run_id: &str) -> Result<Option<AssessmentRunRow>> {
+    conn.query_row(
+        "SELECT run_id, session_id, swarm, status, started_at, completed_at, verdict, payload_json \
+         FROM assessment_runs WHERE run_id = ?1",
+        params![run_id],
+        |row| {
+            Ok(AssessmentRunRow {
+                run_id: row.get(0)?,
+                session_id: row.get(1)?,
+                swarm: row.get(2)?,
+                status: row.get(3)?,
+                started_at: row.get(4)?,
+                completed_at: row.get(5)?,
+                verdict: row.get(6)?,
+                payload_json: row.get(7)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn get_sweep_with_conn(conn: &Connection, sweep_id: &str) -> Result<Option<AssessmentSweepRow>> {
+    conn.query_row(
+        "SELECT sweep_id, session_id, status, started_at, completed_at, families_csv, payload_json \
+         FROM assessment_sweeps WHERE sweep_id = ?1",
+        params![sweep_id],
+        |row| {
+            Ok(AssessmentSweepRow {
+                sweep_id: row.get(0)?,
+                session_id: row.get(1)?,
+                status: row.get(2)?,
+                started_at: row.get(3)?,
+                completed_at: row.get(4)?,
+                families_csv: row.get(5)?,
+                payload_json: row.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+fn truncate_all_with_conn(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "DELETE FROM assessment_findings;
+         DELETE FROM assessment_runs;
+         DELETE FROM assessment_sweeps;",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -526,6 +728,50 @@ mod tests {
         let got = idx.get_sweep("s1").unwrap().unwrap();
         assert_eq!(got.families_csv, "rtd,security");
         assert_eq!(got.status, "running");
+    }
+
+    #[test]
+    fn list_sweeps_filters_and_orders() {
+        let idx = AssessmentIndex::open_in_memory().unwrap();
+        idx.record_sweep(&AssessmentSweepRow {
+            sweep_id: "old".into(),
+            session_id: "sess-a".into(),
+            status: "completed".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: Some("2026-01-01T00:00:05Z".into()),
+            families_csv: "rtd,pm".into(),
+            payload_json: "{}".into(),
+        })
+        .unwrap();
+        idx.record_sweep(&AssessmentSweepRow {
+            sweep_id: "new".into(),
+            session_id: "sess-a".into(),
+            status: "running".into(),
+            started_at: "2026-01-02T00:00:00Z".into(),
+            completed_at: None,
+            families_csv: "security".into(),
+            payload_json: "{}".into(),
+        })
+        .unwrap();
+        idx.record_sweep(&AssessmentSweepRow {
+            sweep_id: "other".into(),
+            session_id: "sess-b".into(),
+            status: "running".into(),
+            started_at: "2026-01-03T00:00:00Z".into(),
+            completed_at: None,
+            families_csv: "rtd".into(),
+            payload_json: "{}".into(),
+        })
+        .unwrap();
+
+        let rows = idx.list_sweeps(Some("sess-a"), 0).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.sweep_id.as_str()).collect::<Vec<_>>(),
+            vec!["new", "old"]
+        );
+        let limited = idx.list_sweeps(Some("sess-a"), 1).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].sweep_id, "new");
     }
 
     #[test]

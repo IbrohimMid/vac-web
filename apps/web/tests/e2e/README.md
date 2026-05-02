@@ -60,8 +60,8 @@ a compile error in CI long before the suite runs.
 The sweep cockpit exposes a small, intentional set of stable
 `data-testid` hooks for end-to-end and visual-regression tests.
 Keep this list in sync with `ReadinessHub.tsx`,
-`RunAssessmentDrawer.tsx`, `AssessmentDiff.tsx`,
-`AssessmentReportDetail.tsx`, and `main.tsx`.
+`RunAssessmentDrawer.tsx`, `AssessmentDiff.tsx`, `AssessmentReportDetail.tsx`,
+`FindingsList.tsx`, `RunDetailsCard.tsx`, and `main.tsx`.
 
 | testid | Where | What it points at |
 |--------|-------|-------------------|
@@ -82,6 +82,8 @@ Keep this list in sync with `ReadinessHub.tsx`,
 | `assessment-run-row` | recent assessments timeline | One row per run. Carries `data-run-id` for disambiguation. |
 | `assessment-diff-view` | `AssessmentDiff.tsx` root | The 4-tab diff shell (resolved / persistent / regressed / new). |
 | `assessment-report-detail` | `AssessmentReportDetail.tsx` outer shell | The two-column report view. |
+| `assessment-findings-list` | `FindingsList.tsx` root scroll container | The virtualized findings list viewport used by both hub and report views. |
+| `assessment-provenance-chip` | `ReadinessHub.tsx` verdict header + `RunDetailsCard.tsx` | The shared provenance chip showing index vs event-log fallback. |
 | `assessment-worker-output-rejection` | inside the report shell (N3) | The warn-tone banner rendered when `assessment.worker_output_rejected` lands for the visible run. Carries the Replay + Dismiss CTAs. |
 
 ### Why testids and not text

@@ -50,15 +50,22 @@ pub struct WorkerOutputRejection {
     pub code: String,
     /// Human-readable message.
     pub message: String,
+    /// Stable low-cardinality classification for the frontend.
+    pub reason: String,
     /// Optional JSON pointer-ish path to the bad field, e.g.
     /// `"candidates[2].severity"`.
     pub path: Option<String>,
 }
 
 impl WorkerOutputRejection {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        code: impl Into<String>,
+        reason: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code: code.into(),
+            reason: reason.into(),
             message: message.into(),
             path: None,
         }
@@ -74,6 +81,7 @@ impl WorkerOutputRejection {
     pub fn to_event_payload(&self, run_id: &str) -> Value {
         serde_json::json!({
             "run_id": run_id,
+            "reason": self.reason,
             "code": self.code,
             "message": self.message,
             "path": self.path,
@@ -102,9 +110,18 @@ pub fn validate_worker_output(value: &Value) -> EnvelopeOutcome {
         return EnvelopeOutcome::NotEnvelope;
     };
 
+    if matches!(schema_field, Value::Null) {
+        return EnvelopeOutcome::Recognised(Err(WorkerOutputRejection::new(
+            "empty_output",
+            "empty_output",
+            "worker output was empty",
+        )));
+    }
+
     let Some(schema_version) = schema_field.as_u64() else {
         return EnvelopeOutcome::Recognised(Err(WorkerOutputRejection::new(
             "schema_version_invalid",
+            "schema_invalid",
             format!("schema_version must be an unsigned integer; got {schema_field}"),
         )
         .at("schema_version")));
@@ -112,6 +129,7 @@ pub fn validate_worker_output(value: &Value) -> EnvelopeOutcome {
 
     if schema_version != WORKER_OUTPUT_SCHEMA_VERSION {
         return EnvelopeOutcome::Recognised(Err(WorkerOutputRejection::new(
+            "schema_version_unsupported",
             "schema_version_unsupported",
             format!(
                 "unsupported worker output schema_version {schema_version} \
@@ -126,6 +144,7 @@ pub fn validate_worker_output(value: &Value) -> EnvelopeOutcome {
         None => {
             return EnvelopeOutcome::Recognised(Err(WorkerOutputRejection::new(
                 "missing_candidates",
+                "schema_invalid",
                 "v1 envelope requires a `candidates` array (may be empty)",
             )));
         }
@@ -133,6 +152,7 @@ pub fn validate_worker_output(value: &Value) -> EnvelopeOutcome {
     let Some(arr) = candidates_field.as_array() else {
         return EnvelopeOutcome::Recognised(Err(WorkerOutputRejection::new(
             "candidates_not_array",
+            "schema_invalid",
             "`candidates` must be a JSON array",
         )
         .at("candidates")));
@@ -166,6 +186,7 @@ fn validate_candidate_v1(candidate: &Value, idx: usize) -> Result<(), WorkerOutp
     let Some(obj) = candidate.as_object() else {
         return Err(WorkerOutputRejection::new(
             "candidate_not_object",
+            "candidate_schema_invalid",
             "candidate must be a JSON object",
         )
         .at(path));
@@ -178,6 +199,7 @@ fn validate_candidate_v1(candidate: &Value, idx: usize) -> Result<(), WorkerOutp
     if title.trim().is_empty() {
         return Err(WorkerOutputRejection::new(
             "candidate_missing_title",
+            "candidate_schema_invalid",
             "each candidate must have a non-empty `title`",
         )
         .at(format!("{path}.title")));
@@ -187,6 +209,7 @@ fn validate_candidate_v1(candidate: &Value, idx: usize) -> Result<(), WorkerOutp
         if !is_known_severity(sev) {
             return Err(WorkerOutputRejection::new(
                 "candidate_severity_invalid",
+                "candidate_schema_invalid",
                 format!("severity must be one of critical/high/medium/low/info; got `{sev}`"),
             )
             .at(format!("{path}.severity")));
@@ -256,6 +279,7 @@ mod tests {
         let v = json!({"schema_version": 99, "candidates": []});
         let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
         assert_eq!(rej.code, "schema_version_unsupported");
+        assert_eq!(rej.reason, "schema_version_unsupported");
         assert_eq!(rej.path.as_deref(), Some("schema_version"));
     }
 
@@ -264,6 +288,7 @@ mod tests {
         let v = json!({"schema_version": "1", "candidates": []});
         let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
         assert_eq!(rej.code, "schema_version_invalid");
+        assert_eq!(rej.reason, "schema_invalid");
     }
 
     #[test]
@@ -271,6 +296,7 @@ mod tests {
         let v = json!({"schema_version": 1});
         let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
         assert_eq!(rej.code, "missing_candidates");
+        assert_eq!(rej.reason, "schema_invalid");
     }
 
     #[test]
@@ -278,6 +304,7 @@ mod tests {
         let v = json!({"schema_version": 1, "candidates": {"title": "x"}});
         let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
         assert_eq!(rej.code, "candidates_not_array");
+        assert_eq!(rej.reason, "schema_invalid");
     }
 
     #[test]
@@ -288,6 +315,7 @@ mod tests {
         });
         let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
         assert_eq!(rej.code, "candidate_missing_title");
+        assert_eq!(rej.reason, "candidate_schema_invalid");
         assert_eq!(rej.path.as_deref(), Some("candidates[1].title"));
     }
 
@@ -299,7 +327,16 @@ mod tests {
         });
         let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
         assert_eq!(rej.code, "candidate_severity_invalid");
+        assert_eq!(rej.reason, "candidate_schema_invalid");
         assert!(rej.path.as_deref().unwrap().ends_with(".severity"));
+    }
+
+    #[test]
+    fn rejects_empty_null_schema_version_as_empty_output() {
+        let v = json!({"schema_version": null});
+        let rej = unwrap_recognised(validate_worker_output(&v)).unwrap_err();
+        assert_eq!(rej.code, "empty_output");
+        assert_eq!(rej.reason, "empty_output");
     }
 
     #[test]
@@ -311,10 +348,15 @@ mod tests {
 
     #[test]
     fn event_payload_includes_path_and_code() {
-        let rej = WorkerOutputRejection::new("schema_version_unsupported", "unsupported")
-            .at("schema_version");
+        let rej = WorkerOutputRejection::new(
+            "schema_version_unsupported",
+            "schema_version_unsupported",
+            "unsupported",
+        )
+        .at("schema_version");
         let p = rej.to_event_payload("run-1");
         assert_eq!(p["run_id"], "run-1");
+        assert_eq!(p["reason"], "schema_version_unsupported");
         assert_eq!(p["code"], "schema_version_unsupported");
         assert_eq!(p["path"], "schema_version");
     }

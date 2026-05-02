@@ -33,6 +33,34 @@ use super::assessment_validation::{
 
 pub type SessionHandleRef = Arc<SessionHandle>;
 
+#[cfg(test)]
+pub(crate) fn test_handle(
+    session_id: impl Into<String>,
+) -> (SessionHandleRef, broadcast::Receiver<ServerEvent>) {
+    let session_id = session_id.into();
+    let state = Arc::new(StateHolder::new());
+    let ring = Arc::new(RwLock::new(EventRing::<ServerEvent>::new(16)));
+    let (broadcast_tx, broadcast_rx) = broadcast::channel::<ServerEvent>(16);
+    let handle = Arc::new(SessionHandle {
+        id: session_id.clone(),
+        profile_id: "test-profile".to_string(),
+        project_root: PathBuf::from("/tmp/test-project"),
+        agent_id: "test-agent".to_string(),
+        agent_kind: AgentKind::Mock,
+        workflow_spec_id: "test-workflow".to_string(),
+        workflow_spec_name: "test-workflow".to_string(),
+        state,
+        ring,
+        stdin: Arc::new(Mutex::new(None)),
+        broadcast: broadcast_tx,
+        acp: None,
+        audit: None,
+        persistence: None,
+        assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
+    });
+    (handle, broadcast_rx)
+}
+
 /// One in-flight `session/request_permission` waiting on a user
 /// decision via the bridge's `approval.approve` / `approval.reject`
 /// commands. Stage X.5c.1.

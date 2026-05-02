@@ -1,6 +1,6 @@
 use crate::server::AppStateHandle;
-use crate::session::persistence::PersistedServerEvent;
-use crate::storage::AssessmentIndex;
+use crate::session::persistence::{PersistedServerEvent, SessionHistoryFilter};
+use crate::storage::{AssessmentIndex, AssessmentIndexStatus};
 use crate::translator::emit_session_event_live;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use serde_json::{json, Value};
@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::warn;
 
 /// Pull the optional shared `AssessmentIndex` handle off the bridge state.
 /// Returning `None` means the bridge booted without a SQLite cache (e.g.
@@ -26,6 +27,301 @@ struct AssessmentSnapshot {
     run_event_counts: HashMap<String, usize>,
 }
 
+#[derive(Debug)]
+struct CanonicalAssessmentReplay {
+    events: Vec<PersistedServerEvent>,
+    status: AssessmentIndexStatus,
+    sessions_processed: usize,
+}
+
+fn lag_bucket(live: &AssessmentIndexStatus, canonical: &AssessmentIndexStatus) -> &'static str {
+    let delta = live.runs.abs_diff(canonical.runs)
+        + live.findings.abs_diff(canonical.findings)
+        + live.sweeps.abs_diff(canonical.sweeps);
+    match delta {
+        0 => "none",
+        1..=5 => "low",
+        6..=25 => "medium",
+        _ => "high",
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssessmentQuerySource {
+    Index,
+    EventLog,
+}
+
+impl AssessmentQuerySource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Index => "index",
+            Self::EventLog => "event_log",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssessmentQueryFallbackReason {
+    Missing,
+    Incomplete,
+    Error,
+}
+
+impl AssessmentQueryFallbackReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "index_missing",
+            Self::Incomplete => "index_incomplete",
+            Self::Error => "index_error",
+        }
+    }
+}
+
+fn annotate_query_provenance(
+    payload: &mut Value,
+    query_source: AssessmentQuerySource,
+    fallback_reason: Option<AssessmentQueryFallbackReason>,
+) {
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("query_source".into(), json!(query_source.as_str()));
+        obj.insert(
+            "fallback_reason".into(),
+            match fallback_reason {
+                Some(reason) => json!(reason.as_str()),
+                None => Value::Null,
+            },
+        );
+        // Back-compat shims for older clients still looking at the legacy
+        // provenance markers. The new fields above are authoritative.
+        obj.insert("source".into(), json!(query_source.as_str()));
+        obj.insert(
+            "index_complete".into(),
+            json!(matches!(query_source, AssessmentQuerySource::Index)),
+        );
+    }
+}
+
+fn load_canonical_assessment_replay(
+    state: &AppStateHandle,
+) -> Result<CanonicalAssessmentReplay, String> {
+    let Some(persistence) = state.persistence.as_ref() else {
+        return Err("session persistence is not configured".to_string());
+    };
+
+    let sessions = persistence
+        .list(&SessionHistoryFilter::default())
+        .map_err(|err| format!("failed to list persisted sessions: {err}"))?;
+
+    let mut events = Vec::new();
+    let mut sessions_processed = 0usize;
+    for meta in sessions {
+        let mut session_events =
+            persistence
+                .load_events(&meta.vac_session_id, 0)
+                .map_err(|err| {
+                    format!(
+                        "failed to load persisted assessment events for {}: {err}",
+                        meta.vac_session_id
+                    )
+                })?;
+        sessions_processed += 1;
+        events.append(&mut session_events);
+    }
+
+    events.sort_by(|a, b| {
+        a.ts.cmp(&b.ts)
+            .then(a.seq.cmp(&b.seq))
+            .then(a.event_type.cmp(&b.event_type))
+    });
+
+    let temp_index = AssessmentIndex::open_in_memory()
+        .map_err(|err| format!("failed to open temporary assessment index: {err}"))?;
+    let status = temp_index
+        .rebuild_from_events(&events)
+        .map_err(|err| format!("failed to build canonical assessment status: {err}"))?;
+
+    Ok(CanonicalAssessmentReplay {
+        events,
+        status,
+        sessions_processed,
+    })
+}
+
+pub async fn dispatch_assessment_index_status(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let Some(index) = index_handle(state) else {
+        return ack_error(
+            &cmd.id,
+            "assessment.index_disabled",
+            "assessment index is not configured",
+        );
+    };
+
+    let live_status = match index.status() {
+        Ok(status) => status,
+        Err(err) => {
+            return ack_error(
+                &cmd.id,
+                "assessment.index_status_failed",
+                format!("failed to read assessment index status: {err}"),
+            );
+        }
+    };
+
+    let replay = match load_canonical_assessment_replay(state) {
+        Ok(replay) => replay,
+        Err(err) => {
+            return ack_error(
+                &cmd.id,
+                "assessment.index_status_failed",
+                format!("failed to load canonical assessment replay: {err}"),
+            );
+        }
+    };
+
+    let payload = json!({
+        "scope": "assessment_index",
+        "ok": true,
+        "live": live_status,
+        "canonical": replay.status,
+        "lag_bucket": lag_bucket(&live_status, &replay.status),
+        "sessions_processed": replay.sessions_processed,
+        "canonical_events": replay.events.len(),
+        "index_complete": true,
+    });
+
+    (
+        ServerAck {
+            ack_of: cmd.id.clone(),
+            ok: true,
+            error: None,
+        },
+        vec![server_event(
+            &cmd.session_id,
+            "assessment.index.status",
+            payload,
+        )],
+    )
+}
+
+pub async fn dispatch_assessment_index_rebuild(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let Some(index) = index_handle(state) else {
+        return ack_error(
+            &cmd.id,
+            "assessment.index_disabled",
+            "assessment index is not configured",
+        );
+    };
+
+    let started = server_event(
+        &cmd.session_id,
+        "assessment.index.rebuild_started",
+        json!({
+            "scope": "assessment_index",
+            "ok": true,
+        }),
+    );
+
+    let mut events = vec![started];
+
+    let replay = match load_canonical_assessment_replay(state) {
+        Ok(replay) => replay,
+        Err(err) => {
+            warn!(error = %err, "assessment index rebuild canonical replay failed");
+            events.push(server_event(
+                &cmd.session_id,
+                "assessment.index.rebuild_failed",
+                json!({
+                    "scope": "assessment_index",
+                    "ok": false,
+                    "phase": "canonical_replay",
+                    "reason": err,
+                }),
+            ));
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "assessment.index_rebuild_failed".into(),
+                        message: "failed to rebuild assessment index from canonical events".into(),
+                    }),
+                },
+                events,
+            );
+        }
+    };
+
+    events.push(server_event(
+        &cmd.session_id,
+        "assessment.index.rebuild_progress",
+        json!({
+            "scope": "assessment_index",
+            "ok": true,
+            "phase": "canonical_replay_loaded",
+            "sessions_processed": replay.sessions_processed,
+            "canonical_events": replay.events.len(),
+        }),
+    ));
+
+    let rebuild_status = match index.rebuild_from_events(&replay.events) {
+        Ok(status) => status,
+        Err(err) => {
+            warn!(error = %err, "assessment index rebuild failed");
+            events.push(server_event(
+                &cmd.session_id,
+                "assessment.index.rebuild_failed",
+                json!({
+                    "scope": "assessment_index",
+                    "ok": false,
+                    "phase": "rebuild",
+                    "reason": err.to_string(),
+                    "sessions_processed": replay.sessions_processed,
+                    "canonical_events": replay.events.len(),
+                }),
+            ));
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "assessment.index_rebuild_failed".into(),
+                        message: "failed to rebuild assessment index from canonical events".into(),
+                    }),
+                },
+                events,
+            );
+        }
+    };
+
+    events.push(server_event(
+        &cmd.session_id,
+        "assessment.index.rebuilt",
+        json!({
+            "scope": "assessment_index",
+            "ok": true,
+            "sessions_processed": replay.sessions_processed,
+            "canonical_events": replay.events.len(),
+            "status": rebuild_status,
+        }),
+    ));
+
+    (
+        ServerAck {
+            ack_of: cmd.id.clone(),
+            ok: true,
+            error: None,
+        },
+        events,
+    )
+}
+
 pub async fn dispatch_assessment_list_runs(
     cmd: &ClientCommand,
     state: &AppStateHandle,
@@ -36,6 +332,7 @@ pub async fn dispatch_assessment_list_runs(
     // (id, swarm, status, started_at, completed_at, verdict) — all of which
     // are columns on the row, so we can mark the response as
     // `index_complete: true` here.
+    let mut fallback_reason = AssessmentQueryFallbackReason::Missing;
     if let Some(index) = index_handle(state) {
         let swarm_filter = cmd
             .payload
@@ -66,9 +363,10 @@ pub async fn dispatch_assessment_list_runs(
                     vec![],
                 );
             }
-            IndexAttempt::Miss(_) => {
-                // fall through to event_log path with the existing
-                // `source: "event_log"` marker on the response.
+            IndexAttempt::Miss(reason) => {
+                fallback_reason = reason;
+                // fall through to event_log path with normalized
+                // provenance metadata on the response.
             }
         }
     }
@@ -177,24 +475,24 @@ pub async fn dispatch_assessment_list_runs(
                 .map(str::to_string)
         });
 
+    let mut payload = json!({
+        "swarm": swarm_filter,
+        "limit": limit,
+        "active_run_id": active_run_id,
+        "active_sweep_id": active_sweep_id,
+        "runs": runs,
+        "sweeps": sweeps,
+    });
+    annotate_query_provenance(
+        &mut payload,
+        AssessmentQuerySource::EventLog,
+        Some(fallback_reason),
+    );
+
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
         emit_session_event_live(
             &controller,
-            server_event(
-                &cmd.session_id,
-                "assessment.runs_listed",
-                json!({
-                    "source": "event_log",
-                    "index_complete": false,
-                    "fallback_reason": "index_unavailable",
-                    "swarm": swarm_filter,
-                    "limit": limit,
-                    "active_run_id": active_run_id,
-                    "active_sweep_id": active_sweep_id,
-                    "runs": runs,
-                    "sweeps": sweeps,
-                }),
-            ),
+            server_event(&cmd.session_id, "assessment.runs_listed", payload),
         )
         .await;
     }
@@ -273,25 +571,42 @@ pub async fn dispatch_assessment_diff(
     let diff = compute_diff(&prev, &next_findings);
     let counts = diff.get("counts").cloned().unwrap_or_else(|| json!({}));
     let entries = diff.get("entries").cloned().unwrap_or_else(|| json!([]));
+    let fallback_reason = if index_handle(state).is_some() {
+        AssessmentQueryFallbackReason::Incomplete
+    } else {
+        AssessmentQueryFallbackReason::Missing
+    };
+
+    let mut base = base.clone();
+    annotate_query_provenance(
+        &mut base,
+        AssessmentQuerySource::EventLog,
+        Some(fallback_reason),
+    );
+    let mut next = next.clone();
+    annotate_query_provenance(
+        &mut next,
+        AssessmentQuerySource::EventLog,
+        Some(fallback_reason),
+    );
 
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
+        let mut payload = json!({
+            "base_run_id": base_run_id,
+            "next_run_id": next_run_id,
+            "base_run": base,
+            "next_run": next,
+            "counts": counts,
+            "entries": entries,
+        });
+        annotate_query_provenance(
+            &mut payload,
+            AssessmentQuerySource::EventLog,
+            Some(fallback_reason),
+        );
         emit_session_event_live(
             &controller,
-            server_event(
-                &cmd.session_id,
-                "assessment.diffed",
-                json!({
-                    "source": "event_log",
-                    "index_complete": false,
-                    "fallback_reason": "index_unavailable",
-                    "base_run_id": base_run_id,
-                    "next_run_id": next_run_id,
-                    "base_run": base,
-                    "next_run": next,
-                    "counts": counts,
-                    "entries": entries,
-                }),
-            ),
+            server_event(&cmd.session_id, "assessment.diffed", payload),
         )
         .await;
     }
@@ -334,19 +649,26 @@ pub async fn dispatch_assessment_fetch_evidence_preview(
         );
     };
 
-    let preview = build_evidence_preview(
+    let preview_result = build_evidence_preview(
         &cmd.session_id,
         state,
         evidence.get("uri").and_then(Value::as_str),
         evidence.get("locator"),
         evidence.get("label").and_then(Value::as_str),
-    )
-    .unwrap_or_else(|reason| format!("(preview unavailable: {reason})"));
+    );
 
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
-        emit_session_event_live(
-            &controller,
-            server_event(
+        let evidence_source = evidence
+            .get("connector")
+            .or_else(|| evidence.get("source"))
+            .and_then(Value::as_str)
+            .unwrap_or("filesystem");
+        let evidence_kind = evidence
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("file");
+        let event = match preview_result {
+            Ok(preview) => server_event(
                 &cmd.session_id,
                 "assessment.evidence_preview",
                 json!({
@@ -355,10 +677,31 @@ pub async fn dispatch_assessment_fetch_evidence_preview(
                     "fallback_reason": "evidence_not_indexed",
                     "id": evidence_id,
                     "preview": preview,
+                    "evidence_source": evidence_source,
+                    "kind": evidence_kind,
+                    "preview_available": true,
                 }),
             ),
-        )
-        .await;
+            Err(reason) => {
+                let failure_reason = classify_evidence_preview_failure(&reason);
+                server_event(
+                    &cmd.session_id,
+                    "assessment.evidence_preview_failed",
+                    json!({
+                        "source": "event_log",
+                        "index_complete": false,
+                        "fallback_reason": "evidence_not_indexed",
+                        "id": evidence_id,
+                        "reason": failure_reason,
+                        "message": reason,
+                        "evidence_source": evidence_source,
+                        "kind": evidence_kind,
+                        "preview_available": false,
+                    }),
+                )
+            }
+        };
+        emit_session_event_live(&controller, event).await;
     }
 
     (
@@ -412,19 +755,23 @@ async fn dispatch_assessment_report(
         .cloned();
     let event_count = snapshot.run_event_counts.get(run_id).copied().unwrap_or(0);
 
+    let fallback_reason = if index_handle(state).is_some() {
+        AssessmentQueryFallbackReason::Incomplete
+    } else {
+        AssessmentQueryFallbackReason::Missing
+    };
+
+    let mut run = run;
+    annotate_query_provenance(
+        &mut run,
+        AssessmentQuerySource::EventLog,
+        Some(fallback_reason),
+    );
+
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
-        // Reports/replays are always served from the JSONL event log because
-        // the index intentionally does not store evidence rows or per-run
-        // event counts (those are derived from the canonical event stream).
-        let fallback_reason = if event_type == "assessment.replayed" {
-            "replay_uses_canonical_event_log"
-        } else {
-            "report_requires_event_log"
-        };
-        let payload = json!({
-            "source": "event_log",
-            "index_complete": false,
-            "fallback_reason": fallback_reason,
+        // Reports/replays fall back to the JSONL event log because the
+        // SQLite index does not store evidence rows or per-run event counts.
+        let mut payload = json!({
             "run_id": run_id,
             "run": run,
             "findings": findings,
@@ -432,29 +779,20 @@ async fn dispatch_assessment_report(
             "sweep": sweep,
             "replayed_events": event_count,
         });
+        annotate_query_provenance(
+            &mut payload,
+            AssessmentQuerySource::EventLog,
+            Some(fallback_reason),
+        );
         emit_session_event_live(
             &controller,
-            server_event(&cmd.session_id, event_type, payload),
+            server_event(&cmd.session_id, event_type, payload.clone()),
         )
         .await;
         if include_report_mark {
             emit_session_event_live(
                 &controller,
-                server_event(
-                    &cmd.session_id,
-                    "assessment.report_fetched",
-                    json!({
-                        "source": "event_log",
-                        "index_complete": false,
-                        "fallback_reason": "report_requires_event_log",
-                        "run_id": run_id,
-                        "run": run,
-                        "findings": findings,
-                        "evidence": evidence,
-                        "sweep": sweep,
-                        "replayed_events": event_count,
-                    }),
-                ),
+                server_event(&cmd.session_id, "assessment.report_fetched", payload),
             )
             .await;
         }
@@ -995,6 +1333,24 @@ fn load_snapshot(
     Ok(build_snapshot(&events))
 }
 
+fn classify_evidence_preview_failure(reason: &str) -> &'static str {
+    let lower = reason.to_ascii_lowercase();
+    if lower.contains("permission denied") {
+        "permission_denied"
+    } else if lower.contains("not found")
+        || lower.contains("no such file")
+        || lower.contains("failed to read evidence file")
+    {
+        "not_found"
+    } else if lower.contains("missing evidence uri") || lower.contains("unsupported") {
+        "unsupported_source"
+    } else if lower.contains("connector") {
+        "connector_unavailable"
+    } else {
+        "preview_failed"
+    }
+}
+
 fn build_evidence_preview(
     session_id: &str,
     state: &AppStateHandle,
@@ -1087,7 +1443,7 @@ enum IndexAttempt {
     /// argument carries a short, low-cardinality reason suitable for the
     /// `fallback_reason` field on the JSONL response.
     #[allow(dead_code)]
-    Miss(&'static str),
+    Miss(AssessmentQueryFallbackReason),
 }
 
 /// Try to answer `assessment.runs_listed` entirely from the SQLite index.
@@ -1104,10 +1460,14 @@ async fn try_serve_list_runs_from_index(
     let effective_limit = limit.unwrap_or(0);
     let rows = match index.list_runs(Some(&cmd.session_id), swarm_filter, effective_limit) {
         Ok(rows) => rows,
-        Err(_) => return IndexAttempt::Miss("index_query_failed"),
+        Err(_) => return IndexAttempt::Miss(AssessmentQueryFallbackReason::Error),
     };
-    if rows.is_empty() {
-        return IndexAttempt::Miss("index_empty");
+    let sweep_rows = match index.list_sweeps(Some(&cmd.session_id), effective_limit) {
+        Ok(rows) => rows,
+        Err(_) => return IndexAttempt::Miss(AssessmentQueryFallbackReason::Error),
+    };
+    if rows.is_empty() && sweep_rows.is_empty() {
+        return IndexAttempt::Miss(AssessmentQueryFallbackReason::Incomplete);
     }
 
     // The `list_runs` query orders newest-first; the existing event_log
@@ -1124,6 +1484,7 @@ async fn try_serve_list_runs_from_index(
             });
             if let Some(ref completed_at) = row.completed_at {
                 entry["completed_at"] = json!(completed_at);
+                entry["finished_at"] = json!(completed_at);
             }
             if let Some(ref verdict) = row.verdict {
                 entry["verdict"] = json!(verdict);
@@ -1148,6 +1509,58 @@ async fn try_serve_list_runs_from_index(
         a_started.cmp(b_started)
     });
 
+    for run in &mut runs {
+        annotate_query_provenance(run, AssessmentQuerySource::Index, None);
+    }
+
+    let mut sweeps: Vec<Value> = sweep_rows
+        .iter()
+        .filter_map(|row| {
+            let families: Vec<Value> = row
+                .families_csv
+                .split(',')
+                .map(str::trim)
+                .filter(|family| !family.is_empty())
+                .map(|family| json!(family))
+                .collect();
+            if let Some(filter) = swarm_filter {
+                if !families
+                    .iter()
+                    .any(|family| family.as_str() == Some(filter))
+                {
+                    return None;
+                }
+            }
+            let mut entry = json!({
+                "id": row.sweep_id,
+                "families": families,
+                "status": row.status,
+                "started_at": row.started_at,
+                "run_ids": [],
+            });
+            if let Some(ref completed_at) = row.completed_at {
+                entry["completed_at"] = json!(completed_at);
+                entry["finished_at"] = json!(completed_at);
+            }
+            if let Ok(payload) = serde_json::from_str::<Value>(&row.payload_json) {
+                if let (Value::Object(ref mut map), Value::Object(extras)) = (&mut entry, payload) {
+                    for (k, v) in extras {
+                        map.entry(k).or_insert(v);
+                    }
+                }
+            }
+            Some(entry)
+        })
+        .collect();
+    sweeps.sort_by(|a, b| {
+        let a_started = a.get("started_at").and_then(Value::as_str).unwrap_or("");
+        let b_started = b.get("started_at").and_then(Value::as_str).unwrap_or("");
+        a_started.cmp(b_started)
+    });
+    for sweep in &mut sweeps {
+        annotate_query_provenance(sweep, AssessmentQuerySource::Index, None);
+    }
+
     let active_run_id = runs
         .iter()
         .rev()
@@ -1160,30 +1573,33 @@ async fn try_serve_list_runs_from_index(
                 .map(str::to_string)
         });
 
+    let active_sweep_id = sweeps
+        .iter()
+        .rev()
+        .find(|sweep| sweep.get("status").and_then(Value::as_str) == Some("running"))
+        .and_then(|sweep| sweep.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .or_else(|| {
+            sweeps
+                .last()
+                .and_then(|sweep| sweep.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+        });
+
+    let mut payload = json!({
+        "swarm": swarm_filter,
+        "limit": limit,
+        "active_run_id": active_run_id,
+        "active_sweep_id": active_sweep_id,
+        "runs": runs,
+        "sweeps": sweeps,
+    });
+    annotate_query_provenance(&mut payload, AssessmentQuerySource::Index, None);
+
     if let Ok(controller) = lookup_controller(state, &cmd.session_id) {
         emit_session_event_live(
             &controller,
-            server_event(
-                &cmd.session_id,
-                "assessment.runs_listed",
-                json!({
-                    "source": "index",
-                    "index_complete": true,
-                    "fallback_reason": Value::Null,
-                    "swarm": swarm_filter,
-                    "limit": limit,
-                    "active_run_id": active_run_id,
-                    // Sweeps are intentionally empty on the index path:
-                    // list_runs only iterates the runs table, and the
-                    // `assessment_sweeps` table is not joined here. The
-                    // frontend treats an empty sweeps array as "no sweep
-                    // metadata available from this list call" and falls
-                    // back to per-sweep queries when needed.
-                    "active_sweep_id": Value::Null,
-                    "runs": runs,
-                    "sweeps": Vec::<Value>::new(),
-                }),
-            ),
+            server_event(&cmd.session_id, "assessment.runs_listed", payload),
         )
         .await;
     }
@@ -1193,9 +1609,29 @@ async fn try_serve_list_runs_from_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::AuditFacility;
+    use crate::auth::{AuthState, PairingStore};
+    use crate::config::{ConfigSnapshot, SessionResumePolicy};
+    use crate::handoff::HandoffService;
+    use crate::server::AppState;
+    use crate::session::handle::test_handle;
     use crate::session::persistence::PersistedServerEvent;
+    use crate::session::persistence::{
+        FilePersistence, PersistedSessionMeta, PersistedSessionStatus, PersistenceHealth,
+        PersistenceNativeResume, PersistenceResult, PersistenceVersion, SessionPersistence,
+        SharedPersistence,
+    };
+    use crate::session::SessionRegistry;
+    use crate::storage::{
+        AssessmentFindingRow, AssessmentIndex, AssessmentRunRow, AssessmentSweepRow,
+    };
     use chrono::{DateTime, Utc};
     use serde_json::json;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tempfile::TempDir;
+    use tokio::sync::RwLock;
 
     fn persisted(seq: u64, ts: &str, event_type: &str, payload: Value) -> PersistedServerEvent {
         PersistedServerEvent {
@@ -1206,6 +1642,192 @@ mod tests {
                 .expect("valid timestamp")
                 .with_timezone(&Utc),
             redaction: Default::default(),
+        }
+    }
+
+    fn parse_utc(ts: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(ts)
+            .expect("valid timestamp")
+            .with_timezone(&Utc)
+    }
+
+    fn session_meta(session_id: &str, project_root: &Path) -> PersistedSessionMeta {
+        let now = Utc::now();
+        PersistedSessionMeta {
+            version: PersistenceVersion::default(),
+            vac_session_id: session_id.to_string(),
+            agent_session_id: Some(format!("agent-{session_id}")),
+            agent_id: "mock-acp".to_string(),
+            agent_kind: "acp".to_string(),
+            project_root: project_root.to_path_buf(),
+            profile_id: "executor.code@1.0.0".to_string(),
+            workflow_id: None,
+            created_at: now,
+            updated_at: now,
+            status: PersistedSessionStatus::Active,
+            native_resume: PersistenceNativeResume::default(),
+            mcp_servers: vec![],
+            agent_capabilities: json!({"loadSession": true}),
+            profile_class: Some("executor".to_string()),
+        }
+    }
+
+    fn make_file_persistence(root: &TempDir) -> SharedPersistence {
+        let sessions_dir = root.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        Arc::new(FilePersistence::open(&sessions_dir).expect("open FilePersistence"))
+    }
+
+    fn make_state(
+        persistence: Option<SharedPersistence>,
+        assessment_index: Option<Arc<AssessmentIndex>>,
+        root: &TempDir,
+    ) -> AppStateHandle {
+        let audit_dir = root.path().join("audit");
+        std::fs::create_dir_all(&audit_dir).unwrap();
+        Arc::new(AppState {
+            started_at: Instant::now(),
+            sessions: SessionRegistry::new(PathBuf::from("/path/to/mock-engine")),
+            auth: AuthState::new_dev(),
+            audit: Arc::new(AuditFacility::new(audit_dir)),
+            pairing: PairingStore::new(),
+            profile_root: PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/protocol/v1/profiles"
+            )),
+            handoff: Arc::new(HandoffService::new()),
+            persistence,
+            persistence_health: PersistenceHealth::default(),
+            assessment_index,
+            resume_policy: Arc::new(SessionResumePolicy::default()),
+            config_snapshot: Arc::new(RwLock::new(ConfigSnapshot::default())),
+        })
+    }
+
+    fn make_cmd(id: &str, session_id: &str, cmd_type: &str) -> ClientCommand {
+        ClientCommand {
+            id: id.to_string(),
+            session_id: session_id.to_string(),
+            cmd_type: cmd_type.to_string(),
+            payload: json!({}),
+            v: 1,
+        }
+    }
+
+    fn seed_session(
+        persistence: &SharedPersistence,
+        session_id: &str,
+        project_root: &Path,
+        events: &[PersistedServerEvent],
+    ) {
+        persistence
+            .save_meta(&session_meta(session_id, project_root))
+            .expect("save_meta");
+        for event in events {
+            persistence
+                .append_event(session_id, event)
+                .expect("append_event");
+        }
+    }
+
+    fn seed_live_index(
+        index: &AssessmentIndex,
+        session_id: &str,
+        started_at: &str,
+        completed_at: &str,
+        finding_emitted_at: &str,
+        sweep_started_at: &str,
+        sweep_completed_at: &str,
+    ) {
+        index
+            .record_run(&AssessmentRunRow {
+                run_id: "run_01".to_string(),
+                session_id: session_id.to_string(),
+                swarm: "rtd".to_string(),
+                status: "completed".to_string(),
+                started_at: started_at.to_string(),
+                completed_at: Some(completed_at.to_string()),
+                verdict: Some("warn".to_string()),
+                payload_json: json!({"run_id": "run_01"}).to_string(),
+            })
+            .expect("record run");
+        index
+            .record_finding(&AssessmentFindingRow {
+                finding_id: "finding_01".to_string(),
+                run_id: "run_01".to_string(),
+                identity_hash: "hash_01".to_string(),
+                severity: "high".to_string(),
+                category: "technical".to_string(),
+                emitted_at: finding_emitted_at.to_string(),
+                payload_json: json!({"finding_id": "finding_01"}).to_string(),
+            })
+            .expect("record finding");
+        index
+            .record_sweep(&AssessmentSweepRow {
+                sweep_id: "sweep_01".to_string(),
+                session_id: session_id.to_string(),
+                status: "completed".to_string(),
+                started_at: sweep_started_at.to_string(),
+                completed_at: Some(sweep_completed_at.to_string()),
+                families_csv: "rtd,security".to_string(),
+                payload_json: json!({"sweep_id": "sweep_01"}).to_string(),
+            })
+            .expect("record sweep");
+    }
+
+    struct FailingReplayPersistence {
+        meta: PersistedSessionMeta,
+    }
+
+    impl SessionPersistence for FailingReplayPersistence {
+        fn save_meta(&self, _meta: &PersistedSessionMeta) -> PersistenceResult<()> {
+            Ok(())
+        }
+
+        fn load_meta(
+            &self,
+            vac_session_id: &str,
+        ) -> PersistenceResult<Option<PersistedSessionMeta>> {
+            if vac_session_id == self.meta.vac_session_id {
+                Ok(Some(self.meta.clone()))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn list(
+            &self,
+            _filter: &crate::session::persistence::SessionHistoryFilter,
+        ) -> PersistenceResult<Vec<PersistedSessionMeta>> {
+            Ok(vec![self.meta.clone()])
+        }
+
+        fn append_event(
+            &self,
+            _vac_session_id: &str,
+            _event: &PersistedServerEvent,
+        ) -> PersistenceResult<()> {
+            Ok(())
+        }
+
+        fn load_events(
+            &self,
+            _vac_session_id: &str,
+            _limit: usize,
+        ) -> PersistenceResult<Vec<PersistedServerEvent>> {
+            Err(std::io::Error::other("canonical replay failed").into())
+        }
+
+        fn mark_status(
+            &self,
+            _vac_session_id: &str,
+            _status: PersistedSessionStatus,
+        ) -> PersistenceResult<()> {
+            Ok(())
+        }
+
+        fn forget(&self, _vac_session_id: &str) -> PersistenceResult<()> {
+            Ok(())
         }
     }
 
@@ -1347,5 +1969,680 @@ mod tests {
             diff["entries"].as_array().map(|entries| entries.len()),
             Some(2)
         );
+    }
+
+    #[tokio::test]
+    async fn assessment_index_status_reports_live_and_canonical_counts() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        let session_id = "sess_status";
+        let started_at = "2026-01-01T00:00:01Z";
+        let finding_emitted_at = "2026-01-01T00:00:02Z";
+        let completed_at = "2026-01-01T00:00:03Z";
+        let sweep_started_at = "2026-01-01T00:00:00Z";
+        let sweep_completed_at = "2026-01-01T00:00:04Z";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    sweep_started_at,
+                    "assessment.sweep.started",
+                    json!({
+                        "sweep_id": "sweep_01",
+                        "status": "running",
+                        "started_at": sweep_started_at,
+                        "families": ["rtd", "security"],
+                    }),
+                ),
+                persisted(
+                    2,
+                    started_at,
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_01",
+                        "swarm": "rtd",
+                        "started_at": started_at,
+                    }),
+                ),
+                persisted(
+                    3,
+                    finding_emitted_at,
+                    "assessment.finding_added",
+                    json!({
+                        "finding_id": "finding_01",
+                        "identity_hash": "hash_01",
+                        "run_id": "run_01",
+                        "category": "technical",
+                        "severity": "high",
+                        "title": "Finding 1",
+                    }),
+                ),
+                persisted(
+                    4,
+                    completed_at,
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_01",
+                        "verdict": "warn",
+                    }),
+                ),
+                persisted(
+                    5,
+                    sweep_completed_at,
+                    "assessment.sweep.completed",
+                    json!({
+                        "sweep_id": "sweep_01",
+                        "status": "completed",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+        seed_live_index(
+            &index,
+            session_id,
+            started_at,
+            completed_at,
+            finding_emitted_at,
+            sweep_started_at,
+            sweep_completed_at,
+        );
+
+        let state = make_state(
+            Some(Arc::clone(&persistence)),
+            Some(Arc::clone(&index)),
+            &tmp,
+        );
+        let cmd = make_cmd("cmd_index_status", session_id, "assessment.index.status");
+
+        let (ack, events) = dispatch_assessment_index_status(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(ack.error.is_none());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "assessment.index.status");
+        assert_eq!(events[0].payload["ok"], json!(true));
+        assert_eq!(events[0].payload["live"]["runs"], json!(1));
+        assert_eq!(events[0].payload["live"]["findings"], json!(1));
+        assert_eq!(events[0].payload["live"]["sweeps"], json!(1));
+        assert_eq!(events[0].payload["canonical"]["runs"], json!(1));
+        assert_eq!(events[0].payload["canonical"]["findings"], json!(1));
+        assert_eq!(events[0].payload["canonical"]["sweeps"], json!(1));
+        assert_eq!(events[0].payload["lag_bucket"], json!("none"));
+        assert_eq!(events[0].payload["sessions_processed"], json!(1));
+        let expected_last_indexed_at = parse_utc(sweep_completed_at);
+        assert_eq!(
+            parse_utc(
+                events[0].payload["live"]["last_indexed_at"]
+                    .as_str()
+                    .expect("live last_indexed_at"),
+            ),
+            expected_last_indexed_at
+        );
+        assert_eq!(
+            parse_utc(
+                events[0].payload["canonical"]["last_indexed_at"]
+                    .as_str()
+                    .expect("canonical last_indexed_at"),
+            ),
+            expected_last_indexed_at
+        );
+    }
+
+    #[tokio::test]
+    async fn assessment_list_runs_index_path_emits_query_source_index() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        let session_id = "sess_list_index";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    "2026-01-01T00:00:00Z",
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_index",
+                        "swarm": "rtd",
+                        "started_at": "2026-01-01T00:00:00Z",
+                    }),
+                ),
+                persisted(
+                    2,
+                    "2026-01-01T00:00:01Z",
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_index",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+        seed_live_index(
+            &index,
+            session_id,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:01Z",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:01Z",
+        );
+
+        let state = make_state(
+            Some(Arc::clone(&persistence)),
+            Some(Arc::clone(&index)),
+            &tmp,
+        );
+        let (handle, mut rx) = test_handle(session_id);
+        state.sessions.insert_for_test(session_id, handle);
+        let mut cmd = make_cmd("cmd_list_index", session_id, "assessment.list_runs");
+        cmd.payload = json!({ "limit": 50 });
+
+        let (ack, events) = dispatch_assessment_list_runs(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(events.is_empty());
+
+        let event = rx.recv().await.expect("list runs event");
+        let payload = &event.payload;
+        assert_eq!(event.event_type, "assessment.runs_listed");
+        assert_eq!(payload["query_source"], json!("index"));
+        assert_eq!(payload["fallback_reason"], Value::Null);
+        assert_eq!(payload["source"], json!("index"));
+        assert_eq!(payload["index_complete"], json!(true));
+        assert_eq!(payload["runs"][0]["query_source"], json!("index"));
+        assert_eq!(
+            payload["runs"][0]["finished_at"],
+            json!("2026-01-01T00:00:01Z")
+        );
+        assert_eq!(payload["active_sweep_id"], json!("sweep_01"));
+        assert_eq!(payload["sweeps"][0]["id"], json!("sweep_01"));
+        assert_eq!(payload["sweeps"][0]["query_source"], json!("index"));
+    }
+
+    #[tokio::test]
+    async fn assessment_list_runs_fallback_path_emits_query_source_event_log() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let session_id = "sess_list_fallback";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    "2026-01-01T00:00:00Z",
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_fallback",
+                        "swarm": "rtd",
+                        "started_at": "2026-01-01T00:00:00Z",
+                    }),
+                ),
+                persisted(
+                    2,
+                    "2026-01-01T00:00:01Z",
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_fallback",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+
+        let state = make_state(Some(Arc::clone(&persistence)), None, &tmp);
+        let (handle, mut rx) = test_handle(session_id);
+        state.sessions.insert_for_test(session_id, handle);
+        let mut cmd = make_cmd("cmd_list_fallback", session_id, "assessment.list_runs");
+        cmd.payload = json!({ "limit": 50 });
+
+        let (ack, events) = dispatch_assessment_list_runs(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(events.is_empty());
+
+        let event = rx.recv().await.expect("list runs event");
+        let payload = &event.payload;
+        assert_eq!(event.event_type, "assessment.runs_listed");
+        assert_eq!(payload["query_source"], json!("event_log"));
+        assert_eq!(payload["fallback_reason"], json!("index_missing"));
+        assert_eq!(payload["source"], json!("event_log"));
+        assert_eq!(payload["index_complete"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn assessment_fetch_report_emits_query_source_event_log_with_fallback_reason() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        let session_id = "sess_report";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    "2026-01-01T00:00:00Z",
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_report",
+                        "swarm": "rtd",
+                        "started_at": "2026-01-01T00:00:00Z",
+                    }),
+                ),
+                persisted(
+                    2,
+                    "2026-01-01T00:00:01Z",
+                    "assessment.finding_added",
+                    json!({
+                        "finding_id": "finding_report",
+                        "identity_hash": "hash_report",
+                        "run_id": "run_report",
+                        "category": "technical",
+                        "subject": "src/app.ts",
+                        "check": "check",
+                        "severity": "medium",
+                        "confidence": 0.9,
+                        "title": "Finding report",
+                        "summary": "Summary",
+                        "evidence_ids": ["evidence_report"],
+                    }),
+                ),
+                persisted(
+                    3,
+                    "2026-01-01T00:00:02Z",
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_report",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+
+        let state = make_state(
+            Some(Arc::clone(&persistence)),
+            Some(Arc::clone(&index)),
+            &tmp,
+        );
+        let (handle, mut rx) = test_handle(session_id);
+        state.sessions.insert_for_test(session_id, handle);
+        let mut cmd = make_cmd("cmd_report", session_id, "assessment.fetch_report");
+        cmd.payload = json!({ "run_id": "run_report" });
+
+        let (ack, events) = dispatch_assessment_fetch_report(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(events.is_empty());
+
+        let event = rx.recv().await.expect("report event");
+        assert_eq!(event.event_type, "assessment.report_fetched");
+        assert_eq!(event.payload["query_source"], json!("event_log"));
+        assert_eq!(event.payload["fallback_reason"], json!("index_incomplete"));
+        assert_eq!(event.payload["run"]["query_source"], json!("event_log"));
+        assert_eq!(
+            event.payload["run"]["fallback_reason"],
+            json!("index_incomplete")
+        );
+    }
+
+    #[tokio::test]
+    async fn assessment_replay_emits_query_source_event_log_and_report_mark() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        let session_id = "sess_replay";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    "2026-01-01T00:00:00Z",
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_replay",
+                        "swarm": "rtd",
+                        "started_at": "2026-01-01T00:00:00Z",
+                    }),
+                ),
+                persisted(
+                    2,
+                    "2026-01-01T00:00:01Z",
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_replay",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+
+        let state = make_state(
+            Some(Arc::clone(&persistence)),
+            Some(Arc::clone(&index)),
+            &tmp,
+        );
+        let (handle, mut rx) = test_handle(session_id);
+        state.sessions.insert_for_test(session_id, handle);
+        let mut cmd = make_cmd("cmd_replay", session_id, "assessment.replay");
+        cmd.payload = json!({ "run_id": "run_replay" });
+
+        let (ack, events) = dispatch_assessment_replay(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(events.is_empty());
+
+        let replayed = rx.recv().await.expect("replayed event");
+        assert_eq!(replayed.event_type, "assessment.replayed");
+        assert_eq!(replayed.payload["query_source"], json!("event_log"));
+        assert_eq!(
+            replayed.payload["fallback_reason"],
+            json!("index_incomplete")
+        );
+        assert_eq!(replayed.payload["run"]["query_source"], json!("event_log"));
+        assert_eq!(
+            replayed.payload["run"]["fallback_reason"],
+            json!("index_incomplete")
+        );
+
+        let report_mark = rx.recv().await.expect("report mark event");
+        assert_eq!(report_mark.event_type, "assessment.report_fetched");
+        assert_eq!(report_mark.payload["query_source"], json!("event_log"));
+        assert_eq!(
+            report_mark.payload["fallback_reason"],
+            json!("index_incomplete")
+        );
+    }
+
+    #[tokio::test]
+    async fn assessment_diff_emits_query_source_event_log_with_fallback_reason() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        let session_id = "sess_diff";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    "2026-01-01T00:00:00Z",
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_base",
+                        "swarm": "rtd",
+                        "started_at": "2026-01-01T00:00:00Z",
+                    }),
+                ),
+                persisted(
+                    2,
+                    "2026-01-01T00:00:01Z",
+                    "assessment.finding_added",
+                    json!({
+                        "finding_id": "finding_base",
+                        "identity_hash": "hash_base",
+                        "run_id": "run_base",
+                        "category": "technical",
+                        "subject": "src/base.ts",
+                        "check": "check",
+                        "severity": "low",
+                        "confidence": 0.9,
+                        "title": "Base finding",
+                        "summary": "Summary",
+                        "evidence_ids": [],
+                    }),
+                ),
+                persisted(
+                    3,
+                    "2026-01-01T00:00:02Z",
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_base",
+                        "verdict": "warn",
+                    }),
+                ),
+                persisted(
+                    4,
+                    "2026-01-01T00:00:03Z",
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_next",
+                        "swarm": "rtd",
+                        "started_at": "2026-01-01T00:00:03Z",
+                    }),
+                ),
+                persisted(
+                    5,
+                    "2026-01-01T00:00:04Z",
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_next",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+
+        let state = make_state(
+            Some(Arc::clone(&persistence)),
+            Some(Arc::clone(&index)),
+            &tmp,
+        );
+        let (handle, mut rx) = test_handle(session_id);
+        state.sessions.insert_for_test(session_id, handle);
+        let mut cmd = make_cmd("cmd_diff", session_id, "assessment.diff");
+        cmd.payload = json!({
+            "base_run_id": "run_base",
+            "next_run_id": "run_next",
+        });
+
+        let (ack, events) = dispatch_assessment_diff(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(events.is_empty());
+
+        let event = rx.recv().await.expect("diff event");
+        assert_eq!(event.event_type, "assessment.diffed");
+        assert_eq!(event.payload["query_source"], json!("event_log"));
+        assert_eq!(event.payload["fallback_reason"], json!("index_incomplete"));
+        assert_eq!(
+            event.payload["base_run"]["query_source"],
+            json!("event_log")
+        );
+        assert_eq!(
+            event.payload["base_run"]["fallback_reason"],
+            json!("index_incomplete")
+        );
+        assert_eq!(
+            event.payload["next_run"]["query_source"],
+            json!("event_log")
+        );
+        assert_eq!(
+            event.payload["next_run"]["fallback_reason"],
+            json!("index_incomplete")
+        );
+    }
+
+    #[tokio::test]
+    async fn assessment_index_rebuild_restores_index_rows_from_canonical_events() {
+        let tmp = TempDir::new().expect("tempdir");
+        let persistence = make_file_persistence(&tmp);
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        let session_id = "sess_rebuild";
+        let started_at = "2026-01-01T00:00:01Z";
+        let finding_emitted_at = "2026-01-01T00:00:02Z";
+        let completed_at = "2026-01-01T00:00:03Z";
+        let sweep_started_at = "2026-01-01T00:00:00Z";
+        let sweep_completed_at = "2026-01-01T00:00:04Z";
+
+        seed_session(
+            &persistence,
+            session_id,
+            tmp.path(),
+            &[
+                persisted(
+                    1,
+                    sweep_started_at,
+                    "assessment.sweep.started",
+                    json!({
+                        "sweep_id": "sweep_01",
+                        "status": "running",
+                        "started_at": sweep_started_at,
+                        "families": ["rtd", "security"],
+                    }),
+                ),
+                persisted(
+                    2,
+                    started_at,
+                    "assessment.started",
+                    json!({
+                        "run_id": "run_01",
+                        "swarm": "rtd",
+                        "started_at": started_at,
+                    }),
+                ),
+                persisted(
+                    3,
+                    finding_emitted_at,
+                    "assessment.finding_added",
+                    json!({
+                        "finding_id": "finding_01",
+                        "identity_hash": "hash_01",
+                        "run_id": "run_01",
+                        "category": "technical",
+                        "severity": "high",
+                        "title": "Finding 1",
+                    }),
+                ),
+                persisted(
+                    4,
+                    completed_at,
+                    "assessment.completed",
+                    json!({
+                        "run_id": "run_01",
+                        "verdict": "warn",
+                    }),
+                ),
+                persisted(
+                    5,
+                    sweep_completed_at,
+                    "assessment.sweep.completed",
+                    json!({
+                        "sweep_id": "sweep_01",
+                        "status": "completed",
+                        "verdict": "warn",
+                    }),
+                ),
+            ],
+        );
+
+        index
+            .record_run(&AssessmentRunRow {
+                run_id: "stale_run".to_string(),
+                session_id: session_id.to_string(),
+                swarm: "legacy".to_string(),
+                status: "running".to_string(),
+                started_at: "2025-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                verdict: None,
+                payload_json: json!({"run_id": "stale_run"}).to_string(),
+            })
+            .expect("seed stale run");
+
+        let state = make_state(
+            Some(Arc::clone(&persistence)),
+            Some(Arc::clone(&index)),
+            &tmp,
+        );
+        let cmd = make_cmd("cmd_index_rebuild", session_id, "assessment.index.rebuild");
+
+        let (ack, events) = dispatch_assessment_index_rebuild(&cmd, &state).await;
+        assert!(ack.ok);
+        assert!(ack.error.is_none());
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event_type, "assessment.index.rebuild_started");
+        assert_eq!(events[1].event_type, "assessment.index.rebuild_progress");
+        assert_eq!(events[2].event_type, "assessment.index.rebuilt");
+        assert_eq!(events[2].payload["status"]["runs"], json!(1));
+        assert_eq!(events[2].payload["status"]["findings"], json!(1));
+        assert_eq!(events[2].payload["status"]["sweeps"], json!(1));
+        assert_eq!(events[2].payload["sessions_processed"], json!(1));
+
+        let status = index.status().expect("status");
+        assert_eq!(status.runs, 1);
+        assert_eq!(status.findings, 1);
+        assert_eq!(status.sweeps, 1);
+        assert_eq!(
+            parse_utc(
+                status
+                    .last_indexed_at
+                    .as_deref()
+                    .expect("status last_indexed_at")
+            ),
+            parse_utc(sweep_completed_at)
+        );
+        assert!(index
+            .get_run("stale_run")
+            .expect("stale run query")
+            .is_none());
+        assert!(index.get_run("run_01").expect("run query").is_some());
+        assert_eq!(index.list_findings("run_01").expect("findings").len(), 1);
+        assert!(index.get_sweep("sweep_01").expect("sweep query").is_some());
+    }
+
+    #[tokio::test]
+    async fn assessment_index_rebuild_failure_keeps_existing_rows_when_canonical_replay_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let index = Arc::new(AssessmentIndex::open_in_memory().expect("open index"));
+        index
+            .record_run(&AssessmentRunRow {
+                run_id: "stale_run".to_string(),
+                session_id: "sess_rebuild_fail".to_string(),
+                swarm: "legacy".to_string(),
+                status: "running".to_string(),
+                started_at: "2025-01-01T00:00:00Z".to_string(),
+                completed_at: None,
+                verdict: None,
+                payload_json: json!({"run_id": "stale_run"}).to_string(),
+            })
+            .expect("seed stale run");
+
+        let meta = session_meta("sess_rebuild_fail", tmp.path());
+        let persistence: SharedPersistence = Arc::new(FailingReplayPersistence { meta });
+        let state = make_state(Some(persistence), Some(Arc::clone(&index)), &tmp);
+        let cmd = make_cmd(
+            "cmd_index_rebuild_fail",
+            "sess_rebuild_fail",
+            "assessment.index.rebuild",
+        );
+
+        let (ack, events) = dispatch_assessment_index_rebuild(&cmd, &state).await;
+        assert!(!ack.ok);
+        assert_eq!(
+            ack.error.as_ref().map(|e| e.code.as_str()),
+            Some("assessment.index_rebuild_failed")
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "assessment.index.rebuild_started");
+        assert_eq!(events[1].event_type, "assessment.index.rebuild_failed");
+        assert_eq!(events[1].payload["phase"], json!("canonical_replay"));
+        assert_eq!(index.status().expect("status").runs, 1);
+        assert!(index
+            .get_run("stale_run")
+            .expect("stale run query")
+            .is_some());
     }
 }

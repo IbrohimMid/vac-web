@@ -31,6 +31,7 @@ use super::redact::{redact_event_payload, RedactionMode};
 use super::{PersistenceError, PersistenceHealth, SessionPersistence};
 use crate::storage::{record_event as record_assessment_event, AssessmentIndex, WriteOutcome};
 use crate::ws::envelope::ServerEvent;
+use serde_json::Value;
 use tokio::sync::broadcast;
 
 #[derive(Clone)]
@@ -144,7 +145,26 @@ impl PersistenceSink {
         // health handle under `"index_write_failed"` and never propagate.
         if let Some(index) = self.assessment_index.as_ref() {
             if crate::storage::is_mirrored(&pe.event_type) {
-                match record_assessment_event(index, &pe) {
+                let mut index_event = pe.clone();
+                if let Value::Object(map) = &mut index_event.payload {
+                    // Some live assessment events intentionally omit the
+                    // session id because the WS envelope already carries it.
+                    // The persisted JSONL path is keyed by `vac_session_id`,
+                    // but the SQLite assessment index needs the value inside
+                    // each mirrored row for indexed list/fetch queries. Stamp
+                    // it only when the event payload does not already provide
+                    // any known session-id spelling.
+                    let has_session_id = map.contains_key("vac_session_id")
+                        || map.contains_key("session_id")
+                        || map.contains_key("sessionId");
+                    if !has_session_id {
+                        map.insert(
+                            "vac_session_id".into(),
+                            Value::String(self.vac_session_id.clone()),
+                        );
+                    }
+                }
+                match record_assessment_event(index.as_ref(), &index_event) {
                     Ok(WriteOutcome::Mirrored) | Ok(WriteOutcome::NotMirrored) => {}
                     Ok(WriteOutcome::Malformed) => {
                         tracing::debug!(

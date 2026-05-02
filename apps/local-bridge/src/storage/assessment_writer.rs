@@ -21,7 +21,7 @@
 use serde_json::Value;
 
 use super::assessment_index::{
-    AssessmentFindingRow, AssessmentIndex, AssessmentRunRow, AssessmentSweepRow, Result,
+    AssessmentFindingRow, AssessmentIndexStore, AssessmentRunRow, AssessmentSweepRow, Result,
 };
 use crate::session::persistence::PersistedServerEvent;
 
@@ -69,7 +69,10 @@ pub fn is_mirrored(event_type: &str) -> bool {
 /// - `Err(...)` only on a real SQLite-level failure (lock poisoned, disk
 ///   error, schema mismatch). The caller is responsible for converting
 ///   `Err` into a degraded-health note without failing the JSONL write.
-pub fn record_event(index: &AssessmentIndex, event: &PersistedServerEvent) -> Result<WriteOutcome> {
+pub fn record_event(
+    index: &impl AssessmentIndexStore,
+    event: &PersistedServerEvent,
+) -> Result<WriteOutcome> {
     if !is_mirrored(&event.event_type) {
         return Ok(WriteOutcome::NotMirrored);
     }
@@ -107,7 +110,11 @@ fn session_id(payload: &Value) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn write_run_started(index: &AssessmentIndex, payload: &Value, ts: &str) -> Result<WriteOutcome> {
+fn write_run_started(
+    index: &impl AssessmentIndexStore,
+    payload: &Value,
+    ts: &str,
+) -> Result<WriteOutcome> {
     let Some(run_id) = string_field(payload, &["run_id", "runId"]) else {
         return Ok(WriteOutcome::Malformed);
     };
@@ -129,7 +136,7 @@ fn write_run_started(index: &AssessmentIndex, payload: &Value, ts: &str) -> Resu
 }
 
 fn write_run_terminal(
-    index: &AssessmentIndex,
+    index: &impl AssessmentIndexStore,
     payload: &Value,
     ts: &str,
     fallback_status: &str,
@@ -163,7 +170,11 @@ fn write_run_terminal(
     Ok(WriteOutcome::Mirrored)
 }
 
-fn write_run_progress(index: &AssessmentIndex, payload: &Value, ts: &str) -> Result<WriteOutcome> {
+fn write_run_progress(
+    index: &impl AssessmentIndexStore,
+    payload: &Value,
+    ts: &str,
+) -> Result<WriteOutcome> {
     let Some(run_id) = string_field(payload, &["run_id", "runId"]) else {
         return Ok(WriteOutcome::Malformed);
     };
@@ -191,7 +202,11 @@ fn write_run_progress(index: &AssessmentIndex, payload: &Value, ts: &str) -> Res
     Ok(WriteOutcome::Mirrored)
 }
 
-fn write_finding(index: &AssessmentIndex, payload: &Value, ts: &str) -> Result<WriteOutcome> {
+fn write_finding(
+    index: &impl AssessmentIndexStore,
+    payload: &Value,
+    ts: &str,
+) -> Result<WriteOutcome> {
     let Some(run_id) = string_field(payload, &["run_id", "runId"]) else {
         return Ok(WriteOutcome::Malformed);
     };
@@ -238,7 +253,11 @@ fn write_finding(index: &AssessmentIndex, payload: &Value, ts: &str) -> Result<W
     Ok(WriteOutcome::Mirrored)
 }
 
-fn write_sweep_started(index: &AssessmentIndex, payload: &Value, ts: &str) -> Result<WriteOutcome> {
+fn write_sweep_started(
+    index: &impl AssessmentIndexStore,
+    payload: &Value,
+    ts: &str,
+) -> Result<WriteOutcome> {
     let Some(sweep_id) = string_field(payload, &["sweep_id", "sweepId"]) else {
         return Ok(WriteOutcome::Malformed);
     };
@@ -268,7 +287,7 @@ fn write_sweep_started(index: &AssessmentIndex, payload: &Value, ts: &str) -> Re
 }
 
 fn write_sweep_terminal(
-    index: &AssessmentIndex,
+    index: &impl AssessmentIndexStore,
     payload: &Value,
     ts: &str,
     fallback_status: &str,
@@ -309,7 +328,7 @@ fn write_sweep_terminal(
 }
 
 fn write_sweep_progress(
-    index: &AssessmentIndex,
+    index: &impl AssessmentIndexStore,
     payload: &Value,
     ts: &str,
 ) -> Result<WriteOutcome> {
@@ -350,6 +369,7 @@ fn write_sweep_progress(
 mod tests {
     use super::*;
     use crate::session::persistence::PersistedServerEvent;
+    use crate::storage::AssessmentIndex;
     use chrono::{DateTime, Utc};
     use serde_json::json;
 

@@ -24,6 +24,12 @@ import {
   requestAssessmentFetchReport,
   requestAssessmentReplay,
 } from '../../domain/assessment/queries';
+import {
+  formatWorkerOutputDiagnostic,
+  workerOutputActionLabels,
+  workerOutputReasonDetail,
+  workerOutputReasonLabel,
+} from '../../domain/assessment/workerOutputRejection';
 
 interface Props {
   runId: string;
@@ -50,23 +56,34 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   const sessionId = useSession((s) => s.sessionId);
   const requested = useRef<string | null>(null);
 
+  async function copyToClipboard(text: string): Promise<void> {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      }
+    } catch {
+      // Clipboard can fail in test environments / sandboxed iframes;
+      // swallow so the action button never throws into the UI.
+    }
+  }
+
   useEffect(() => {
     if (run || requested.current === runId || !transport || !sessionId) return;
     requested.current = runId;
-    void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => {});
+    void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => { });
   }, [run, transport, sessionId, runId]);
 
   const retryFetchReport = () => {
     if (!transport || !sessionId) return;
     clearQueryFailure('fetch_report', runId);
     requested.current = null;
-    void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => {});
+    void requestAssessmentFetchReport(transport, sessionId, runId).catch(() => { });
   };
 
   const replayAfterWorkerRejection = () => {
     if (!transport || !sessionId) return;
     clearWorkerOutputRejection(runId);
-    void requestAssessmentReplay(transport, sessionId, runId).catch(() => {});
+    void requestAssessmentReplay(transport, sessionId, runId).catch(() => { });
   };
 
   const runFindings = useMemo<Finding[]>(() => {
@@ -123,6 +140,31 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
   const validatedCount = runFindings.length;
   const rejectedCount = run.validation?.rejected ?? 0;
 
+  const workerOutputReason = workerOutputRejection?.reason;
+  const workerOutputTitle = workerOutputReason
+    ? workerOutputReasonLabel(workerOutputReason)
+    : 'worker output';
+  const workerOutputActions = workerOutputReason
+    ? workerOutputActionLabels(workerOutputReason)
+    : { primary: 'Replay', secondary: 'Copy diagnostic' };
+  const workerOutputDetail = workerOutputRejection
+    ? workerOutputRejection.detail || (workerOutputReason ? workerOutputReasonDetail(workerOutputReason) : 'Worker output rejected.')
+    : '';
+  const workerOutputPath = workerOutputRejection?.path;
+  const workerOutputPass = workerOutputRejection?.pass;
+  const workerOutputMaxPasses = workerOutputRejection?.max_passes;
+  const workerOutputAgentKind = workerOutputRejection?.agent_kind;
+  const workerOutputSampleReason = workerOutputRejection?.sample_reason;
+  const workerOutputSampleTruncated = workerOutputRejection?.sample_truncated;
+  const copyDiagnostic = () => {
+    if (!workerOutputRejection) return;
+    void copyToClipboard(formatWorkerOutputDiagnostic(workerOutputRejection));
+  };
+  const primaryActionHandler =
+    workerOutputActions.primary === 'Copy diagnostic' ? copyDiagnostic : replayAfterWorkerRejection;
+  const secondaryActionHandler =
+    workerOutputActions.secondary === 'Copy diagnostic' ? copyDiagnostic : replayAfterWorkerRejection;
+
   return (
     <div data-testid="assessment-report-detail" style={shellStyle}>
       {workerOutputRejection ? (
@@ -133,33 +175,55 @@ export function AssessmentReportDetail({ runId, onBack, transport }: Props) {
           style={workerErrorCardStyle}
         >
           <strong style={workerErrorTitleStyle}>
-            Worker output rejected — {workerOutputRejection.reason}
+            Worker output rejected — {workerOutputTitle}
           </strong>
+          {workerOutputReason ? (
+            <p className="muted" style={workerReasonMetaStyle}>
+              Normalized reason:{' '}
+              <code data-testid="assessment-worker-output-reason">{workerOutputReason}</code>
+            </p>
+          ) : null}
           <p className="muted" style={errorMessageStyle}>
-            {workerOutputRejection.detail}
-            {workerOutputRejection.path ? (
+            {workerOutputDetail}
+            {workerOutputPath ? (
               <>
                 {' '}
-                <code>at {workerOutputRejection.path}</code>
+                <code>at {workerOutputPath}</code>
               </>
             ) : null}
           </p>
-          {typeof workerOutputRejection.pass === 'number' &&
-          typeof workerOutputRejection.max_passes === 'number' ? (
+          {workerOutputSampleReason === 'redaction_applied' ? (
             <p className="muted" style={workerPassMetaStyle}>
-              Pass {workerOutputRejection.pass} / {workerOutputRejection.max_passes}
-              {workerOutputRejection.agent_kind ? (
-                <> · {workerOutputRejection.agent_kind} worker</>
+              Diagnostic sample redacted for safety.
+              {workerOutputSampleTruncated ? ' Sample truncated.' : null}
+            </p>
+          ) : workerOutputSampleTruncated ? (
+            <p className="muted" style={workerPassMetaStyle}>
+              Diagnostic sample truncated for safety.
+            </p>
+          ) : null}
+          {typeof workerOutputPass === 'number' && typeof workerOutputMaxPasses === 'number' ? (
+            <p className="muted" style={workerPassMetaStyle}>
+              Pass {workerOutputPass} / {workerOutputMaxPasses}
+              {workerOutputAgentKind ? (
+                <> · {workerOutputAgentKind} worker</>
               ) : null}
             </p>
           ) : null}
           <div style={errorButtonRowStyle}>
             <button
               className="btn sm"
-              onClick={replayAfterWorkerRejection}
+              onClick={primaryActionHandler}
               disabled={!transport || !sessionId}
             >
-              Replay
+              {workerOutputActions.primary}
+            </button>
+            <button
+              className="btn sm ghost"
+              onClick={secondaryActionHandler}
+              disabled={!transport || !sessionId}
+            >
+              {workerOutputActions.secondary}
             </button>
             <button
               className="btn sm ghost"
@@ -248,6 +312,10 @@ const workerErrorCardStyle: React.CSSProperties = {
   marginBottom: 'var(--gap)',
 };
 const workerErrorTitleStyle: React.CSSProperties = { color: 'var(--sev-warn)' };
+const workerReasonMetaStyle: React.CSSProperties = {
+  margin: '6px 0 10px',
+  fontSize: 12.5,
+};
 const workerPassMetaStyle: React.CSSProperties = {
   margin: '0 0 10px',
   fontSize: 12.5,

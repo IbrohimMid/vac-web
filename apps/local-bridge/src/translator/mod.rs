@@ -468,6 +468,12 @@ pub async fn dispatch_command(
         "assessment.fetch_evidence_preview" => {
             assessment_query::dispatch_assessment_fetch_evidence_preview(&cmd, &state).await
         }
+        "assessment.index.status" => {
+            assessment_query::dispatch_assessment_index_status(&cmd, &state).await
+        }
+        "assessment.index.rebuild" => {
+            assessment_query::dispatch_assessment_index_rebuild(&cmd, &state).await
+        }
         "session.resume" => {
             // Stage X6 batch 4-3 / 4-4 / 4-5 — resume mode dispatch
             // matrix. Batches 4-4 and 4-5 wired the native ACP

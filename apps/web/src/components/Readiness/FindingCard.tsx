@@ -31,6 +31,7 @@ export function FindingCard({ finding, transport }: Props) {
   // Subscribe to the evidence Map identity, then resolve refs via useMemo so
   // we don't hand Zustand a fresh array every render (selector equality).
   const evidenceMap = useAssessment((s) => s.evidence);
+  const run = useAssessment((s) => s.runs.get(finding.run_id));
   const evidence = useMemo<EvidenceRef[]>(
     () =>
       finding.evidence_ids
@@ -43,7 +44,7 @@ export function FindingCard({ finding, transport }: Props) {
   const fetchPreview = async (id: string) => {
     if (!transport || !sessionId) return;
     const ev = useAssessment.getState().evidence.get(id);
-    if (!ev || ev.preview !== undefined) return;
+    if (!ev || ev.preview !== undefined || ev.preview_error !== undefined) return;
     try {
       await transport.send(sessionId, 'assessment.fetch_evidence_preview', { evidence_id: id });
     } catch {
@@ -64,6 +65,21 @@ export function FindingCard({ finding, transport }: Props) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <SeverityIcon severity={SEV_TO_UI[finding.severity]} />
         <strong style={{ flex: 1 }}>{finding.title}</strong>
+        {run && (run.query_source || run.fallback_reason !== undefined) && (
+          <span
+            className="badge info mono"
+            data-testid="assessment-finding-provenance-chip"
+            title={
+              run.query_source === 'index'
+                ? 'Assessment read served from the SQLite index.'
+                : run.fallback_reason !== undefined
+                  ? `Assessment read fell back to the canonical event log (${run.fallback_reason}).`
+                  : 'Assessment read fell back to the canonical event log.'
+            }
+          >
+            {run.query_source === 'index' ? 'Source: index' : 'Source: event log fallback'}
+          </span>
+        )}
         <span style={{ fontSize: 11, color: 'var(--text-2)' }}>
           {finding.category} · {Math.round(finding.confidence * 100)}%
         </span>
@@ -89,21 +105,27 @@ export function FindingCard({ finding, transport }: Props) {
         >
           {evidence.map(
             (e) => (
-                <li
-                  key={e.id}
-                  onClick={() => fetchPreview(e.id)}
-                  style={{
-                    fontSize: 11,
-                    padding: '2px 6px',
-                    background: 'var(--bg-2, #222)',
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <FreshnessBadge evidence={e} />
-                  {e.connector}/{e.label}
-                </li>
-              ),
+              <li
+                key={e.id}
+                onClick={() => fetchPreview(e.id)}
+                style={{
+                  fontSize: 11,
+                  padding: '2px 6px',
+                  background: 'var(--bg-2, #222)',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                <FreshnessBadge evidence={e} />
+                <span className="badge" style={{ marginRight: 4 }}>{sourceLabel(e.connector)}</span>
+                {e.label}
+                {e.preview_error && (
+                  <span className="badge warn" style={{ marginLeft: 4 }} title={e.preview_error}>
+                    preview unavailable
+                  </span>
+                )}
+              </li>
+            ),
           )}
         </ul>
       )}
@@ -119,27 +141,40 @@ export function FindingCard({ finding, transport }: Props) {
             <strong>Identity:</strong>{' '}
             <code style={{ fontSize: 11 }}>{finding.identity_hash.slice(0, 16)}…</code>
           </div>
-          {evidence.map(
-            (e) =>
-              e.preview && (
-                <pre
-                  key={e.id}
-                  style={{
-                    marginTop: 6,
-                    padding: 6,
-                    background: 'var(--bg-2, #111)',
-                    borderRadius: 4,
-                    maxHeight: 200,
-                    overflow: 'auto',
-                    fontSize: 11,
-                  }}
-                >
-                  {e.preview}
-                </pre>
-              ),
+          {evidence.map((e) =>
+            e.preview ? (
+              <pre
+                key={e.id}
+                style={{
+                  marginTop: 6,
+                  padding: 6,
+                  background: 'var(--bg-2, #111)',
+                  borderRadius: 4,
+                  maxHeight: 200,
+                  overflow: 'auto',
+                  fontSize: 11,
+                }}
+              >
+                {e.preview}
+              </pre>
+            ) : e.preview_error ? (
+              <div key={e.id} role="status" style={{ marginTop: 6, fontSize: 11, color: 'var(--sev-warn)' }}>
+                Evidence preview unavailable ({e.preview_failure_reason ?? 'preview_failed'}): {e.preview_error}
+              </div>
+            ) : null,
           )}
         </div>
       )}
     </article>
   );
+}
+
+
+function sourceLabel(connector: string): string {
+  if (connector === 'filesystem' || connector === 'fs') return 'file';
+  if (connector === 'github') return 'github';
+  if (connector === 'ci') return 'ci';
+  if (connector === 'linear') return 'linear';
+  if (connector === 'sentry') return 'sentry';
+  return connector || 'evidence';
 }

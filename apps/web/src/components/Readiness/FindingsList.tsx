@@ -44,7 +44,7 @@ export function FindingsList({
     );
   }
   return (
-    <div ref={ref} style={{ maxHeight, overflow: 'auto' }}>
+    <div ref={ref} data-testid="assessment-findings-list" style={{ maxHeight, overflow: 'auto' }}>
       <div
         role="list"
         aria-label="Findings"

@@ -1196,6 +1196,101 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
         }),
     ));
 
+    match swarm.as_str() {
+        "schema_version_unsupported" => {
+            out.push(emit_response(
+                id.unwrap_or(Value::Null),
+                json!({ "ok": true, "run_id": run_id }),
+            ));
+            out.push(emit_notification(
+                "assessment.worker_output_rejected",
+                json!({
+                    "run_id": run_id,
+                    "reason": "schema_version_unsupported",
+                    "code": "schema_version_unsupported",
+                    "detail": "unsupported worker output schema_version 99",
+                    "path": "schema_version",
+                    "sample": r#"{"schema_version":99,"candidates":[]}"#,
+                    "sample_truncated": false,
+                    "pass": 1,
+                    "max_passes": 1,
+                }),
+            ));
+            out.push(emit_notification(
+                "assessment.failed",
+                json!({
+                    "run_id": run_id,
+                    "status": "failed",
+                    "reason": "invalid_worker_output",
+                    "detail": "unsupported worker output schema_version 99",
+                }),
+            ));
+            return out;
+        }
+        "candidate_schema_invalid" => {
+            out.push(emit_response(
+                id.unwrap_or(Value::Null),
+                json!({ "ok": true, "run_id": run_id }),
+            ));
+            out.push(emit_notification(
+                "assessment.worker_output_rejected",
+                json!({
+                    "run_id": run_id,
+                    "reason": "candidate_schema_invalid",
+                    "code": "candidate_missing_title",
+                    "detail": "each candidate must have a non-empty `title`",
+                    "path": "candidates[0].title",
+                    "sample": r#"{"schema_version":1,"candidates":[{"category":"technical","severity":"high"}]}"#,
+                    "sample_truncated": false,
+                    "pass": 1,
+                    "max_passes": 1,
+                }),
+            ));
+            out.push(emit_notification(
+                "assessment.failed",
+                json!({
+                    "run_id": run_id,
+                    "status": "failed",
+                    "reason": "invalid_worker_output",
+                    "detail": "each candidate must have a non-empty `title`",
+                }),
+            ));
+            return out;
+        }
+        "redaction_applied" => {
+            out.push(emit_response(
+                id.unwrap_or(Value::Null),
+                json!({ "ok": true, "run_id": run_id }),
+            ));
+            out.push(emit_notification(
+                "assessment.worker_output_rejected",
+                json!({
+                    "run_id": run_id,
+                    "reason": "redaction_applied",
+                    "code": "redaction_applied",
+                    "detail": "diagnostic sample redacted for safety",
+                    "path": "sample",
+                    "sample": r#"{"schema_version":1,"candidates":[{"title":"<redacted>","category":"technical","severity":"high"}]}"#,
+                    "sample_reason": "redaction_applied",
+                    "sample_truncated": false,
+                    "pass": 1,
+                    "max_passes": 1,
+                }),
+            ));
+            out.push(emit_notification(
+                "assessment.failed",
+                json!({
+                    "run_id": run_id,
+                    "status": "failed",
+                    "reason": "invalid_worker_output",
+                    "detail": "diagnostic sample redacted for safety",
+                }),
+            ));
+            return out;
+        }
+        _ => {}
+    }
+
     let mut total_findings = 0u64;
     for (i, (agent, category, check)) in agents.iter().enumerate() {
         out.push(emit_notification(

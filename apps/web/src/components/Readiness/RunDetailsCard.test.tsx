@@ -16,6 +16,8 @@ describe('RunDetailsCard', () => {
       status: 'running',
       started_at: '2026-01-01T00:00:00Z',
       progress: { completed: 2, total: 4 },
+      query_source: 'index',
+      fallback_reason: null,
       validation: {
         received: 3,
         rejected: 1,
@@ -29,6 +31,7 @@ describe('RunDetailsCard', () => {
 
     expect(screen.getByText('Validated')).toBeInTheDocument();
     expect(screen.getByText('2 findings')).toBeInTheDocument();
+    expect(screen.getByTestId('assessment-provenance-chip')).toHaveTextContent('Source: index');
     expect(screen.getByText('Candidates')).toBeInTheDocument();
     expect(screen.getByText('3 candidates')).toBeInTheDocument();
     expect(screen.getByText('Rejected')).toBeInTheDocument();

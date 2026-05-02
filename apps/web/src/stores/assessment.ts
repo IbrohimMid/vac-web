@@ -13,6 +13,8 @@ export type Category = 'technical' | 'product' | 'ux' | 'release' | 'ops';
 export type Verdict = 'pass' | 'warn' | 'fail' | 'unknown';
 export type FreshnessTier = 'fresh' | 'aging' | 'stale' | 'hard_expire';
 export type RunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed';
+export type SweepMode = 'sequential' | 'parallel';
+export type SweepFailurePolicy = 'continue' | 'stop_on_fail';
 
 export interface EvidenceRef {
   id: string;
@@ -22,6 +24,8 @@ export interface EvidenceRef {
   captured_at: string;
   ttl_seconds: number;
   preview?: string;
+  preview_error?: string;
+  preview_failure_reason?: 'connector_unavailable' | 'unsupported_source' | 'permission_denied' | 'not_found' | 'preview_failed';
   uri?: string;
   locator?: Record<string, unknown>;
   connector_id?: string;
@@ -78,6 +82,14 @@ export interface RunFailure {
   detail?: string;
 }
 
+export type AssessmentQuerySource = 'index' | 'event_log';
+export type AssessmentQueryFallbackReason = 'index_missing' | 'index_incomplete' | 'index_error';
+
+export interface AssessmentQueryProvenance {
+  query_source?: AssessmentQuerySource;
+  fallback_reason?: AssessmentQueryFallbackReason | null;
+}
+
 export interface Finding {
   id: string;
   identity_hash: string;
@@ -98,6 +110,14 @@ export interface CandidateValidationStats {
   rejected: number;
   rejection_reasons: Record<string, number>;
 }
+
+export type WorkerOutputRejectionReason =
+  | 'json_parse_failed'
+  | 'schema_version_unsupported'
+  | 'schema_invalid'
+  | 'candidate_schema_invalid'
+  | 'empty_output'
+  | 'redaction_applied';
 
 // Phase 4 shipped with `rtd | pm`; Phase 6 widens the string to the full
 // 12-family catalog. Kept as a plain string so upstream can introduce new
@@ -131,7 +151,7 @@ export const ASSESSOR_FAMILIES: AssessorFamily[] = [
   'growth',
 ];
 
-export interface Run {
+export interface Run extends AssessmentQueryProvenance {
   id: string;
   swarm: AssessorFamily;
   status: RunStatus;
@@ -150,9 +170,11 @@ export interface Run {
   worker_session_id?: string;
   verdict_detail?: RunVerdictDetail;
   failure?: RunFailure;
+  query_source?: AssessmentQuerySource;
+  fallback_reason?: AssessmentQueryFallbackReason | null;
 }
 
-export interface Sweep {
+export interface Sweep extends AssessmentQueryProvenance {
   id: string;
   families: AssessorFamily[];
   status: RunStatus;
@@ -162,6 +184,15 @@ export interface Sweep {
   verdict?: Verdict;
   verdict_detail?: RunVerdictDetail;
   counts?: Record<string, number>;
+  requested_mode?: SweepMode;
+  effective_mode?: SweepMode;
+  mode?: SweepMode;
+  concurrency?: number;
+  failure_policy?: SweepFailurePolicy;
+  running_count?: number;
+  pending_count?: number;
+  completed_count?: number;
+  failed_count?: number;
   run_ids: string[];
   scope?: RunScope;
   agent_id?: string;
@@ -225,14 +256,18 @@ export interface WorkerOutputRejection {
   agent_id?: string;
   agent_kind?: string;
   agent_role?: string;
-  /** Stable error category emitted by the backend (always `schema_invalid` today). */
-  reason: string;
+  /** Stable low-cardinality error category emitted by the backend. */
+  reason: WorkerOutputRejectionReason;
   /** Stable machine code (e.g. `unparseable`, `schema_version_unsupported`, `severity_invalid`). */
   code: string;
   /** Human-readable detail for the banner body. */
   detail: string;
   /** Optional JSON pointer-ish path to the bad field. */
   path?: string;
+  /** Optional sample-level note. `redaction_applied` means the diagnostic sample was scrubbed. */
+  sample_reason?: WorkerOutputRejectionReason;
+  /** True when the sample text was truncated for safety. */
+  sample_truncated?: boolean;
   /** Pass index inside max_passes when the worker re-tries; both omitted when unknown. */
   pass?: number;
   max_passes?: number;
@@ -270,6 +305,8 @@ interface AssessmentSlice {
     verdict: Verdict,
     score: Record<Category, number>,
     meta?: {
+      query_source?: AssessmentQuerySource;
+      fallback_reason?: AssessmentQueryFallbackReason | null;
       verdict_detail?: RunVerdictDetail;
       agent_id?: string;
       agent_kind?: string;
@@ -282,6 +319,8 @@ interface AssessmentSlice {
     verdict: Verdict,
     counts: Record<string, number>,
     meta?: {
+      query_source?: AssessmentQuerySource;
+      fallback_reason?: AssessmentQueryFallbackReason | null;
       verdict_detail?: RunVerdictDetail;
       agent_id?: string;
       agent_kind?: string;
@@ -294,6 +333,8 @@ interface AssessmentSlice {
     reason: string,
     detail?: string,
     meta?: {
+      query_source?: AssessmentQuerySource;
+      fallback_reason?: AssessmentQueryFallbackReason | null;
       agent_id?: string;
       agent_kind?: string;
       agent_role?: string;
@@ -306,6 +347,8 @@ interface AssessmentSlice {
     reason: string,
     detail?: string,
     meta?: {
+      query_source?: AssessmentQuerySource;
+      fallback_reason?: AssessmentQueryFallbackReason | null;
       verdict_detail?: RunVerdictDetail;
       agent_id?: string;
       agent_kind?: string;
@@ -320,6 +363,7 @@ interface AssessmentSlice {
   emitFinding(f: Finding): void;
   upsertEvidence(e: EvidenceRef): void;
   setEvidencePreview(id: string, preview: string): void;
+  setEvidencePreviewFailure(id: string, reason: NonNullable<EvidenceRef['preview_failure_reason']>, message: string): void;
   upsertDiff(baseRunId: string, nextRunId: string, diff: DiffResult): void;
 
   recordQueryFailure(failure: QueryFailure): void;
@@ -612,7 +656,20 @@ export const useAssessment = create<AssessmentSlice>((set) => ({
       const cur = s.evidence.get(id);
       if (!cur) return s;
       const evidence = new Map(s.evidence);
-      evidence.set(id, { ...cur, preview });
+      const next = { ...cur, preview };
+      delete next.preview_error;
+      delete next.preview_failure_reason;
+      evidence.set(id, next);
+      return { evidence };
+    });
+  },
+
+  setEvidencePreviewFailure(id, reason, message) {
+    set((s) => {
+      const cur = s.evidence.get(id);
+      if (!cur) return s;
+      const evidence = new Map(s.evidence);
+      evidence.set(id, { ...cur, preview_error: message, preview_failure_reason: reason });
       return { evidence };
     });
   },

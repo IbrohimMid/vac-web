@@ -9,7 +9,7 @@
 //    ReadinessHub buttons use today; the drawer becomes an alternate entry.
 
 import { useEffect, useMemo, useState } from 'react';
-import { ASSESSOR_FAMILIES, type AssessorFamily } from '../../stores/assessment';
+import { ASSESSOR_FAMILIES, type AssessorFamily, type SweepFailurePolicy, type SweepMode } from '../../stores/assessment';
 import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
 import { useSession } from '../../stores/session';
 import type { AvailableAgent, TransportHandle } from '../../transport';
@@ -36,8 +36,8 @@ const FAMILY_OPTIONS: Array<{ id: AssessorFamily | 'all'; label: string; sub: st
   { id: 'security', label: 'Security Review', sub: 'Auth/authz, secrets, deps, misconfig' },
   {
     id: 'all',
-    label: 'All families',
-    sub: 'Full sweep across all 12 assessors (longer)',
+    label: 'All families sweep',
+    sub: 'Multi-family sweep across all 12 assessors (longer)',
   },
 ];
 
@@ -74,6 +74,9 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
   const [family, setFamily] = useState<AssessorFamily | 'all'>('rtd');
   const [depth, setDepth] = useState<AssessmentDepth>('standard');
   const [agentId, setAgentId] = useState<string>(defaultAgentId);
+  const [sweepMode, setSweepMode] = useState<SweepMode>('sequential');
+  const [concurrency, setConcurrency] = useState(2);
+  const [failurePolicy, setFailurePolicy] = useState<SweepFailurePolicy>('continue');
   const [running, setRunning] = useState(false);
   const selectedAgent = advertisedAgents.find((agent) => agent.id === agentId);
 
@@ -102,6 +105,9 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
         await requestAssessmentSweepRun(transport, sessionId, {
           families: ASSESSOR_FAMILIES,
           depth,
+          mode: sweepMode,
+          concurrency,
+          failure_policy: failurePolicy,
           ...(agentId ? { agent_id: agentId } : {}),
           agent_role: 'assessment-sweep',
         });
@@ -163,7 +169,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
           }}
         >
           <Icon name="play" size={14} style={{ color: 'var(--accent-2)' }} />
-          <strong>Run assessment</strong>
+          <strong>Run assessment workflow</strong>
           <div style={{ flex: 1 }} />
           <button
             onClick={onClose}
@@ -286,6 +292,52 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
             ))}
           </div>
 
+          {family === 'all' && (
+            <>
+              <Section label="Sweep policy" />
+              <div className="card" style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span>Mode</span>
+                  <select
+                    data-testid="assessment-sweep-mode-select"
+                    aria-label="Sweep mode"
+                    value={sweepMode}
+                    onChange={(e) => setSweepMode(e.target.value as SweepMode)}
+                  >
+                    <option value="sequential">Sequential</option>
+                    <option value="parallel">Parallel request</option>
+                  </select>
+                </label>
+                <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span>Concurrency</span>
+                  <select
+                    data-testid="assessment-sweep-concurrency-select"
+                    aria-label="Sweep concurrency"
+                    value={concurrency}
+                    onChange={(e) => setConcurrency(Math.max(1, Math.min(4, Number(e.target.value) || 1)))}
+                  >
+                    {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span>Failure policy</span>
+                  <select
+                    data-testid="assessment-sweep-failure-policy-select"
+                    aria-label="Sweep failure policy"
+                    value={failurePolicy}
+                    onChange={(e) => setFailurePolicy(e.target.value as SweepFailurePolicy)}
+                  >
+                    <option value="continue">Continue</option>
+                    <option value="stop_on_fail">Stop on fail</option>
+                  </select>
+                </label>
+                <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                  Parallel is recorded as operator intent; current runtime executes children deterministically unless a worker pool is enabled.
+                </p>
+              </div>
+            </>
+          )}
+
           {connectors.length > 0 && (
             <>
               <Section label="Connectors" />
@@ -335,7 +387,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
             style={{ opacity: !transport || !sessionId || running ? 0.5 : 1 }}
           >
             <Icon name="play" size={11} />
-            {running ? 'Dispatching…' : 'Run assessment'}
+            {running ? 'Dispatching…' : family === 'all' ? 'Run multi-family sweep' : 'Run single-family assessment'}
           </button>
         </footer>
       </aside>

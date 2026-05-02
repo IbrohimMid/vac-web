@@ -27,7 +27,7 @@ pub mod assessment_index;
 pub mod assessment_writer;
 
 pub use assessment_index::{
-    AssessmentFindingRow, AssessmentIndex, AssessmentIndexError, AssessmentRunRow,
-    AssessmentSweepRow, ASSESSMENT_INDEX_SCHEMA_VERSION,
+    AssessmentFindingRow, AssessmentIndex, AssessmentIndexError, AssessmentIndexStatus,
+    AssessmentRunRow, AssessmentSweepRow, ASSESSMENT_INDEX_SCHEMA_VERSION,
 };
 pub use assessment_writer::{is_mirrored, record_event, WriteOutcome, MIRRORED_EVENT_TYPES};

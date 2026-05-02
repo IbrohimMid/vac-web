@@ -29,6 +29,7 @@ import {
   requestAssessmentRun,
   requestAssessmentSweepCancel,
 } from '../../domain/assessment/queries';
+import { AssessmentProvenanceChip } from './AssessmentProvenanceChip';
 
 const CATEGORIES: Category[] = ['technical', 'product', 'ux', 'release', 'ops'];
 
@@ -129,7 +130,7 @@ function ReadinessHubMain({ transport }: Props) {
 
   useEffect(() => {
     if (!transport || !sessionId) return;
-    void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => {});
+    void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => { });
   }, [transport, sessionId]);
 
   const queryErrors = useAssessment((s) => s.queryErrors);
@@ -148,15 +149,15 @@ function ReadinessHubMain({ transport }: Props) {
     if (!transport || !sessionId) return;
     clearQueryFailure(failure.action, failure.targetId);
     if (failure.action === 'list_runs') {
-      void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => {});
+      void requestAssessmentListRuns(transport, sessionId, { limit: 50 }).catch(() => { });
     } else if (failure.action === 'run') {
       void requestAssessmentRun(transport, sessionId, {
         swarm: familyToRun,
         ...(defaultAssessmentAgentId ? { agent_id: defaultAssessmentAgentId } : {}),
         agent_role: 'assessment-worker',
-      }).catch(() => {});
+      }).catch(() => { });
     } else if (failure.action === 'sweep.cancel' && failure.targetId) {
-      void requestAssessmentSweepCancel(transport, sessionId, failure.targetId).catch(() => {});
+      void requestAssessmentSweepCancel(transport, sessionId, failure.targetId).catch(() => { });
     }
   };
 
@@ -242,13 +243,13 @@ function ReadinessHubMain({ transport }: Props) {
             className="badge"
             title={describeAssessmentAgent(
               advertisedAgents.find((agent) => agent.id === defaultAssessmentAgentId) ??
-                advertisedAgents[0] ??
-                {
-                  id: defaultAssessmentAgentId,
-                  label: defaultAssessmentAgentId,
-                  kind: 'unknown',
-                  default: false,
-                },
+              advertisedAgents[0] ??
+              {
+                id: defaultAssessmentAgentId,
+                label: defaultAssessmentAgentId,
+                kind: 'unknown',
+                default: false,
+              },
             )}
           >
             worker: {defaultAssessmentAgentId}
@@ -276,15 +277,15 @@ function ReadinessHubMain({ transport }: Props) {
               {(failure.action === 'list_runs' ||
                 failure.action === 'run' ||
                 failure.action === 'sweep.cancel') && (
-                <button
-                  className="btn xs"
-                  data-testid="assessment-query-error-retry"
-                  onClick={() => retryHeaderError(failure)}
-                  disabled={!transport || !sessionId}
-                >
-                  Retry
-                </button>
-              )}
+                  <button
+                    className="btn xs"
+                    data-testid="assessment-query-error-retry"
+                    onClick={() => retryHeaderError(failure)}
+                    disabled={!transport || !sessionId}
+                  >
+                    Retry
+                  </button>
+                )}
               <button
                 className="btn xs ghost"
                 onClick={() => clearQueryFailure(failure.action, failure.targetId)}
@@ -446,7 +447,7 @@ function RecentAssessmentsTimeline({
               marginBottom: 8,
             }}
           >
-            <h3 style={{ margin: 0, fontSize: 14 }}>Sweep history</h3>
+            <h3 style={{ margin: 0, fontSize: 14 }}>Recent multi-family sweeps</h3>
             <span className="muted" style={{ fontSize: 12 }}>
               last {sweepRows.length}
             </span>
@@ -458,7 +459,8 @@ function RecentAssessmentsTimeline({
               const counts = primaryRun ? countByRun.get(primaryRun.id) ?? { crit: 0, high: 0, total: 0 } : { crit: 0, high: 0, total: 0 };
               const sevDot =
                 counts.crit > 0 ? 'crit' : counts.high > 0 ? 'high' : counts.total > 0 ? 'med' : 'low';
-              const familiesLabel = sweep.families.length > 0 ? sweep.families.join(' · ') : 'sweep';
+              const familiesLabel = sweep.families.length > 0 ? sweep.families.join(' · ') : 'multi-family sweep';
+              const sweepPolicyLabel = `${sweep.effective_mode ?? sweep.mode ?? 'sequential'} · ${sweep.failure_policy ?? 'continue'}`;
               const isActive = activeSweepId === sweep.id;
               return (
                 <div
@@ -478,7 +480,10 @@ function RecentAssessmentsTimeline({
                   <span>
                     <strong>{sweep.id.slice(0, 12)}</strong>{' '}
                     <span className="muted">
-                      {sweep.status}
+                      {sweep.status} · {sweepPolicyLabel}
+                      {typeof sweep.running_count === 'number' || typeof sweep.pending_count === 'number'
+                        ? ` · ${sweep.running_count ?? 0} running · ${sweep.pending_count ?? 0} pending · ${sweep.completed_count ?? sweep.progress.completed} done`
+                        : ''}
                       {sweep.counts && typeof sweep.counts === 'object'
                         ? ` · ${Object.values(sweep.counts).reduce((acc, value) => acc + (typeof value === 'number' ? value : 0), 0)} signals`
                         : ''}
@@ -544,7 +549,7 @@ function RecentAssessmentsTimeline({
               marginBottom: 8,
             }}
           >
-            <h3 style={{ margin: 0, fontSize: 14 }}>Recent assessments</h3>
+            <h3 style={{ margin: 0, fontSize: 14 }}>Recent single-family runs</h3>
             <span className="muted" style={{ fontSize: 12 }}>
               last {rows.length}
             </span>
@@ -558,7 +563,7 @@ function RecentAssessmentsTimeline({
                 <div key={r.id} data-testid="assessment-run-row" data-run-id={r.id} className="timeline-row">
                   <span className={`sev-dot ${sevDot}`}></span>
                   <span className="when">
-                    {r.started_at} · <span className="actor">{r.swarm.toUpperCase()}</span>
+                    {r.started_at} · <span className="actor">single-family run · {r.swarm.toUpperCase()}</span>
                   </span>
                   <span>
                     <strong>
@@ -618,6 +623,8 @@ function VerdictHeader({ run }: { run: { verdict?: Verdict; status: string; swar
     worker_session_id?: string;
     verdict_detail?: { status: string; delivery_state?: string; reason?: string };
     failure?: { status: string; reason: string; detail?: string };
+    query_source?: 'index' | 'event_log';
+    fallback_reason?: 'index_missing' | 'index_incomplete' | 'index_error' | null;
   };
   return (
     <div
@@ -633,6 +640,10 @@ function VerdictHeader({ run }: { run: { verdict?: Verdict; status: string; swar
       </strong>
       <span style={{ marginLeft: 8, color: 'var(--text-2)', fontSize: 12 }}>{run.status}</span>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        <AssessmentProvenanceChip
+          {...extendedRun}
+          testId="assessment-provenance-chip"
+        />
         {extendedRun.agent_id && <span className="badge">{extendedRun.agent_id}</span>}
         {extendedRun.agent_kind && <span className="badge">{extendedRun.agent_kind}</span>}
         {extendedRun.worker_session_id && (
@@ -689,7 +700,7 @@ function ProgressBar({ run }: { run: { progress: { completed: number; total: num
   const detail = run.progress.current ?? (run.progress as { phase?: string }).phase ?? (run.progress as { reason?: string }).reason;
   const passLabel =
     typeof (run.progress as { pass?: number }).pass === 'number' &&
-    typeof (run.progress as { max_passes?: number }).max_passes === 'number'
+      typeof (run.progress as { max_passes?: number }).max_passes === 'number'
       ? ` · pass ${(run.progress as { pass?: number }).pass}/${(run.progress as { max_passes?: number }).max_passes}`
       : '';
   return (

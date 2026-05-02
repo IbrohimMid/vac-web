@@ -3,6 +3,8 @@ import {
   type AssessorFamily,
   type QueryAction,
   type QueryFailureReason,
+  type SweepFailurePolicy,
+  type SweepMode,
 } from '../../stores/assessment';
 import type { Ack } from '../../transport';
 import type { TransportHandle } from '../../transport';
@@ -164,6 +166,9 @@ export function requestAssessmentSweepRun(
   payload: {
     families: AssessorFamily[];
     depth: AssessmentDepth;
+    mode?: SweepMode;
+    concurrency?: number;
+    failure_policy?: SweepFailurePolicy;
     agent_id?: string;
     agent_role?: string;
   },

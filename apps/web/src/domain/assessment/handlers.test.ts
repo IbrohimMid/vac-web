@@ -20,7 +20,7 @@ function mockTransport() {
         handlers.set(type, remaining);
       };
     },
-    close() {},
+    close() { },
   };
   const emit = (type: string, payload: unknown) => {
     const frame: EventFrame = {
@@ -225,6 +225,112 @@ describe('assessment handlers', () => {
     off();
   });
 
+  it('hydrates worker-output rejection events into stable frontend reasons', () => {
+    const { t, emit } = mockTransport();
+    const off = registerAssessmentHandlers(t);
+
+    const runId = 'run_worker_output';
+    const cases = [
+      {
+        name: 'json_parse_failed from legacy unparseable code',
+        payload: {
+          code: 'unparseable',
+          detail: 'worker output did not contain parseable JSON',
+        },
+        expectedReason: 'json_parse_failed',
+      },
+      {
+        name: 'schema_version_unsupported from the stable reason taxonomy',
+        payload: {
+          reason: 'schema_version_unsupported',
+          code: 'schema_version_unsupported',
+          detail: 'unsupported worker output schema_version 99',
+          path: 'schema_version',
+        },
+        expectedReason: 'schema_version_unsupported',
+      },
+      {
+        name: 'schema_invalid from legacy schema_version_invalid code',
+        payload: {
+          code: 'schema_version_invalid',
+          detail: 'schema_version must be an unsigned integer',
+          path: 'schema_version',
+        },
+        expectedReason: 'schema_invalid',
+      },
+      {
+        name: 'candidate_schema_invalid from legacy candidate_missing_title code',
+        payload: {
+          code: 'candidate_missing_title',
+          detail: 'each candidate must have a non-empty title',
+          path: 'candidates[0].title',
+        },
+        expectedReason: 'candidate_schema_invalid',
+      },
+      {
+        name: 'empty_output from the stable reason taxonomy',
+        payload: {
+          reason: 'empty_output',
+          code: 'empty_output',
+          detail: 'worker output was empty',
+        },
+        expectedReason: 'empty_output',
+      },
+      {
+        name: 'redaction_applied from the stable reason taxonomy',
+        payload: {
+          reason: 'redaction_applied',
+          code: 'redaction_applied',
+          detail: 'sensitive content removed',
+          sample_reason: 'redaction_applied',
+          sample_truncated: true,
+          sample: 'sanitized sample',
+        },
+        expectedReason: 'redaction_applied',
+      },
+    ] as const;
+
+    for (const entry of cases) {
+      emit('assessment.started', {
+        run_id: runId,
+        swarm: 'rtd',
+        total_checks: 1,
+        started_at: '2026-01-01T00:00:00Z',
+      });
+
+      emit('assessment.worker_output_rejected', {
+        run_id: runId,
+        worker_session_id: 'worker_01',
+        agent_id: 'agent_1',
+        agent_kind: 'acp',
+        agent_role: 'assessment-worker',
+        pass: 1,
+        max_passes: 3,
+        ...(entry.payload as Record<string, unknown>),
+      });
+
+      const stored = useAssessment.getState().workerOutputErrors.get(runId);
+      expect(stored?.reason, entry.name).toBe(entry.expectedReason);
+      expect(stored?.run_id).toBe(runId);
+      expect(stored?.worker_session_id).toBe('worker_01');
+      expect(stored?.agent_id).toBe('agent_1');
+      expect(stored?.agent_kind).toBe('acp');
+      expect(stored?.agent_role).toBe('assessment-worker');
+      expect(stored?.pass).toBe(1);
+      expect(stored?.max_passes).toBe(3);
+
+      if (entry.expectedReason === 'redaction_applied') {
+        expect(stored?.sample_reason).toBe('redaction_applied');
+        expect(stored?.sample_truncated).toBe(true);
+      }
+
+      useAssessment.getState().clearWorkerOutputRejection(runId);
+      useAssessment.getState().clear();
+    }
+
+    off();
+  });
+
   it('hydrates sweep lifecycle and backend query payloads', () => {
     const { t, emit } = mockTransport();
     const off = registerAssessmentHandlers(t);
@@ -293,6 +399,8 @@ describe('assessment handlers', () => {
     });
 
     emit('assessment.runs_listed', {
+      query_source: 'event_log',
+      fallback_reason: 'index_missing',
       active_run_id: 'run_sweep_01',
       active_sweep_id: 'sweep_01',
       runs: [
@@ -337,6 +445,8 @@ describe('assessment handlers', () => {
     });
 
     emit('assessment.report_fetched', {
+      query_source: 'event_log',
+      fallback_reason: 'index_incomplete',
       run: {
         id: 'run_sweep_01',
         swarm: 'rtd',
@@ -403,6 +513,8 @@ describe('assessment handlers', () => {
     });
 
     emit('assessment.diffed', {
+      query_source: 'event_log',
+      fallback_reason: 'index_incomplete',
       base_run_id: 'run_base',
       next_run_id: 'run_sweep_01',
       base_run: {
@@ -450,6 +562,10 @@ describe('assessment handlers', () => {
     expect(store.sweeps.get('sweep_01')?.run_ids).toContain('run_sweep_01');
     expect(store.runs.get('run_sweep_01')?.status).toBe('completed');
     expect(store.runs.get('run_sweep_01')?.verdict).toBe('warn');
+    expect(store.runs.get('run_sweep_01')?.query_source).toBe('event_log');
+    expect(store.runs.get('run_sweep_01')?.fallback_reason).toBe('index_incomplete');
+    expect(store.runs.get('run_base')?.query_source).toBe('event_log');
+    expect(store.runs.get('run_base')?.fallback_reason).toBe('index_incomplete');
     expect(store.evidence.get('evidence_1')?.preview).toBe('line 1');
     expect(store.diffs.get('run_base\x00run_sweep_01')?.counts.new).toBe(1);
 

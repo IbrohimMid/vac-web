@@ -15,6 +15,7 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
+    "verify:assessment": "bash scripts/verify-assessment-cockpit.sh",
     "codegen": "bash scripts/codegen.sh",
     "codegen:verify": "bash scripts/verify-codegen.sh",
     "schema:validate": "bash scripts/schema-validate.sh",

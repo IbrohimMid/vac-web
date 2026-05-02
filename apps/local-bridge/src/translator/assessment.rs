@@ -5,8 +5,9 @@ use crate::server::AppStateHandle;
 use crate::session::assessment_validation::{
     validate_candidate, AssessmentValidationTracker, CandidateRejection,
 };
-use crate::session::persistence::RedactionMode;
+use crate::session::persistence::{redact_event_payload, RedactionLabel, RedactionMode};
 use crate::session::{SessionHandle, SessionHandleRef, SpawnOptions};
+use crate::translator::assessment_schema::WorkerOutputRejection as EnvelopeRejection;
 use crate::translator::emit_session_event;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use dashmap::DashMap;
@@ -373,6 +374,71 @@ struct SweepStats {
     findings: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SweepExecutionPolicy {
+    requested_mode: &'static str,
+    effective_mode: &'static str,
+    concurrency: usize,
+    failure_policy: &'static str,
+}
+
+impl SweepExecutionPolicy {
+    fn from_payload(payload: &Value) -> Self {
+        let requested_mode = match payload
+            .get("mode")
+            .or_else(|| payload.get("sweep_mode"))
+            .and_then(Value::as_str)
+            .unwrap_or("sequential")
+        {
+            "parallel" => "parallel",
+            _ => "sequential",
+        };
+        let concurrency = payload
+            .get("concurrency")
+            .and_then(Value::as_u64)
+            .map(|v| v.clamp(1, 4) as usize)
+            .unwrap_or(1);
+        let failure_policy = match payload
+            .get("failure_policy")
+            .and_then(Value::as_str)
+            .unwrap_or("continue")
+        {
+            "stop_on_fail" => "stop_on_fail",
+            _ => "continue",
+        };
+        // Current runtime executes sweep children sequentially to preserve
+        // deterministic persistence/event ordering. We still preserve the
+        // requested mode/concurrency as policy metadata so the cockpit can show
+        // operator intent and future worker-pool support can flip effective_mode.
+        Self {
+            requested_mode,
+            effective_mode: "sequential",
+            concurrency,
+            failure_policy,
+        }
+    }
+
+    fn should_stop_on_fail(self) -> bool {
+        self.failure_policy == "stop_on_fail"
+    }
+
+    fn counts_payload(self, total: usize, completed: usize, failed: usize) -> Value {
+        let running = if completed < total { 1 } else { 0 };
+        let pending = total.saturating_sub(completed + running);
+        json!({
+            "requested_mode": self.requested_mode,
+            "effective_mode": self.effective_mode,
+            "mode": self.effective_mode,
+            "concurrency": self.concurrency,
+            "failure_policy": self.failure_policy,
+            "running_count": running,
+            "pending_count": pending,
+            "completed_count": completed,
+            "failed_count": failed,
+        })
+    }
+}
+
 impl SweepStats {
     fn record_completed_child(&mut self, stats: &RunStats, verdict: &str) {
         self.completed_runs += 1;
@@ -734,6 +800,7 @@ fn build_sweep_started_event(
     started_at: &str,
     total_runs: usize,
     agent: &AgentDefinition,
+    policy: SweepExecutionPolicy,
 ) -> ServerEvent {
     ServerEvent {
         seq: 0,
@@ -751,6 +818,15 @@ fn build_sweep_started_event(
             "agent_id": agent.id.clone(),
             "agent_kind": agent.kind.as_str(),
             "agent_role": "assessment-sweep",
+            "requested_mode": policy.requested_mode,
+            "effective_mode": policy.effective_mode,
+            "mode": policy.effective_mode,
+            "concurrency": policy.concurrency,
+            "failure_policy": policy.failure_policy,
+            "running_count": 0,
+            "pending_count": total_runs,
+            "completed_count": 0,
+            "failed_count": 0,
         }),
         v: 1,
         ts: started_at.to_string(),
@@ -769,6 +845,7 @@ fn build_sweep_progress_event(
     elapsed_ms: u64,
     stats: &SweepStats,
     current_verdict: &str,
+    policy: SweepExecutionPolicy,
 ) -> ServerEvent {
     let ts = chrono::Utc::now().to_rfc3339();
     ServerEvent {
@@ -786,6 +863,15 @@ fn build_sweep_progress_event(
             "elapsed_ms": elapsed_ms,
             "verdict": current_verdict,
             "counts": stats.counts_payload(total_runs),
+            "requested_mode": policy.requested_mode,
+            "effective_mode": policy.effective_mode,
+            "mode": policy.effective_mode,
+            "concurrency": policy.concurrency,
+            "failure_policy": policy.failure_policy,
+            "running_count": policy.counts_payload(total_runs, completed, stats.failed_runs)["running_count"].clone(),
+            "pending_count": policy.counts_payload(total_runs, completed, stats.failed_runs)["pending_count"].clone(),
+            "completed_count": completed,
+            "failed_count": stats.failed_runs,
         }),
         v: 1,
         ts,
@@ -805,6 +891,7 @@ fn build_sweep_terminal_event(
     reason: &str,
     detail: Option<String>,
     agent: &AgentDefinition,
+    policy: SweepExecutionPolicy,
 ) -> ServerEvent {
     let verdict = stats.verdict();
     let delivery_state = stats.delivery_state();
@@ -828,6 +915,15 @@ fn build_sweep_terminal_event(
         "agent_id": agent.id.clone(),
         "agent_kind": agent.kind.as_str(),
         "agent_role": "assessment-sweep",
+        "requested_mode": policy.requested_mode,
+        "effective_mode": policy.effective_mode,
+        "mode": policy.effective_mode,
+        "concurrency": policy.concurrency,
+        "failure_policy": policy.failure_policy,
+        "running_count": 0,
+        "pending_count": 0,
+        "completed_count": completed_runs,
+        "failed_count": stats.failed_runs,
     });
     if let Some(detail) = detail {
         if let Some(obj) = payload.as_object_mut() {
@@ -1002,7 +1098,7 @@ const WORKER_OUTPUT_SAMPLE_LIMIT: usize = 500;
 /// `session::persistence::redact` so a sample published in the live event
 /// stream cannot leak credentials that the persistence redactor would
 /// have stripped from the JSONL log.
-fn redact_worker_sample(transcript: &str) -> String {
+fn redact_worker_sample(transcript: &str) -> (String, bool, bool) {
     use regex::Regex;
     use std::sync::OnceLock;
 
@@ -1012,9 +1108,64 @@ fn redact_worker_sample(transcript: &str) -> String {
             .expect("worker sample redaction regex must compile")
     });
 
-    let scrubbed = token_re.replace_all(transcript, "[REDACTED]");
-    let truncated: String = scrubbed.chars().take(WORKER_OUTPUT_SAMPLE_LIMIT).collect();
-    truncated
+    let mut sample = transcript.to_string();
+    let mut redacted = false;
+
+    if let Some(slice) = extract_json_slice(transcript) {
+        if let Ok(mut payload) = serde_json::from_str::<Value>(slice) {
+            let label = redact_event_payload(&mut payload, RedactionMode::Standard);
+            if label != RedactionLabel::Safe {
+                redacted = true;
+            }
+            if let Ok(redacted_slice) = serde_json::to_string(&payload) {
+                if redacted_slice != slice {
+                    sample = transcript.replacen(slice, &redacted_slice, 1);
+                }
+            }
+        }
+    }
+
+    let scrubbed = token_re.replace_all(&sample, "<redacted>").to_string();
+    redacted |= scrubbed != sample;
+    let truncated = scrubbed.chars().count() > WORKER_OUTPUT_SAMPLE_LIMIT;
+    let sample: String = scrubbed.chars().take(WORKER_OUTPUT_SAMPLE_LIMIT).collect();
+    (sample, redacted, truncated)
+}
+
+fn worker_reason_and_code(rejection: &EnvelopeRejection) -> (&str, &str) {
+    let reason = match rejection.reason.as_str() {
+        "json_parse_failed" => "json_parse_failed",
+        "schema_version_unsupported" => "schema_version_unsupported",
+        "schema_invalid" => "schema_invalid",
+        "candidate_schema_invalid" => "candidate_schema_invalid",
+        "empty_output" => "empty_output",
+        "redaction_applied" => "redaction_applied",
+        "schema_version_invalid" | "missing_candidates" | "candidates_not_array" => {
+            "schema_invalid"
+        }
+        "candidate_not_object" | "candidate_missing_title" | "candidate_severity_invalid" => {
+            "candidate_schema_invalid"
+        }
+        "unparseable" => "json_parse_failed",
+        _ => match rejection.code.as_str() {
+            "json_parse_failed" | "unparseable" => "json_parse_failed",
+            "schema_version_invalid" | "missing_candidates" | "candidates_not_array" => {
+                "schema_invalid"
+            }
+            "candidate_not_object" | "candidate_missing_title" | "candidate_severity_invalid" => {
+                "candidate_schema_invalid"
+            }
+            "empty_output" => "empty_output",
+            "schema_version_unsupported" => "schema_version_unsupported",
+            "redaction_applied" => "redaction_applied",
+            _ => "schema_invalid",
+        },
+    };
+    let code = match reason {
+        "schema_invalid" | "candidate_schema_invalid" => rejection.code.as_str(),
+        _ => reason,
+    };
+    (reason, code)
 }
 
 /// Emit `assessment.worker_output_rejected` on the controller session.
@@ -1030,12 +1181,11 @@ async fn emit_worker_output_rejected(
     worker: &SessionHandleRef,
     pass: usize,
     max_passes: usize,
-    code: &str,
-    detail: &str,
-    path: Option<&str>,
+    rejection: &EnvelopeRejection,
     transcript: &str,
 ) {
-    let sample = redact_worker_sample(transcript);
+    let (sample, redacted, sample_truncated) = redact_worker_sample(transcript);
+    let (reason, code) = worker_reason_and_code(rejection);
     emit_controller_event(
         controller,
         "assessment.worker_output_rejected",
@@ -1045,10 +1195,12 @@ async fn emit_worker_output_rejected(
             "agent_id": worker.agent_id,
             "agent_kind": worker.agent_kind.as_str(),
             "agent_role": "assessment-worker",
-            "reason": "schema_invalid",
+            "reason": reason,
             "code": code,
-            "detail": detail,
-            "path": path,
+            "detail": rejection.message,
+            "path": rejection.path,
+            "sample_reason": if redacted { Some("redaction_applied") } else { None::<&str> },
+            "sample_truncated": sample_truncated,
             "pass": pass,
             "max_passes": max_passes,
             "sample": sample,
@@ -1073,6 +1225,9 @@ fn parse_acp_candidate_payload_full(
     use crate::translator::assessment_schema::{validate_worker_output, EnvelopeOutcome};
 
     let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("worker output was empty".to_string());
+    }
     let candidates = [trimmed, extract_json_slice(trimmed).unwrap_or(trimmed)];
     for candidate in candidates {
         if candidate.is_empty() {
@@ -1594,6 +1749,7 @@ pub async fn dispatch_assessment_sweep_run(
         .and_then(|v| v.as_str())
         .unwrap_or("assessment-sweep");
     let families = parse_sweep_families(&cmd.payload);
+    let policy = SweepExecutionPolicy::from_payload(&cmd.payload);
     let registry = state.sessions.agents();
     let selected_agent = match choose_worker_agent(&registry, requested_agent_id.as_deref()) {
         Ok(agent) => agent,
@@ -1622,6 +1778,7 @@ pub async fn dispatch_assessment_sweep_run(
     let selected_agent_for_task = selected_agent.clone();
     let sweep_id_for_task = sweep_id.clone();
     let agent_role_for_task = agent_role.to_string();
+    let policy_for_task = policy;
 
     tokio::spawn(async move {
         let started_at = Instant::now();
@@ -1636,6 +1793,7 @@ pub async fn dispatch_assessment_sweep_run(
                 &started_at_wall,
                 families_for_task.len(),
                 &selected_agent_for_task,
+                policy_for_task,
             )
             .payload,
         )
@@ -1740,6 +1898,7 @@ pub async fn dispatch_assessment_sweep_run(
                                 started_at.elapsed().as_millis() as u64,
                                 &sweep_stats,
                                 sweep_stats.verdict(),
+                                policy_for_task,
                             )
                             .payload,
                         )
@@ -1750,6 +1909,13 @@ pub async fn dispatch_assessment_sweep_run(
                         final_status = "failed";
                         terminal_reason = failure.reason.to_string();
                         terminal_detail = Some(failure.detail);
+                    }
+                    if policy_for_task.should_stop_on_fail() {
+                        terminal_reason = "stop_on_fail".to_string();
+                        if terminal_detail.is_none() {
+                            terminal_detail =
+                                Some("sweep stopped after first failed child".to_string());
+                        }
                     }
                 }
             }
@@ -1777,10 +1943,15 @@ pub async fn dispatch_assessment_sweep_run(
                     started_at.elapsed().as_millis() as u64,
                     &sweep_stats,
                     sweep_stats.verdict(),
+                    policy_for_task,
                 )
                 .payload,
             )
             .await;
+
+            if final_status == "failed" && policy_for_task.should_stop_on_fail() {
+                break;
+            }
         }
 
         let terminal_event = if final_status == "completed" && completed_runs >= total_runs {
@@ -1796,6 +1967,7 @@ pub async fn dispatch_assessment_sweep_run(
                 &terminal_reason,
                 terminal_detail,
                 &selected_agent_for_task,
+                policy_for_task,
             )
         } else {
             build_sweep_terminal_event(
@@ -1810,6 +1982,7 @@ pub async fn dispatch_assessment_sweep_run(
                 &terminal_reason,
                 terminal_detail,
                 &selected_agent_for_task,
+                policy_for_task,
             )
         };
         emit_session_event(&controller_for_task, terminal_event).await;
@@ -2021,9 +2194,7 @@ async fn run_assessment_task(
                             worker,
                             pass,
                             max_passes,
-                            &rejection.code,
-                            &rejection.message,
-                            rejection.path.as_deref(),
+                            &rejection,
                             &transcript,
                         )
                         .await;
@@ -2036,15 +2207,18 @@ async fn run_assessment_task(
                         // Worker output didn't even parse as JSON. Surface
                         // it under the same channel so the cockpit gets a
                         // single "worker output rejected" treatment.
+                        let rejection = if detail == "worker output was empty" {
+                            EnvelopeRejection::new("empty_output", "empty_output", &detail)
+                        } else {
+                            EnvelopeRejection::new("unparseable", "json_parse_failed", &detail)
+                        };
                         emit_worker_output_rejected(
                             controller,
                             run_id,
                             worker,
                             pass,
                             max_passes,
-                            "unparseable",
-                            &detail,
-                            None,
+                            &rejection,
                             &transcript,
                         )
                         .await;
@@ -2192,6 +2366,19 @@ async fn run_assessment_task(
                                 stats.record_rejection();
                                 emit_controller_event(controller, "assessment.candidate_rejected", payload).await;
                             }
+                            "assessment.worker_output_rejected" => {
+                                let payload = augment_payload(
+                                    ev.payload,
+                                    &[
+                                        ("run_id", json!(run_id)),
+                                        ("agent_role", json!("assessment-worker")),
+                                        ("worker_session_id", json!(worker.id)),
+                                        ("agent_id", json!(worker.agent_id)),
+                                        ("agent_kind", json!(worker.agent_kind.as_str())),
+                                    ],
+                                );
+                                emit_controller_event(controller, "assessment.worker_output_rejected", payload).await;
+                            }
                             "assessment.evidence_attached" => {
                                 let payload = augment_payload(
                                     ev.payload,
@@ -2268,7 +2455,8 @@ mod n3_worker_output_rejection_tests {
     //! is exercised by the WS / persistence integration suites.
 
     use super::{
-        parse_acp_candidate_payload_full, redact_worker_sample, WORKER_OUTPUT_SAMPLE_LIMIT,
+        parse_acp_candidate_payload_full, redact_worker_sample, worker_reason_and_code,
+        EnvelopeRejection, WORKER_OUTPUT_SAMPLE_LIMIT,
     };
 
     #[test]
@@ -2280,33 +2468,90 @@ mod n3_worker_output_rejection_tests {
             "and xoxb-1234567890-abcdef ",
             "and AWS_SECRET=ABCDEF1234567890",
         );
-        let scrubbed = redact_worker_sample(raw);
+        let (scrubbed, redacted, truncated) = redact_worker_sample(raw);
         assert!(
-            !scrubbed.contains("abcdef1234567890") || scrubbed.matches("[REDACTED]").count() >= 4,
+            !scrubbed.contains("abcdef1234567890") || scrubbed.matches("<redacted>").count() >= 4,
             "expected at least four token shapes redacted; got: {scrubbed}"
         );
         assert!(
-            scrubbed.contains("[REDACTED]"),
-            "redactor must substitute [REDACTED] for token bodies; got: {scrubbed}"
+            scrubbed.contains("<redacted>"),
+            "redactor must substitute <redacted> for token bodies; got: {scrubbed}"
         );
+        assert!(
+            redacted,
+            "redactor must report that a secret-like token was scrubbed"
+        );
+        assert!(!truncated, "sample should not be truncated in this test");
         // Non-token text is preserved.
         assert!(scrubbed.contains("hello"));
     }
 
     #[test]
+    fn redact_worker_sample_redacts_json_slices_with_shared_semantics() {
+        let raw = concat!(
+            "worker output: ",
+            r#"{"schema_version":1,"token":"sk-1234567890abcdef","nested":{"authorization":"Bearer abcdefghijklmnop"},"note":"ok"}"#,
+            " tail"
+        );
+        let (scrubbed, redacted, truncated) = redact_worker_sample(raw);
+        assert!(redacted, "JSON slice should be treated as redacted");
+        assert!(!truncated, "short JSON slice should not be truncated");
+        assert!(scrubbed.contains(r#""token":"<redacted>""#));
+        assert!(scrubbed.contains(r#""authorization":"<redacted>""#));
+        assert!(scrubbed.contains(r#""note":"ok""#));
+        assert!(scrubbed.starts_with("worker output: {"));
+        assert!(scrubbed.ends_with(" tail"));
+    }
+
+    #[test]
     fn redact_worker_sample_truncates_to_limit() {
         let raw: String = "a".repeat(WORKER_OUTPUT_SAMPLE_LIMIT + 250);
-        let scrubbed = redact_worker_sample(&raw);
+        let (scrubbed, redacted, truncated) = redact_worker_sample(&raw);
         assert_eq!(
             scrubbed.chars().count(),
             WORKER_OUTPUT_SAMPLE_LIMIT,
             "sample must be truncated to the configured limit"
         );
+        assert!(!redacted, "pure truncation should not report redaction");
+        assert!(truncated, "sample must report truncation");
     }
 
     #[test]
     fn redact_worker_sample_handles_empty_input() {
-        assert_eq!(redact_worker_sample(""), "");
+        let (sample, redacted, truncated) = redact_worker_sample("");
+        assert_eq!(sample, "");
+        assert!(!redacted);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn worker_reason_and_code_normalizes_legacy_rejection_codes() {
+        let legacy_schema = EnvelopeRejection::new(
+            "schema_version_invalid",
+            "schema_invalid",
+            "schema version missing or invalid",
+        );
+        let (reason, code) = worker_reason_and_code(&legacy_schema);
+        assert_eq!(reason, "schema_invalid");
+        assert_eq!(code, "schema_version_invalid");
+
+        let legacy_candidate = EnvelopeRejection::new(
+            "candidate_missing_title",
+            "candidate_schema_invalid",
+            "candidate title missing",
+        );
+        let (reason, code) = worker_reason_and_code(&legacy_candidate);
+        assert_eq!(reason, "candidate_schema_invalid");
+        assert_eq!(code, "candidate_missing_title");
+
+        let parse_failure = EnvelopeRejection::new(
+            "unparseable",
+            "json_parse_failed",
+            "worker output did not contain parseable JSON",
+        );
+        let (reason, code) = worker_reason_and_code(&parse_failure);
+        assert_eq!(reason, "json_parse_failed");
+        assert_eq!(code, "json_parse_failed");
     }
 
     #[test]
@@ -2335,6 +2580,7 @@ mod n3_worker_output_rejection_tests {
         assert!(candidates.is_empty());
         let rej = rejection.expect("unsupported schema_version must produce a rejection");
         assert_eq!(rej.code, "schema_version_unsupported");
+        assert_eq!(rej.reason, "schema_version_unsupported");
         assert_eq!(rej.path.as_deref(), Some("schema_version"));
     }
 
@@ -2361,6 +2607,7 @@ mod n3_worker_output_rejection_tests {
         let (_candidates, rejection) = parse_acp_candidate_payload_full(transcript)
             .expect("recognised envelope must not be reported as Err()");
         let rej = rejection.expect("invalid severity must produce a rejection");
+        assert_eq!(rej.reason, "candidate_schema_invalid");
         // The rejection should call out the bad severity value somewhere —
         // either in the structured path or in the human-readable message.
         let path = rej.path.as_deref().unwrap_or("");

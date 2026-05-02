@@ -286,6 +286,11 @@ impl SessionRegistry {
         *slot = fresh;
     }
 
+    #[cfg(test)]
+    pub fn insert_for_test(&self, session_id: impl Into<String>, handle: SessionHandleRef) {
+        self.inner.insert(session_id.into(), handle);
+    }
+
     pub async fn create(
         &self,
         profile_id: String,

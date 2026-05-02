@@ -68,6 +68,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "assessment.list_runs",
     "assessment.fetch_report",
     "assessment.fetch_evidence_preview",
+    "assessment.index.status",
+    "assessment.index.rebuild",
     "assessment.cancel",
     "assessment.sweep.cancel",
     "assessment.replay",

@@ -19,6 +19,9 @@ import {
 } from '../../stores/assessment';
 import type { DiffResult } from '../../stores/assessmentDiff';
 import type { TransportHandle } from '../../transport';
+import {
+  parseWorkerOutputRejection,
+} from './workerOutputRejection';
 import { reasonFromAckCode, reasonLabel } from './queries';
 
 function asSeverity(raw: string | undefined): Severity {
@@ -133,10 +136,66 @@ interface EvidencePreviewPayload {
   preview: string;
 }
 
+interface EvidencePreviewFailedPayload {
+  id: string;
+  reason?: 'connector_unavailable' | 'unsupported_source' | 'permission_denied' | 'not_found' | 'preview_failed';
+  message?: string;
+}
+
 interface CompletedPayload {
   run_id: string;
   verdict?: string;
   score?: Partial<Record<Category, number>>;
+  query_source?: 'index' | 'event_log';
+  fallback_reason?: 'index_missing' | 'index_incomplete' | 'index_error' | null;
+}
+
+interface QueryProvenancePayload {
+  query_source?: 'index' | 'event_log';
+  fallback_reason?: 'index_missing' | 'index_incomplete' | 'index_error' | null;
+}
+
+function readQueryProvenance(raw: Record<string, unknown>): QueryProvenancePayload {
+  const query_source = raw.query_source === 'index' || raw.query_source === 'event_log'
+    ? raw.query_source
+    : raw.source === 'index' || raw.source === 'event_log'
+      ? (raw.source as 'index' | 'event_log')
+      : undefined;
+  const fallback_reason =
+    raw.fallback_reason === 'index_missing' ||
+      raw.fallback_reason === 'index_incomplete' ||
+      raw.fallback_reason === 'index_error'
+      ? (raw.fallback_reason as 'index_missing' | 'index_incomplete' | 'index_error')
+      : raw.fallback_reason === null
+        ? null
+        : undefined;
+  const legacyIndexComplete = typeof raw.index_complete === 'boolean' ? raw.index_complete : undefined;
+  if (query_source === 'index') {
+    return {
+      query_source,
+      fallback_reason: fallback_reason ?? null,
+    };
+  }
+  if (query_source === 'event_log') {
+    return {
+      query_source,
+      fallback_reason:
+        fallback_reason ?? (legacyIndexComplete === false ? 'index_incomplete' : 'index_missing'),
+    };
+  }
+  if (fallback_reason !== undefined) {
+    return {
+      query_source: fallback_reason === null ? 'index' : 'event_log',
+      fallback_reason,
+    };
+  }
+  if (legacyIndexComplete !== undefined) {
+    return {
+      query_source: legacyIndexComplete ? 'index' : 'event_log',
+      fallback_reason: legacyIndexComplete ? null : 'index_incomplete',
+    };
+  }
+  return {};
 }
 
 function readFindingPayload(ev: unknown): FindingPayload | null {
@@ -385,7 +444,7 @@ function readFindingRecord(raw: unknown): Finding | null {
   };
 }
 
-function readRunRecord(raw: unknown): Run | null {
+function readRunRecord(raw: unknown, inheritedProvenance?: QueryProvenancePayload): Run | null {
   const p = raw as Record<string, unknown> | null;
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
   const id = readString(p, ['id', 'run_id', 'runId']);
@@ -410,7 +469,8 @@ function readRunRecord(raw: unknown): Run | null {
   const finishedAt = readString(p, ['finished_at', 'finishedAt']);
   const verdict = readString(p, ['verdict']);
   const verdictDetail = readVerdictDetail(p as Record<string, unknown>);
-  return {
+  const provenance = { ...(inheritedProvenance ?? {}), ...readQueryProvenance(p) };
+  const run: Run = {
     id,
     swarm: asFamily(readString(p, ['swarm'])),
     status: asRunStatus(readString(p, ['status'])),
@@ -421,61 +481,61 @@ function readRunRecord(raw: unknown): Run | null {
     ...(verdict ? { verdict: asVerdict(verdict) } : {}),
     ...(scoreRaw
       ? {
-          score: {
-            technical: typeof scoreRaw.technical === 'number' ? scoreRaw.technical : 0,
-            product: typeof scoreRaw.product === 'number' ? scoreRaw.product : 0,
-            ux: typeof scoreRaw.ux === 'number' ? scoreRaw.ux : 0,
-            release: typeof scoreRaw.release === 'number' ? scoreRaw.release : 0,
-            ops: typeof scoreRaw.ops === 'number' ? scoreRaw.ops : 0,
-          },
-        }
+        score: {
+          technical: typeof scoreRaw.technical === 'number' ? scoreRaw.technical : 0,
+          product: typeof scoreRaw.product === 'number' ? scoreRaw.product : 0,
+          ux: typeof scoreRaw.ux === 'number' ? scoreRaw.ux : 0,
+          release: typeof scoreRaw.release === 'number' ? scoreRaw.release : 0,
+          ops: typeof scoreRaw.ops === 'number' ? scoreRaw.ops : 0,
+        },
+      }
       : {}),
     ...(validationRaw
       ? {
-          validation: readValidationStats(validationRaw),
-        }
+        validation: readValidationStats(validationRaw),
+      }
       : {}),
     ...(scopeRaw
       ? {
-          scope: {
-            project_root: typeof scopeRaw.project_root === 'string' ? scopeRaw.project_root : '',
-            ...(typeof scopeRaw.repo_ref === 'string' ? { repo_ref: scopeRaw.repo_ref } : {}),
-            ...(typeof scopeRaw.base_commit_sha === 'string'
-              ? { base_commit_sha: scopeRaw.base_commit_sha }
-              : {}),
-            ...(typeof scopeRaw.diff_range === 'string' ? { diff_range: scopeRaw.diff_range } : {}),
-            ...(Array.isArray(scopeRaw.path_globs)
-              ? {
-                  path_globs: scopeRaw.path_globs.filter(
-                    (item): item is string => typeof item === 'string',
-                  ),
-                }
-              : {}),
-            ...(typeof scopeRaw.depth === 'string' ? { depth: scopeRaw.depth } : {}),
-          },
-        }
+        scope: {
+          project_root: typeof scopeRaw.project_root === 'string' ? scopeRaw.project_root : '',
+          ...(typeof scopeRaw.repo_ref === 'string' ? { repo_ref: scopeRaw.repo_ref } : {}),
+          ...(typeof scopeRaw.base_commit_sha === 'string'
+            ? { base_commit_sha: scopeRaw.base_commit_sha }
+            : {}),
+          ...(typeof scopeRaw.diff_range === 'string' ? { diff_range: scopeRaw.diff_range } : {}),
+          ...(Array.isArray(scopeRaw.path_globs)
+            ? {
+              path_globs: scopeRaw.path_globs.filter(
+                (item): item is string => typeof item === 'string',
+              ),
+            }
+            : {}),
+          ...(typeof scopeRaw.depth === 'string' ? { depth: scopeRaw.depth } : {}),
+        },
+      }
       : {}),
     ...(Array.isArray(connectorSnapshotsRaw)
       ? {
-          connector_snapshots: connectorSnapshotsRaw
-            .map((snapshot): ConnectorSnapshot | null => {
-              if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
-              const s = snapshot as Record<string, unknown>;
-              const connectorId = typeof s.connector_id === 'string' ? s.connector_id : '';
-              const kind = typeof s.kind === 'string' ? s.kind : '';
-              const snapshotId = typeof s.snapshot_id === 'string' ? s.snapshot_id : '';
-              const capturedAt = typeof s.captured_at === 'string' ? s.captured_at : '';
-              if (!connectorId || !kind || !snapshotId || !capturedAt) return null;
-              return {
-                connector_id: connectorId,
-                kind,
-                snapshot_id: snapshotId,
-                captured_at: capturedAt,
-                ...(typeof s.etag === 'string' ? { etag: s.etag } : {}),
-              };
-            })
-            .filter((item): item is ConnectorSnapshot => item !== null),
-        }
+        connector_snapshots: connectorSnapshotsRaw
+          .map((snapshot): ConnectorSnapshot | null => {
+            if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+            const s = snapshot as Record<string, unknown>;
+            const connectorId = typeof s.connector_id === 'string' ? s.connector_id : '';
+            const kind = typeof s.kind === 'string' ? s.kind : '';
+            const snapshotId = typeof s.snapshot_id === 'string' ? s.snapshot_id : '';
+            const capturedAt = typeof s.captured_at === 'string' ? s.captured_at : '';
+            if (!connectorId || !kind || !snapshotId || !capturedAt) return null;
+            return {
+              connector_id: connectorId,
+              kind,
+              snapshot_id: snapshotId,
+              captured_at: capturedAt,
+              ...(typeof s.etag === 'string' ? { etag: s.etag } : {}),
+            };
+          })
+          .filter((item): item is ConnectorSnapshot => item !== null),
+      }
       : {}),
     ...(agentId !== undefined ? { agent_id: agentId } : {}),
     ...(agentKind !== undefined ? { agent_kind: agentKind } : {}),
@@ -483,27 +543,33 @@ function readRunRecord(raw: unknown): Run | null {
     ...(workerSessionId !== undefined ? { worker_session_id: workerSessionId } : {}),
     ...(failureRaw
       ? {
-          failure: {
-            status: asRunFailureStatus(readString(failureRaw, ['status'])),
-            reason: readString(failureRaw, ['reason']) ?? 'assessment_failed',
-            ...(failureDetail !== undefined ? { detail: failureDetail } : {}),
-          },
-        }
+        failure: {
+          status: asRunFailureStatus(readString(failureRaw, ['status'])),
+          reason: readString(failureRaw, ['reason']) ?? 'assessment_failed',
+          ...(failureDetail !== undefined ? { detail: failureDetail } : {}),
+        },
+      }
       : {}),
     ...(verdictDetail ? { verdict_detail: verdictDetail } : {}),
+    ...(provenance.query_source ? { query_source: provenance.query_source } : {}),
+    ...(provenance.fallback_reason !== undefined
+      ? { fallback_reason: provenance.fallback_reason }
+      : {}),
   };
+  return run;
 }
 
 function asRunFailureStatus(raw: string | undefined): RunFailure['status'] {
   return raw === 'cancelled' ? 'cancelled' : 'failed';
 }
 
-function readSweepRecord(raw: unknown): Sweep | null {
+function readSweepRecord(raw: unknown, inheritedProvenance?: QueryProvenancePayload): Sweep | null {
   const p = raw as Record<string, unknown> | null;
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
   const id = readString(p, ['id', 'sweep_id', 'sweepId']);
   if (!id) return null;
   const started_at = readString(p, ['started_at', 'startedAt']) ?? new Date().toISOString();
+  const provenance = { ...(inheritedProvenance ?? {}), ...readQueryProvenance(p) };
   const progressRaw = p.progress as Record<string, unknown> | undefined;
   const verdictDetail = readVerdictDetail(p);
   const runIds = readStringArray(p, ['run_ids', 'runIds']);
@@ -517,12 +583,15 @@ function readSweepRecord(raw: unknown): Sweep | null {
   const finishedAt = readString(p, ['finished_at', 'finishedAt']);
   const counts: Record<string, number> | undefined = countsRaw
     ? Object.fromEntries(
-        Object.entries(countsRaw)
-          .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
-          .map(([key, value]) => [key, Math.max(0, Math.floor(value as number))]),
-      )
+      Object.entries(countsRaw)
+        .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+        .map(([key, value]) => [key, Math.max(0, Math.floor(value as number))]),
+    )
     : undefined;
-  return {
+  const requestedMode = readString(p, ['requested_mode', 'requestedMode']);
+  const effectiveMode = readString(p, ['effective_mode', 'effectiveMode', 'mode']);
+  const failurePolicy = readString(p, ['failure_policy', 'failurePolicy']);
+  const sweep: Sweep = {
     id,
     families,
     status: asRunStatus(readString(p, ['status'])),
@@ -531,50 +600,63 @@ function readSweepRecord(raw: unknown): Sweep | null {
     progress: progressRaw ? readProgressRecord(progressRaw) : readProgressRecord(p),
     ...(verdictDetail ? { verdict_detail: verdictDetail } : {}),
     ...(counts ? { counts } : {}),
+    ...(requestedMode === 'sequential' || requestedMode === 'parallel' ? { requested_mode: requestedMode } : {}),
+    ...(effectiveMode === 'sequential' || effectiveMode === 'parallel' ? { effective_mode: effectiveMode, mode: effectiveMode } : {}),
+    ...(typeof p.concurrency === 'number' && Number.isFinite(p.concurrency) ? { concurrency: Math.max(1, Math.floor(p.concurrency)) } : {}),
+    ...(failurePolicy === 'continue' || failurePolicy === 'stop_on_fail' ? { failure_policy: failurePolicy } : {}),
+    ...(typeof p.running_count === 'number' ? { running_count: Math.max(0, Math.floor(p.running_count)) } : {}),
+    ...(typeof p.pending_count === 'number' ? { pending_count: Math.max(0, Math.floor(p.pending_count)) } : {}),
+    ...(typeof p.completed_count === 'number' ? { completed_count: Math.max(0, Math.floor(p.completed_count)) } : {}),
+    ...(typeof p.failed_count === 'number' ? { failed_count: Math.max(0, Math.floor(p.failed_count)) } : {}),
     run_ids: runIds,
     ...(p.scope && typeof p.scope === 'object' && !Array.isArray(p.scope)
       ? {
-          scope: {
-            project_root: typeof (p.scope as Record<string, unknown>).project_root === 'string'
-              ? ((p.scope as Record<string, unknown>).project_root as string)
-              : '',
-            ...(typeof (p.scope as Record<string, unknown>).repo_ref === 'string'
-              ? { repo_ref: (p.scope as Record<string, unknown>).repo_ref as string }
-              : {}),
-            ...(typeof (p.scope as Record<string, unknown>).base_commit_sha === 'string'
-              ? {
-                  base_commit_sha: (p.scope as Record<string, unknown>).base_commit_sha as string,
-                }
-              : {}),
-            ...(typeof (p.scope as Record<string, unknown>).diff_range === 'string'
-              ? { diff_range: (p.scope as Record<string, unknown>).diff_range as string }
-              : {}),
-            ...(Array.isArray((p.scope as Record<string, unknown>).path_globs)
-              ? {
-                  path_globs: ((p.scope as Record<string, unknown>).path_globs as unknown[]).filter(
-                    (item): item is string => typeof item === 'string',
-                  ),
-                }
-              : {}),
-            ...(typeof (p.scope as Record<string, unknown>).depth === 'string'
-              ? { depth: (p.scope as Record<string, unknown>).depth as string }
-              : {}),
-          },
-        }
+        scope: {
+          project_root: typeof (p.scope as Record<string, unknown>).project_root === 'string'
+            ? ((p.scope as Record<string, unknown>).project_root as string)
+            : '',
+          ...(typeof (p.scope as Record<string, unknown>).repo_ref === 'string'
+            ? { repo_ref: (p.scope as Record<string, unknown>).repo_ref as string }
+            : {}),
+          ...(typeof (p.scope as Record<string, unknown>).base_commit_sha === 'string'
+            ? {
+              base_commit_sha: (p.scope as Record<string, unknown>).base_commit_sha as string,
+            }
+            : {}),
+          ...(typeof (p.scope as Record<string, unknown>).diff_range === 'string'
+            ? { diff_range: (p.scope as Record<string, unknown>).diff_range as string }
+            : {}),
+          ...(Array.isArray((p.scope as Record<string, unknown>).path_globs)
+            ? {
+              path_globs: ((p.scope as Record<string, unknown>).path_globs as unknown[]).filter(
+                (item): item is string => typeof item === 'string',
+              ),
+            }
+            : {}),
+          ...(typeof (p.scope as Record<string, unknown>).depth === 'string'
+            ? { depth: (p.scope as Record<string, unknown>).depth as string }
+            : {}),
+        },
+      }
       : {}),
     ...(agentId !== undefined ? { agent_id: agentId } : {}),
     ...(agentKind !== undefined ? { agent_kind: agentKind } : {}),
     ...(agentRole !== undefined ? { agent_role: agentRole } : {}),
     ...(failureRaw
       ? {
-          failure: {
-            status: asRunFailureStatus(readString(failureRaw, ['status'])),
-            reason: readString(failureRaw, ['reason']) ?? 'sweep_failed',
-            ...(failureDetail !== undefined ? { detail: failureDetail } : {}),
-          },
-        }
+        failure: {
+          status: asRunFailureStatus(readString(failureRaw, ['status'])),
+          reason: readString(failureRaw, ['reason']) ?? 'sweep_failed',
+          ...(failureDetail !== undefined ? { detail: failureDetail } : {}),
+        },
+      }
+      : {}),
+    ...(provenance.query_source ? { query_source: provenance.query_source } : {}),
+    ...(provenance.fallback_reason !== undefined
+      ? { fallback_reason: provenance.fallback_reason }
       : {}),
   };
+  return sweep;
 }
 
 function readNumberMap(raw: unknown): Record<string, number> | undefined {
@@ -590,14 +672,15 @@ function readNumberMap(raw: unknown): Record<string, number> | undefined {
 
 function hydrateAssessmentList(payload: Record<string, unknown>): void {
   const store = useAssessment.getState();
+  const provenance = readQueryProvenance(payload);
   const runs = Array.isArray(payload.runs) ? payload.runs : [];
   const sweeps = Array.isArray(payload.sweeps) ? payload.sweeps : [];
   for (const raw of runs) {
-    const run = readRunRecord(raw);
+    const run = readRunRecord(raw, provenance);
     if (run) store.upsertRun(run);
   }
   for (const raw of sweeps) {
-    const sweep = readSweepRecord(raw);
+    const sweep = readSweepRecord(raw, provenance);
     if (sweep) store.upsertSweep(sweep);
   }
   const activeRunId = readString(payload, ['active_run_id', 'activeRunId']);
@@ -608,7 +691,8 @@ function hydrateAssessmentList(payload: Record<string, unknown>): void {
 
 function hydrateAssessmentReport(payload: Record<string, unknown>): void {
   const store = useAssessment.getState();
-  const run = readRunRecord(payload.run ?? payload);
+  const provenance = readQueryProvenance(payload);
+  const run = readRunRecord(payload.run ?? payload, provenance);
   if (run) {
     store.upsertRun(run);
     store.setActive(run.id);
@@ -648,7 +732,7 @@ function hydrateAssessmentReport(payload: Record<string, unknown>): void {
       ...(ref.mime_type !== undefined ? { mime_type: ref.mime_type } : {}),
     });
   }
-  const sweep = readSweepRecord(payload.sweep);
+  const sweep = readSweepRecord(payload.sweep, provenance);
   if (sweep) {
     store.upsertSweep(sweep);
     store.setActiveSweep(sweep.id);
@@ -661,8 +745,9 @@ function hydrateAssessmentDiff(payload: Record<string, unknown>): void {
   if (!baseRunId || !nextRunId) return;
 
   const store = useAssessment.getState();
-  const baseRun = readRunRecord(payload.base_run ?? payload.baseRun);
-  const nextRun = readRunRecord(payload.next_run ?? payload.nextRun);
+  const provenance = readQueryProvenance(payload);
+  const baseRun = readRunRecord(payload.base_run ?? payload.baseRun, provenance);
+  const nextRun = readRunRecord(payload.next_run ?? payload.nextRun, provenance);
   if (baseRun) store.upsertRun(baseRun);
   if (nextRun) {
     store.upsertRun(nextRun);
@@ -733,28 +818,28 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
           : {}),
         ...(p.scope
           ? {
-              scope: {
-                project_root: p.scope.project_root,
-                ...(p.scope.repo_ref !== undefined ? { repo_ref: p.scope.repo_ref } : {}),
-                ...(p.scope.base_commit_sha !== undefined
-                  ? { base_commit_sha: p.scope.base_commit_sha }
-                  : {}),
-                ...(p.scope.diff_range !== undefined ? { diff_range: p.scope.diff_range } : {}),
-                ...(p.scope.path_globs !== undefined ? { path_globs: p.scope.path_globs } : {}),
-                ...(p.scope.depth !== undefined ? { depth: p.scope.depth } : {}),
-              },
-            }
+            scope: {
+              project_root: p.scope.project_root,
+              ...(p.scope.repo_ref !== undefined ? { repo_ref: p.scope.repo_ref } : {}),
+              ...(p.scope.base_commit_sha !== undefined
+                ? { base_commit_sha: p.scope.base_commit_sha }
+                : {}),
+              ...(p.scope.diff_range !== undefined ? { diff_range: p.scope.diff_range } : {}),
+              ...(p.scope.path_globs !== undefined ? { path_globs: p.scope.path_globs } : {}),
+              ...(p.scope.depth !== undefined ? { depth: p.scope.depth } : {}),
+            },
+          }
           : {}),
         ...(p.connector_snapshots
           ? {
-              connector_snapshots: p.connector_snapshots.map((snapshot) => ({
-                connector_id: snapshot.connector_id,
-                kind: snapshot.kind,
-                snapshot_id: snapshot.snapshot_id,
-                captured_at: snapshot.captured_at,
-                ...(snapshot.etag !== undefined ? { etag: snapshot.etag } : {}),
-              })),
-            }
+            connector_snapshots: p.connector_snapshots.map((snapshot) => ({
+              connector_id: snapshot.connector_id,
+              kind: snapshot.kind,
+              snapshot_id: snapshot.snapshot_id,
+              captured_at: snapshot.captured_at,
+              ...(snapshot.etag !== undefined ? { etag: snapshot.etag } : {}),
+            })),
+          }
           : {}),
       };
       useAssessment.getState().upsertRun(run);
@@ -868,6 +953,18 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
   );
 
   offs.push(
+    transport.on('assessment.evidence_preview_failed', (ev) => {
+      const p = ev.payload as EvidencePreviewFailedPayload | null;
+      if (!p?.id) return;
+      useAssessment.getState().setEvidencePreviewFailure(
+        p.id,
+        p.reason ?? 'preview_failed',
+        p.message ?? 'Evidence preview unavailable',
+      );
+    }),
+  );
+
+  offs.push(
     transport.on('assessment.completed', (ev) => {
       const p = ev.payload as CompletedPayload | null;
       if (!p?.run_id) return;
@@ -897,11 +994,11 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
     transport.on('assessment.failed', (ev) => {
       const p = ev.payload as
         | (Record<string, unknown> & {
-            run_id?: string;
-            status?: string;
-            reason?: string;
-            detail?: string;
-          })
+          run_id?: string;
+          status?: string;
+          reason?: string;
+          detail?: string;
+        })
         | null;
       if (!p?.run_id) return;
       const meta = readRunMeta(p);
@@ -934,37 +1031,9 @@ export function registerAssessmentHandlers(transport: TransportHandle): () => vo
   // same broken envelope again.
   offs.push(
     transport.on('assessment.worker_output_rejected', (ev) => {
-      const p = (ev.payload as Record<string, unknown> | null) ?? null;
-      if (!p) return;
-      const runId = readString(p, ['run_id', 'runId']);
-      if (!runId) return;
-      const meta = readRunMeta(p);
-      const reason = readString(p, ['reason']) ?? 'schema_invalid';
-      const code = readString(p, ['code']) ?? 'unknown';
-      const detail = readString(p, ['detail', 'message']) ?? 'Worker output rejected.';
-      const path = readString(p, ['path']);
-      const sample = readString(p, ['sample']);
-      const passRaw = p['pass'];
-      const maxPassesRaw = p['max_passes'] ?? p['maxPasses'];
-      const pass = typeof passRaw === 'number' ? passRaw : undefined;
-      const maxPasses = typeof maxPassesRaw === 'number' ? maxPassesRaw : undefined;
-      useAssessment.getState().recordWorkerOutputRejection({
-        run_id: runId,
-        ...(meta.worker_session_id !== undefined
-          ? { worker_session_id: meta.worker_session_id }
-          : {}),
-        ...(meta.agent_id !== undefined ? { agent_id: meta.agent_id } : {}),
-        ...(meta.agent_kind !== undefined ? { agent_kind: meta.agent_kind } : {}),
-        ...(meta.agent_role !== undefined ? { agent_role: meta.agent_role } : {}),
-        reason,
-        code,
-        detail,
-        ...(path !== undefined ? { path } : {}),
-        ...(pass !== undefined ? { pass } : {}),
-        ...(maxPasses !== undefined ? { max_passes: maxPasses } : {}),
-        ...(sample !== undefined ? { sample } : {}),
-        ts: new Date().toISOString(),
-      });
+      const rejection = parseWorkerOutputRejection(ev.payload);
+      if (!rejection) return;
+      useAssessment.getState().recordWorkerOutputRejection(rejection);
     }),
   );
 

@@ -1,4 +1,4 @@
-// Run details card for AssessmentReportDetail — Stage J.
+// Single-family run details card for AssessmentReportDetail — Stage J.
 //
 // The card only reads fields that actually exist in the `Run` store today
 // (id, swarm, status, started_at, finished_at, progress, verdict, score,
@@ -31,13 +31,33 @@ export function RunDetailsCard({
             color: 'var(--ink-3)',
           }}
         >
-          Run details
+          Single-family run details
         </div>
       </div>
       <div className="card-body" style={{ padding: '8px 14px 14px' }}>
         <Row k="ID" v={<code>{run.id}</code>} mono />
         <Row k="Swarm" v={run.swarm.toUpperCase()} />
         <Row k="Status" v={run.status} />
+        {(run.query_source || run.fallback_reason !== undefined) && (
+          <Row
+            k="Source"
+            v={
+              <span
+                className="badge info mono"
+                data-testid="assessment-provenance-chip"
+                title={
+                  run.query_source === 'index'
+                    ? 'Assessment read served from the SQLite index.'
+                    : run.fallback_reason !== undefined
+                      ? `Assessment read fell back to the canonical event log (${run.fallback_reason}).`
+                      : 'Assessment read fell back to the canonical event log.'
+                }
+              >
+                {run.query_source === 'index' ? 'Source: index' : 'Source: event log fallback'}
+              </span>
+            }
+          />
+        )}
         <Row k="Started" v={run.started_at} mono />
         {run.finished_at && <Row k="Finished" v={run.finished_at} mono />}
         <Row k="Checks" v={`${checksDone} / ${checksTotal}`} />
