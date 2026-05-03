@@ -279,5 +279,5 @@ See `capability-profiles.md` + `red-team-test-plan.md`.
 - [`protocol.md`](./protocol.md)
 - [`capability-profiles.md`](./capability-profiles.md)
 - [`frontend-rules.md`](./frontend-rules.md)
-- [`upstream-vac-prs.md`](./upstream-vac-prs.md)
 - [`agent-runtime.md`](./agent-runtime.md) — Stage X agent-runtime picker (mock / vac-native / ACP).
+- [`plans/backend-ui-wiring.md`](./plans/backend-ui-wiring.md) — active backend ↔ UI wiring plan.

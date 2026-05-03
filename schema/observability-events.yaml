@@ -1,0 +1,108 @@
+# Observability event keys schema (slice 41).
+#
+# Defines the canonical set of stable keys every structured log entry must
+# carry, their types, and which subsystems may extend them with namespaced
+# keys. Bridge log emitters validate against this file in tests; web
+# capability modules import the canonical key list when constructing
+# user-facing telemetry.
+
+schema_version: 1
+
+required_keys:
+  - name: event
+    type: string
+    description: Canonical event ID from event-catalog.yaml.
+  - name: session_id
+    type: string_or_null
+    description: Session URL or null when no session is in scope.
+  - name: actor
+    type: enum
+    values: [user, agent, system]
+    description: Who initiated the action.
+  - name: severity
+    type: enum
+    values: [info, warning, error, critical]
+    description: Maps to errorTaxonomy severity levels.
+  - name: code
+    type: string
+    description: Specific error code or empty string when not an error.
+  - name: latency_ms
+    type: number_or_null
+    description: Time to handle the command, where applicable.
+
+optional_keys:
+  - name: command_id
+    type: string
+    description: Catalog command id (when the event is command-scoped).
+  - name: profile_id
+    type: string
+    description: Profile that authorized the action (when applicable).
+  - name: job_id
+    type: string
+    description: Runtime job id when the event belongs to a long-running job.
+  - name: correlation_id
+    type: string
+    description: Cross-process correlation id (e.g. request id).
+
+# Subsystems may add namespaced keys with the prefixes below. Adding a new
+# prefix requires an ADR.
+#
+# Slice 41 (Pass #22) extension: `approval.`, `agent.`, `session.` added to
+# stop forcing these domains to masquerade under `profile.*`. Mini-ADR is
+# captured in `docs/plans/wiring/wave-summary-2026-05-03.md` Pass #22.
+allowed_namespace_prefixes:
+  - audit.
+  - persistence.
+  - workflow.
+  - shell.
+  - mcp.
+  - registry.
+  - profile.
+  - release.
+  - handoff.
+  - pairing.
+  - ws.
+  - approval.
+  - agent.
+  - session.
+
+# Health states reported by durable subsystems.
+health_states:
+  - ok
+  - degraded
+  - unavailable
+  - not_wired
+
+# Operational SLOs as machine-readable copies of docs/observability.md.
+slos:
+  - id: translator_p99_latency
+    subsystem: command_translator
+    metric: latency_ms
+    aggregator: p99
+    threshold_ms: 200
+    window: rolling_1h
+    scope: non_io_commands
+  - id: persistence_p99_latency
+    subsystem: persistence
+    metric: latency_ms
+    aggregator: p99
+    threshold_ms: 50
+    window: rolling_24h
+  - id: persistence_unrecovered_failures
+    subsystem: persistence
+    metric: unrecovered_failures
+    aggregator: count
+    threshold_count: 0
+    window: rolling_24h
+  - id: audit_dropped_entries
+    subsystem: audit
+    metric: dropped_entries
+    aggregator: count
+    threshold_count: 0
+    window: always
+  - id: ws_reconnect_success
+    subsystem: websocket
+    metric: reconnect_seconds
+    aggregator: p99
+    threshold_seconds: 3
+    window: rolling_1h

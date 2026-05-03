@@ -1,110 +1,15 @@
 //! Profile enforcement Layer 1 — bridge-side check before command reaches engine.
+//!
+//! The set of accepted command ids is sourced from the generated command
+//! catalog (`crate::generated::command_catalog`), which itself derives from
+//! `config/control-plane/command-manifest.yaml`. New commands must be added
+//! to the manifest and codegen re-run; the catalog is the source of truth.
 
+use crate::generated::command_catalog::{self, CommandStatus};
 use crate::server::AppStateHandle;
 use crate::ws::envelope::ClientCommand;
 use profile_core::{enforce::enforce_tool, profile::CapabilityProfile, Decision};
 use std::sync::OnceLock;
-
-const SESSIONLESS_COMMANDS: &[&str] = &[
-    "system.ping",
-    "system.version",
-    "system.capabilities",
-    "session.create",
-    "session.list",
-    "session.snapshot",
-    "session.history.list",
-    "session.history.forget",
-    "registry.sync",
-    "registry.add",
-    "config.validate",
-    "config.reload",
-];
-
-const KNOWN_COMMANDS: &[&str] = &[
-    "system.ping",
-    "system.version",
-    "system.capabilities",
-    "session.create",
-    "session.resume",
-    "session.list",
-    "session.snapshot",
-    "session.history.list",
-    "session.history.forget",
-    "session.rename",
-    "session.close",
-    "session.authenticate",
-    "message.submit",
-    "message.cancel_stream",
-    "message.retry",
-    "approval.approve",
-    "approval.approve_all",
-    "approval.reject",
-    "approval.inspect",
-    "workbench.select_tab",
-    "workbench.invoke",
-    "review.open_file",
-    "review.toggle_hunk",
-    "review.revert_file",
-    "review.revert_all",
-    "runtime.list_jobs",
-    "runtime.cancel_job",
-    "runtime.inspect_job",
-    "plan.open",
-    "plan.edit",
-    "plan.approve",
-    "plan.reject",
-    "shell.start",
-    "shell.input",
-    "shell.resize",
-    "shell.kill",
-    "context.attach_files",
-    "context.mention_search",
-    "palette.invoke_action",
-    "overlay.open",
-    "overlay.dismiss",
-    "overlay.dismiss_all",
-    "assessment.run",
-    "assessment.sweep.run",
-    "assessment.list_runs",
-    "assessment.fetch_report",
-    "assessment.fetch_evidence_preview",
-    "assessment.index.status",
-    "assessment.index.rebuild",
-    "assessment.cancel",
-    "assessment.sweep.cancel",
-    "assessment.replay",
-    "assessment.diff",
-    "handoff.create",
-    "handoff.fetch",
-    "handoff.approve",
-    "handoff.reject",
-    "handoff.dispatch_local",
-    "handoff.dispatch_web_cli",
-    "handoff.export_blueprint",
-    "handoff.cancel",
-    "gate.evaluate",
-    "gate.override",
-    "gate.signoff",
-    "gate.revoke_override",
-    "connector.list",
-    "release.list_targets",
-    "release.deploy",
-    "release.publish",
-    "release.generate_notes",
-    "continuous.write_config",
-    "migration.create_draft",
-    "migration.dry_run",
-    "migration.verify_reversibility",
-    "migration.dispatch",
-    "connector.connect",
-    "connector.disconnect",
-    "connector.capabilities",
-    "connector.health",
-    "registry.sync",
-    "registry.add",
-    "config.validate",
-    "config.reload",
-];
 
 /// Map command type → required tool capability.
 ///
@@ -139,15 +44,54 @@ fn required_tool_for(cmd: &str, payload: &serde_json::Value) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnforceOutcome {
     Allowed,
-    Denied { code: &'static str, reason: String },
+    Denied {
+        code: &'static str,
+        reason: String,
+    },
     UnknownCommand,
+    /// Command is declared in the implementation manifest but has no
+    /// bridge executor wired yet. The translator returns a deterministic
+    /// `feature.not_wired` ack so external/stale clients see a stable
+    /// error code instead of being silently forwarded to the agent.
+    NotWired {
+        command: String,
+        reason: String,
+    },
 }
 
 pub fn enforce_action(cmd: &ClientCommand, state: &AppStateHandle) -> EnforceOutcome {
-    if !KNOWN_COMMANDS.contains(&cmd.cmd_type.as_str()) {
-        return EnforceOutcome::UnknownCommand;
+    let entry = match command_catalog::lookup(cmd.cmd_type.as_str()) {
+        Some(e) => e,
+        None => return EnforceOutcome::UnknownCommand,
+    };
+
+    match entry.status {
+        CommandStatus::FrontendOwned | CommandStatus::ProtocolOnly | CommandStatus::Internal => {
+            // These should never be sent over the wire as client commands.
+            return EnforceOutcome::UnknownCommand;
+        }
+        CommandStatus::Deprecated => {
+            return EnforceOutcome::NotWired {
+                command: cmd.cmd_type.clone(),
+                reason: format!(
+                    "command '{}' is deprecated and no longer accepted",
+                    cmd.cmd_type
+                ),
+            };
+        }
+        CommandStatus::NotWired => {
+            return EnforceOutcome::NotWired {
+                command: cmd.cmd_type.clone(),
+                reason: format!(
+                    "command '{}' is declared but not wired to a bridge executor yet",
+                    cmd.cmd_type
+                ),
+            };
+        }
+        CommandStatus::Implemented => {}
     }
-    if SESSIONLESS_COMMANDS.contains(&cmd.cmd_type.as_str()) {
+
+    if command_catalog::is_sessionless(cmd.cmd_type.as_str()) {
         return EnforceOutcome::Allowed;
     }
 
@@ -192,4 +136,59 @@ fn load_profile(
     let p = CapabilityProfile::load(profile_id, profile_root)?;
     cache.insert(profile_id.to_string(), p.clone());
     Ok(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_commands_set_matches_catalog() {
+        let from_catalog: Vec<&'static str> = command_catalog::KNOWN_COMMANDS.to_vec();
+        // No duplicates, all classified.
+        let mut sorted = from_catalog.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            from_catalog.len(),
+            "duplicate command id in KNOWN_COMMANDS"
+        );
+        for id in from_catalog {
+            let st = command_catalog::status_of(id).expect("known command must have a status");
+            assert!(
+                matches!(st, CommandStatus::Implemented | CommandStatus::NotWired),
+                "known command {id} must be Implemented or NotWired, got {:?}",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn frontend_owned_commands_are_not_known_to_bridge() {
+        for entry in command_catalog::COMMAND_CATALOG {
+            if matches!(
+                entry.status,
+                CommandStatus::FrontendOwned
+                    | CommandStatus::ProtocolOnly
+                    | CommandStatus::Internal
+            ) {
+                assert!(
+                    !command_catalog::is_known(entry.id),
+                    "{} should not be in KNOWN_COMMANDS",
+                    entry.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn not_wired_commands_route_through_not_wired_outcome() {
+        // shell.start is canonical not_wired in the manifest.
+        assert!(command_catalog::is_not_wired("shell.start"));
+        assert_eq!(
+            command_catalog::status_of("shell.start"),
+            Some(CommandStatus::NotWired)
+        );
+    }
 }

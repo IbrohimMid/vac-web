@@ -2,8 +2,9 @@
 
 use crate::agent_runtime::acp::types::{SetConfigOptionRequest, SetSessionModeRequest};
 use crate::agent_runtime::acp::{sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS};
-use crate::audit::log_tool_event;
+use crate::audit::{log_structured, log_tool_event};
 use crate::handoff::packet::{ExecutionOutcome, TaskExecutionProgress};
+use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};
 use crate::profile_layer::{enforce_action, EnforceOutcome};
 use crate::server::AppStateHandle;
 use crate::session::persistence::SessionHistoryFilter;
@@ -113,17 +114,39 @@ pub async fn dispatch_command(
     match enforce_action(&cmd, &state) {
         EnforceOutcome::Allowed => {}
         EnforceOutcome::Denied { code, reason } => {
-            state.audit.log(
-                &cmd.session_id,
-                "profile",
-                AuditSeverity::Warn,
-                json!({
-                    "decision": "deny",
-                    "tool": cmd.cmd_type,
-                    "code": code,
-                    "reason": reason,
-                }),
-            );
+            // Slice 41: structured emitter migration. Maps to
+            // `profile.deny` event id; bespoke fields (tool, reason,
+            // decision) are namespaced under `profile.*` per
+            // `schema/observability-events.yaml`.
+            let builder =
+                StructuredLogBuilder::new("profile.deny", LogActor::System, LogSeverity::Warning)
+                    .session_id(&cmd.session_id)
+                    .code(code);
+            let builder = builder
+                .namespaced("profile.tool", cmd.cmd_type.clone())
+                .and_then(|b| b.namespaced("profile.reason", reason.clone()))
+                .and_then(|b| b.namespaced("profile.decision", "deny"));
+            match builder {
+                Ok(b) => {
+                    let _ = log_structured(&state, "profile", b);
+                }
+                Err(_) => {
+                    // Fall back to legacy direct write if validation
+                    // somehow rejects the entry; keeps audit trail
+                    // consistent during migration.
+                    state.audit.log(
+                        &cmd.session_id,
+                        "profile",
+                        AuditSeverity::Warn,
+                        json!({
+                            "decision": "deny",
+                            "tool": cmd.cmd_type,
+                            "code": code,
+                            "reason": reason,
+                        }),
+                    );
+                }
+            }
             return (
                 ServerAck {
                     ack_of: cmd.id.clone(),
@@ -150,6 +173,34 @@ pub async fn dispatch_command(
                     error: Some(ErrorInfo {
                         code: "protocol.unknown_command".into(),
                         message: format!("unknown command type '{}'", cmd.cmd_type),
+                    }),
+                },
+                events,
+            );
+        }
+        EnforceOutcome::NotWired { command, reason } => {
+            // Wiring slice 02 (wiring.not_wired_fallback): the catalog
+            // declares this command but no bridge executor is wired yet.
+            // Return a deterministic feature.not_wired ack so external
+            // and stale clients see a stable error code instead of the
+            // command being silently forwarded to the agent.
+            log_tool_event(
+                &state,
+                &cmd.session_id,
+                "protocol",
+                json!({
+                    "decision": "not_wired",
+                    "type": command,
+                    "reason": reason,
+                }),
+            );
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "feature.not_wired".into(),
+                        message: reason,
                     }),
                 },
                 events,
@@ -221,17 +272,41 @@ pub async fn dispatch_command(
                 Some(id) => match registry.get(id) {
                     Ok(a) => {
                         if !a.enabled {
-                            state.audit.log(
-                                &cmd.session_id,
-                                "agent",
-                                AuditSeverity::Warn,
-                                json!({
-                                    "decision": "deny",
-                                    "code": "agent.disabled",
-                                    "reason": format!("agent '{id}' is disabled"),
-                                    "agent_id": id,
-                                }),
-                            );
+                            // Slice 41: structured emitter migration. Maps
+                            // to `profile.deny` event id; agent registry
+                            // rejection is a policy decision so bespoke
+                            // fields are namespaced under `profile.*`
+                            // per `schema/observability-events.yaml`.
+                            let reason_text = format!("agent '{id}' is disabled");
+                            let builder = StructuredLogBuilder::new(
+                                "profile.deny",
+                                LogActor::System,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(&cmd.session_id)
+                            .code("agent.disabled");
+                            let builder = builder
+                                .namespaced("profile.decision", "deny")
+                                .and_then(|b| b.namespaced("profile.reason", reason_text.clone()))
+                                .and_then(|b| b.namespaced("profile.agent_id", id.to_string()));
+                            match builder {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "agent", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &cmd.session_id,
+                                        "agent",
+                                        AuditSeverity::Warn,
+                                        json!({
+                                            "decision": "deny",
+                                            "code": "agent.disabled",
+                                            "reason": reason_text,
+                                            "agent_id": id,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -247,17 +322,40 @@ pub async fn dispatch_command(
                         a.clone()
                     }
                     Err(_) => {
-                        state.audit.log(
-                            &cmd.session_id,
-                            "agent",
-                            AuditSeverity::Warn,
-                            json!({
-                                "decision": "deny",
-                                "code": "agent.not_registered",
-                                "reason": format!("agent '{id}' is not registered"),
-                                "agent_id": id,
-                            }),
-                        );
+                        // Slice 41: structured emitter migration. Maps to
+                        // `profile.deny` event id; agent registry miss is
+                        // a policy-style rejection, fields under
+                        // `profile.*` per schema.
+                        let reason_text = format!("agent '{id}' is not registered");
+                        let builder = StructuredLogBuilder::new(
+                            "profile.deny",
+                            LogActor::System,
+                            LogSeverity::Warning,
+                        )
+                        .session_id(&cmd.session_id)
+                        .code("agent.not_registered");
+                        let builder = builder
+                            .namespaced("profile.decision", "deny")
+                            .and_then(|b| b.namespaced("profile.reason", reason_text.clone()))
+                            .and_then(|b| b.namespaced("profile.agent_id", id.to_string()));
+                        match builder {
+                            Ok(b) => {
+                                let _ = log_structured(&state, "agent", b);
+                            }
+                            Err(_) => {
+                                state.audit.log(
+                                    &cmd.session_id,
+                                    "agent",
+                                    AuditSeverity::Warn,
+                                    json!({
+                                        "decision": "deny",
+                                        "code": "agent.not_registered",
+                                        "reason": reason_text,
+                                        "agent_id": id,
+                                    }),
+                                );
+                            }
+                        }
                         return (
                             ServerAck {
                                 ack_of: cmd.id.clone(),
@@ -281,19 +379,48 @@ pub async fn dispatch_command(
                 Ok(profile) => match enforce_agent_kind(&profile, agent_kind_str) {
                     Decision::Allow => {}
                     Decision::Deny { code, reason } => {
-                        state.audit.log(
-                            &cmd.session_id,
-                            "agent",
-                            AuditSeverity::Warn,
-                            json!({
-                                "decision": "deny",
-                                "code": code,
-                                "reason": reason,
-                                "profile_id": profile_id,
-                                "agent_id": resolved_agent.id,
-                                "agent_kind": agent_kind_str,
-                            }),
-                        );
+                        // Slice 41: structured emitter migration. Maps to
+                        // `profile.deny` event id; bespoke fields (decision,
+                        // reason, agent_id, agent_kind) namespaced under
+                        // `profile.*` per `schema/observability-events.yaml`.
+                        // `profile_id` is a top-level reserved key.
+                        let builder = StructuredLogBuilder::new(
+                            "profile.deny",
+                            LogActor::System,
+                            LogSeverity::Warning,
+                        )
+                        .session_id(&cmd.session_id)
+                        .code(code)
+                        .profile_id(profile_id.clone());
+                        let builder = builder
+                            .namespaced("profile.decision", "deny")
+                            .and_then(|b| b.namespaced("profile.reason", reason.clone()))
+                            .and_then(|b| {
+                                b.namespaced("profile.agent_id", resolved_agent.id.clone())
+                            })
+                            .and_then(|b| {
+                                b.namespaced("profile.agent_kind", agent_kind_str.to_string())
+                            });
+                        match builder {
+                            Ok(b) => {
+                                let _ = log_structured(&state, "agent", b);
+                            }
+                            Err(_) => {
+                                state.audit.log(
+                                    &cmd.session_id,
+                                    "agent",
+                                    AuditSeverity::Warn,
+                                    json!({
+                                        "decision": "deny",
+                                        "code": code,
+                                        "reason": reason,
+                                        "profile_id": profile_id,
+                                        "agent_id": resolved_agent.id,
+                                        "agent_kind": agent_kind_str,
+                                    }),
+                                );
+                            }
+                        }
                         return (
                             ServerAck {
                                 ack_of: cmd.id.clone(),
@@ -354,19 +481,55 @@ pub async fn dispatch_command(
                 .await
             {
                 Ok(handle) => {
-                    state.audit.log(
-                        &handle.id,
-                        "session",
-                        AuditSeverity::Info,
-                        json!({
-                            "event": "created",
-                            "profile_id": profile_id,
-                            "project_root": project_root,
-                            "agent_id": handle.agent_id,
-                            "agent_kind": handle.agent_kind.as_str(),
-                            "workflow_id": handle.workflow_spec_id,
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration to
+                    // `session.created`. profile_id is top-level reserved;
+                    // workflow id uses `workflow.*` namespace; agent fields
+                    // use `profile.*` (no `agent.*`/`session.*` prefix in
+                    // `schema/observability-events.yaml`).
+                    let session_id_clone = handle.id.clone();
+                    let agent_id_clone = handle.agent_id.clone();
+                    let agent_kind_clone = handle.agent_kind.as_str().to_string();
+                    let workflow_id_clone = handle.workflow_spec_id.clone();
+                    let project_root_str = project_root.display().to_string();
+                    let builder = StructuredLogBuilder::new(
+                        "session.created",
+                        LogActor::System,
+                        LogSeverity::Info,
+                    )
+                    .session_id(session_id_clone.clone())
+                    .code("")
+                    .profile_id(profile_id.clone());
+                    let chain = builder
+                        .namespaced("profile.project_root", project_root_str.clone())
+                        .and_then(|b| b.namespaced("profile.agent_id", agent_id_clone.clone()))
+                        .and_then(|b| b.namespaced("profile.agent_kind", agent_kind_clone.clone()))
+                        .and_then(|b| {
+                            if workflow_id_clone.is_empty() {
+                                Ok(b)
+                            } else {
+                                b.namespaced("workflow.id", workflow_id_clone.clone())
+                            }
+                        });
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "session", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &session_id_clone,
+                                "session",
+                                AuditSeverity::Info,
+                                json!({
+                                    "event": "created",
+                                    "profile_id": profile_id,
+                                    "project_root": project_root,
+                                    "agent_id": agent_id_clone,
+                                    "agent_kind": agent_kind_clone,
+                                    "workflow_id": workflow_id_clone,
+                                }),
+                            );
+                        }
+                    }
                     let now = chrono::Utc::now().to_rfc3339();
                     let session_events = session_bootstrap_events(&handle, now.clone(), "created");
                     (
@@ -380,12 +543,36 @@ pub async fn dispatch_command(
                 }
                 Err(e) => {
                     warn!(error = %e, "session.create failed");
-                    state.audit.log(
-                        &cmd.session_id,
-                        "session",
-                        AuditSeverity::Error,
-                        json!({ "event": "create_failed", "error": e.to_string() }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration to
+                    // `session.create_failed`. Top-level `code` reflects
+                    // the ack code returned to the client; error string
+                    // namespaced under `profile.*` (no `error.*`/`session.*`
+                    // prefix in schema).
+                    let err_string = e.to_string();
+                    let builder = StructuredLogBuilder::new(
+                        "session.create_failed",
+                        LogActor::System,
+                        LogSeverity::Error,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("session.spawn_failed");
+                    let chain = builder.namespaced("profile.error", err_string.clone());
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "session", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "session",
+                                AuditSeverity::Error,
+                                json!({
+                                    "event": "create_failed",
+                                    "error": err_string,
+                                }),
+                            );
+                        }
+                    }
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -715,16 +902,40 @@ pub async fn dispatch_command(
                         v: 1,
                         ts: chrono::Utc::now().to_rfc3339(),
                     });
-                    state.audit.log(
-                        &target_id,
-                        "session",
-                        AuditSeverity::Warn,
-                        json!({
-                            "event": "resume_failed",
-                            "reason": "unknown_resume_mode",
-                            "requested_mode": m,
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration to
+                    // `session.resume_failed`. Reason + requested_mode
+                    // under `profile.*` (no `session.*` prefix in schema).
+                    let reason_text = "unknown_resume_mode";
+                    let requested_mode_clone = m.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "session.resume_failed",
+                        LogActor::System,
+                        LogSeverity::Warning,
+                    )
+                    .session_id(target_id.clone())
+                    .code("session.unknown_resume_mode");
+                    let chain = builder
+                        .namespaced("profile.reason", reason_text)
+                        .and_then(|b| {
+                            b.namespaced("profile.requested_mode", requested_mode_clone.clone())
+                        });
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "session", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": reason_text,
+                                    "requested_mode": requested_mode_clone,
+                                }),
+                            );
+                        }
+                    }
                     return (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -805,16 +1016,38 @@ pub async fn dispatch_command(
                             v: 1,
                             ts: chrono::Utc::now().to_rfc3339(),
                         });
-                        state.audit.log(
-                            &target_id,
-                            "session",
-                            AuditSeverity::Warn,
-                            json!({
-                                "event": "resume_failed",
-                                "reason": "vac_session_unknown",
-                                "mode": mode_str,
-                            }),
-                        );
+                        // Slice 41 (Pass #19): structured emitter migration
+                        // to `session.resume_failed`. reason + mode under
+                        // `profile.*` (schema constraint).
+                        let reason_text = "vac_session_unknown";
+                        let mode_clone = mode_str.clone();
+                        let builder = StructuredLogBuilder::new(
+                            "session.resume_failed",
+                            LogActor::System,
+                            LogSeverity::Warning,
+                        )
+                        .session_id(target_id.clone())
+                        .code("session.vac_session_unknown");
+                        let chain = builder
+                            .namespaced("profile.reason", reason_text)
+                            .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()));
+                        match chain {
+                            Ok(b) => {
+                                let _ = log_structured(&state, "session", b);
+                            }
+                            Err(_) => {
+                                state.audit.log(
+                                    &target_id,
+                                    "session",
+                                    AuditSeverity::Warn,
+                                    json!({
+                                        "event": "resume_failed",
+                                        "reason": reason_text,
+                                        "mode": mode_clone,
+                                    }),
+                                );
+                            }
+                        }
                         return (
                             ServerAck {
                                 ack_of: cmd.id.clone(),
@@ -858,16 +1091,38 @@ pub async fn dispatch_command(
                         v: 1,
                         ts: chrono::Utc::now().to_rfc3339(),
                     });
-                    state.audit.log(
-                        &target_id,
-                        "session",
-                        AuditSeverity::Warn,
-                        json!({
-                            "event": "resume_failed",
-                            "reason": "native_resume_unsupported",
-                            "mode": mode_str,
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration to
+                    // `session.resume_failed`. reason + mode under
+                    // `profile.*` (schema constraint).
+                    let reason_text = "native_resume_unsupported";
+                    let mode_clone = mode_str.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "session.resume_failed",
+                        LogActor::System,
+                        LogSeverity::Warning,
+                    )
+                    .session_id(target_id.clone())
+                    .code("session.native_resume_unsupported");
+                    let chain = builder
+                        .namespaced("profile.reason", reason_text)
+                        .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "session", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &target_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "resume_failed",
+                                    "reason": reason_text,
+                                    "mode": mode_clone,
+                                }),
+                            );
+                        }
+                    }
                     return (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -941,16 +1196,37 @@ pub async fn dispatch_command(
                             // *during* spawn. Without this drain the
                             // cockpit's resume chip would never observe
                             // `session.resumed`.
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Info,
-                                json!({
-                                    "event": "resume_started",
-                                    "mode": mode_str,
-                                    "resume_mode": "native",
-                                }),
-                            );
+                            // Slice 41 (Pass #19): structured emitter
+                            // migration to `session.resume_started`.
+                            // mode + resume_mode under `profile.*`.
+                            let mode_clone = mode_str.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_started",
+                                LogActor::System,
+                                LogSeverity::Info,
+                            )
+                            .session_id(target_id.clone())
+                            .code("");
+                            let chain = builder
+                                .namespaced("profile.mode", mode_clone.clone())
+                                .and_then(|b| b.namespaced("profile.resume_mode", "native"));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Info,
+                                        json!({
+                                            "event": "resume_started",
+                                            "mode": mode_clone,
+                                            "resume_mode": "native",
+                                        }),
+                                    );
+                                }
+                            }
                             // Stage R2 — emit any pre-spawn validation
                             // warnings BEFORE draining the resume
                             // lifecycle ring so the FE warning chip
@@ -973,16 +1249,37 @@ pub async fn dispatch_command(
                                     v: 1,
                                     ts: chrono::Utc::now().to_rfc3339(),
                                 });
-                                state.audit.log(
-                                    &target_id,
-                                    "session",
-                                    AuditSeverity::Warn,
-                                    json!({
-                                        "event": "resume_warning",
-                                        "reason": warning.reason(),
-                                        "mode": mode_str,
-                                    }),
-                                );
+                                // Slice 41 (Pass #19): structured emitter
+                                // migration to `session.resume_warning`.
+                                let reason_str = warning.reason().to_string();
+                                let mode_clone = mode_str.clone();
+                                let builder = StructuredLogBuilder::new(
+                                    "session.resume_warning",
+                                    LogActor::System,
+                                    LogSeverity::Warning,
+                                )
+                                .session_id(target_id.clone())
+                                .code("");
+                                let chain = builder
+                                    .namespaced("profile.reason", reason_str.clone())
+                                    .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()));
+                                match chain {
+                                    Ok(b) => {
+                                        let _ = log_structured(&state, "session", b);
+                                    }
+                                    Err(_) => {
+                                        state.audit.log(
+                                            &target_id,
+                                            "session",
+                                            AuditSeverity::Warn,
+                                            json!({
+                                                "event": "resume_warning",
+                                                "reason": reason_str,
+                                                "mode": mode_clone,
+                                            }),
+                                        );
+                                    }
+                                }
                             }
                             let ring = handle.ring.read().await;
                             if let ReplayResult::Stream(evs) = ring.replay_after(0) {
@@ -1026,17 +1323,41 @@ pub async fn dispatch_command(
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             });
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Warn,
-                                json!({
-                                    "event": "resume_failed",
-                                    "reason": "native_resume_unsupported",
-                                    "mode": mode_str,
-                                    "policy": "native_fallback=fail",
-                                }),
-                            );
+                            // Slice 41 (Pass #19): structured emitter
+                            // migration to `session.resume_failed`.
+                            let reason_text = "native_resume_unsupported";
+                            let mode_clone = mode_str.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_failed",
+                                LogActor::System,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(target_id.clone())
+                            .code("session.native_resume_unsupported");
+                            let chain = builder
+                                .namespaced("profile.reason", reason_text)
+                                .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()))
+                                .and_then(|b| {
+                                    b.namespaced("profile.policy", "native_fallback=fail")
+                                });
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Warn,
+                                        json!({
+                                            "event": "resume_failed",
+                                            "reason": reason_text,
+                                            "mode": mode_clone,
+                                            "policy": "native_fallback=fail",
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -1053,15 +1374,33 @@ pub async fn dispatch_command(
                             // Documented matrix outcome — fall through to
                             // persistence replay with the distinguishing
                             // `replay_only_fallback` resume_mode.
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Info,
-                                json!({
-                                    "event": "resume_native_unsupported_fallback",
-                                    "mode": mode_str,
-                                }),
-                            );
+                            // Slice 41 (Pass #19): structured emitter
+                            // migration to `session.resume_native_unsupported_fallback`.
+                            let mode_clone = mode_str.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_native_unsupported_fallback",
+                                LogActor::System,
+                                LogSeverity::Info,
+                            )
+                            .session_id(target_id.clone())
+                            .code("");
+                            let chain = builder.namespaced("profile.mode", mode_clone.clone());
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Info,
+                                        json!({
+                                            "event": "resume_native_unsupported_fallback",
+                                            "mode": mode_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return resume_persistence_replay(
                                 cmd,
                                 state,
@@ -1089,16 +1428,37 @@ pub async fn dispatch_command(
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             });
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Warn,
-                                json!({
-                                    "event": "resume_failed",
-                                    "reason": "native_resume_unsupported",
-                                    "mode": mode_str,
-                                }),
-                            );
+                            // Slice 41 (Pass #19): structured emitter
+                            // migration to `session.resume_failed`.
+                            let reason_text = "native_resume_unsupported";
+                            let mode_clone = mode_str.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_failed",
+                                LogActor::System,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(target_id.clone())
+                            .code("session.native_resume_unsupported");
+                            let chain = builder
+                                .namespaced("profile.reason", reason_text)
+                                .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Warn,
+                                        json!({
+                                            "event": "resume_failed",
+                                            "reason": reason_text,
+                                            "mode": mode_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -1125,17 +1485,40 @@ pub async fn dispatch_command(
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             });
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Warn,
-                                json!({
-                                    "event": "resume_failed",
-                                    "reason": "native_resume_rejected",
-                                    "mode": mode_str,
-                                    "detail": detail,
-                                }),
-                            );
+                            // Slice 41 (Pass #19): structured emitter
+                            // migration to `session.resume_failed`.
+                            let reason_text = "native_resume_rejected";
+                            let mode_clone = mode_str.clone();
+                            let detail_clone = detail.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_failed",
+                                LogActor::System,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(target_id.clone())
+                            .code("session.native_resume_rejected");
+                            let chain = builder
+                                .namespaced("profile.reason", reason_text)
+                                .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()))
+                                .and_then(|b| b.namespaced("profile.detail", detail_clone.clone()));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Warn,
+                                        json!({
+                                            "event": "resume_failed",
+                                            "reason": reason_text,
+                                            "mode": mode_clone,
+                                            "detail": detail_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -1162,17 +1545,40 @@ pub async fn dispatch_command(
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             });
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Error,
-                                json!({
-                                    "event": "resume_failed",
-                                    "reason": "native_resume_failed",
-                                    "mode": mode_str,
-                                    "detail": detail,
-                                }),
-                            );
+                            // Slice 41 (Pass #19): structured emitter
+                            // migration to `session.resume_failed` (Error).
+                            let reason_text = "native_resume_failed";
+                            let mode_clone = mode_str.clone();
+                            let detail_clone = detail.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_failed",
+                                LogActor::System,
+                                LogSeverity::Error,
+                            )
+                            .session_id(target_id.clone())
+                            .code("session.native_resume_failed");
+                            let chain = builder
+                                .namespaced("profile.reason", reason_text)
+                                .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()))
+                                .and_then(|b| b.namespaced("profile.detail", detail_clone.clone()));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Error,
+                                        json!({
+                                            "event": "resume_failed",
+                                            "reason": reason_text,
+                                            "mode": mode_clone,
+                                            "detail": detail_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -1235,16 +1641,40 @@ pub async fn dispatch_command(
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
                             });
-                            state.audit.log(
-                                &target_id,
-                                "session",
-                                AuditSeverity::Warn,
-                                json!({
-                                    "event": "resume_failed",
-                                    "reason": reason,
-                                    "mode": mode_str,
-                                }),
-                            );
+                            // Slice 41 (Pass #21): structured emitter migration to
+                            // `session.resume_failed` (ResumeNativeOutcome::Validation
+                            // path covering ProfileClassMismatch + other validation
+                            // failures). `session.*` not in allowed namespace prefixes,
+                            // so route bespoke fields via `profile.*`.
+                            let reason_clone = reason.to_string();
+                            let mode_clone = mode_str.to_string();
+                            let builder = StructuredLogBuilder::new(
+                                "session.resume_failed",
+                                LogActor::User,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(&target_id)
+                            .code(ack_code);
+                            let chain = builder
+                                .namespaced("profile.reason", reason_clone.clone())
+                                .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "session", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &target_id,
+                                        "session",
+                                        AuditSeverity::Warn,
+                                        json!({
+                                            "event": "resume_failed",
+                                            "reason": reason_clone,
+                                            "mode": mode_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -1351,12 +1781,32 @@ pub async fn dispatch_command(
                 );
             };
 
-            state.audit.log(
-                &cmd.session_id,
-                "session",
-                AuditSeverity::Info,
-                json!({ "event": "resumed" }),
-            );
+            // Slice 41 (Pass #19): structured emitter migration to
+            // `session.resumed`.
+            let builder =
+                StructuredLogBuilder::new("session.resumed", LogActor::System, LogSeverity::Info)
+                    .session_id(&cmd.session_id)
+                    .code("");
+            match builder.build() {
+                Ok(_) => {
+                    let b = StructuredLogBuilder::new(
+                        "session.resumed",
+                        LogActor::System,
+                        LogSeverity::Info,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("");
+                    let _ = log_structured(&state, "session", b);
+                }
+                Err(_) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Info,
+                        json!({ "event": "resumed" }),
+                    );
+                }
+            }
             handle
                 .state
                 .transition(bridge_core::SessionState::Active)
@@ -1571,12 +2021,32 @@ pub async fn dispatch_command(
                     events,
                 );
             }
-            state.audit.log(
-                &cmd.session_id,
-                "session",
-                AuditSeverity::Info,
-                json!({ "event": "history.forgotten", "vac_session_id": target_id }),
-            );
+            // Slice 41 (Pass #19): structured emitter migration.
+            let target_id_clone = target_id.clone();
+            let builder = StructuredLogBuilder::new(
+                "session.history_forgotten",
+                LogActor::User,
+                LogSeverity::Info,
+            )
+            .session_id(&cmd.session_id)
+            .code("");
+            let chain = builder.namespaced("profile.vac_session_id", target_id_clone.clone());
+            match chain {
+                Ok(b) => {
+                    let _ = log_structured(&state, "session", b);
+                }
+                Err(_) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Info,
+                        json!({
+                            "event": "history.forgotten",
+                            "vac_session_id": target_id_clone,
+                        }),
+                    );
+                }
+            }
             events.push(ServerEvent {
                 seq: 0,
                 session_id: cmd.session_id.clone(),
@@ -1608,12 +2078,25 @@ pub async fn dispatch_command(
                     events,
                 );
             }
-            state.audit.log(
-                &cmd.session_id,
-                "session",
-                AuditSeverity::Info,
-                json!({ "event": "closed", "reason": "user" }),
-            );
+            // Slice 41 (Pass #19): structured emitter migration.
+            let builder =
+                StructuredLogBuilder::new("session.closed", LogActor::User, LogSeverity::Info)
+                    .session_id(&cmd.session_id)
+                    .code("");
+            let chain = builder.namespaced("profile.reason", "user");
+            match chain {
+                Ok(b) => {
+                    let _ = log_structured(&state, "session", b);
+                }
+                Err(_) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Info,
+                        json!({ "event": "closed", "reason": "user" }),
+                    );
+                }
+            }
             events.push(ServerEvent {
                 seq: 0,
                 session_id: cmd.session_id.clone(),
@@ -1658,16 +2141,32 @@ pub async fn dispatch_command(
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             let Some(method_id) = method_id.filter(|s| !s.is_empty()) else {
-                state.audit.log(
-                    &cmd.session_id,
-                    "session",
-                    AuditSeverity::Warn,
-                    json!({
-                        "event": "auth_failed",
-                        "code": "auth.invalid_payload",
-                        "message": "auth_method_id is required",
-                    }),
-                );
+                // Slice 41 (Pass #19): structured emitter migration.
+                let builder = StructuredLogBuilder::new(
+                    "session.auth_failed",
+                    LogActor::User,
+                    LogSeverity::Warning,
+                )
+                .session_id(&cmd.session_id)
+                .code("auth.invalid_payload");
+                let chain = builder.namespaced("profile.message", "auth_method_id is required");
+                match chain {
+                    Ok(b) => {
+                        let _ = log_structured(&state, "session", b);
+                    }
+                    Err(_) => {
+                        state.audit.log(
+                            &cmd.session_id,
+                            "session",
+                            AuditSeverity::Warn,
+                            json!({
+                                "event": "auth_failed",
+                                "code": "auth.invalid_payload",
+                                "message": "auth_method_id is required",
+                            }),
+                        );
+                    }
+                }
                 events.push(ServerEvent {
                     seq: 0,
                     session_id: cmd.session_id.clone(),
@@ -1693,15 +2192,32 @@ pub async fn dispatch_command(
             };
 
             // 1) auth_requested — audit + event before we touch the adapter.
-            state.audit.log(
-                &cmd.session_id,
-                "session",
-                AuditSeverity::Info,
-                json!({
-                    "event": "auth_requested",
-                    "auth_method_id": method_id,
-                }),
-            );
+            // Slice 41 (Pass #19): structured emitter migration.
+            let method_id_clone1 = method_id.clone();
+            let builder = StructuredLogBuilder::new(
+                "session.auth_requested",
+                LogActor::User,
+                LogSeverity::Info,
+            )
+            .session_id(&cmd.session_id)
+            .code("");
+            let chain = builder.namespaced("profile.auth_method_id", method_id_clone1.clone());
+            match chain {
+                Ok(b) => {
+                    let _ = log_structured(&state, "session", b);
+                }
+                Err(_) => {
+                    state.audit.log(
+                        &cmd.session_id,
+                        "session",
+                        AuditSeverity::Info,
+                        json!({
+                            "event": "auth_requested",
+                            "auth_method_id": method_id_clone1,
+                        }),
+                    );
+                }
+            }
             events.push(ServerEvent {
                 seq: 0,
                 session_id: cmd.session_id.clone(),
@@ -1718,16 +2234,38 @@ pub async fn dispatch_command(
             // recreate path).
             match handle.authenticate_via_acp(&method_id).await {
                 Ok(outcome) => {
-                    state.audit.log(
-                        &cmd.session_id,
-                        "session",
-                        AuditSeverity::Info,
-                        json!({
-                            "event": "auth_updated",
-                            "auth_method_id": outcome.method_id,
-                            "auth_method_type": outcome.method_type,
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration.
+                    let method_id_clone = outcome.method_id.clone();
+                    let method_type_clone = outcome.method_type.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "session.auth_updated",
+                        LogActor::User,
+                        LogSeverity::Info,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("");
+                    let chain = builder
+                        .namespaced("profile.auth_method_id", method_id_clone.clone())
+                        .and_then(|b| {
+                            b.namespaced("profile.auth_method_type", method_type_clone.clone())
+                        });
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "session", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "session",
+                                AuditSeverity::Info,
+                                json!({
+                                    "event": "auth_updated",
+                                    "auth_method_id": method_id_clone,
+                                    "auth_method_type": method_type_clone,
+                                }),
+                            );
+                        }
+                    }
                     events.push(ServerEvent {
                         seq: 0,
                         session_id: cmd.session_id.clone(),
@@ -1763,18 +2301,43 @@ pub async fn dispatch_command(
                         }
                         _ => None,
                     };
-                    state.audit.log(
-                        &cmd.session_id,
-                        "session",
-                        AuditSeverity::Warn,
-                        json!({
-                            "event": "auth_failed",
-                            "auth_method_id": logged_method_id,
-                            "auth_method_type": logged_method_type,
-                            "code": code,
-                            "message": message,
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration.
+                    let method_id_clone = logged_method_id.clone();
+                    let method_type_clone = logged_method_type.clone();
+                    let message_clone = message.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "session.auth_failed",
+                        LogActor::User,
+                        LogSeverity::Warning,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code(code);
+                    let chain = builder
+                        .namespaced("profile.auth_method_id", method_id_clone.clone())
+                        .and_then(|b| match method_type_clone.as_ref() {
+                            Some(t) => b.namespaced("profile.auth_method_type", t.clone()),
+                            None => Ok(b),
+                        })
+                        .and_then(|b| b.namespaced("profile.message", message_clone.clone()));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "session", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "session",
+                                AuditSeverity::Warn,
+                                json!({
+                                    "event": "auth_failed",
+                                    "auth_method_id": method_id_clone,
+                                    "auth_method_type": method_type_clone,
+                                    "code": code,
+                                    "message": message_clone,
+                                }),
+                            );
+                        }
+                    }
                     let mut payload = json!({
                         "auth_method_id": logged_method_id,
                         "code": code,
@@ -1853,23 +2416,72 @@ pub async fn dispatch_command(
                     ref upsert_event,
                     ref status_event,
                 } => {
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Info,
-                        serde_json::json!({
-                            "event": "handoff.created",
-                            "packet_id": packet.id,
-                            "title": packet.title,
-                            "author": author,
-                            "repo_ref": packet.pin.repo_ref,
-                            "base_commit_sha": packet.pin.base_commit_sha.chars().take(12).collect::<String>(),
-                            "worktree_digest": packet.pin.worktree_digest.chars().take(12).collect::<String>(),
-                            "invalidation_policy": packet.pin.invalidation_policy.as_str(),
-                            "task_count": packet.tasks.len(),
-                            "finding_count": packet.accepted_finding_ids.len(),
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration to
+                    // `handoff.created`. handoff.* is an allowed namespace.
+                    let packet_id_clone = packet.id.clone();
+                    let title_clone = packet.title.clone();
+                    let author_clone = author.clone();
+                    let repo_ref_clone = packet.pin.repo_ref.clone();
+                    let base_sha = packet
+                        .pin
+                        .base_commit_sha
+                        .chars()
+                        .take(12)
+                        .collect::<String>();
+                    let worktree_digest = packet
+                        .pin
+                        .worktree_digest
+                        .chars()
+                        .take(12)
+                        .collect::<String>();
+                    let inv_policy = packet.pin.invalidation_policy.as_str().to_string();
+                    let task_count = packet.tasks.len() as u64;
+                    let finding_count = packet.accepted_finding_ids.len() as u64;
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.created",
+                        LogActor::User,
+                        LogSeverity::Info,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("");
+                    let chain = builder
+                        .namespaced("handoff.packet_id", packet_id_clone.clone())
+                        .and_then(|b| b.namespaced("handoff.title", title_clone.clone()))
+                        .and_then(|b| b.namespaced("handoff.author", author_clone.clone()))
+                        .and_then(|b| b.namespaced("handoff.repo_ref", repo_ref_clone.clone()))
+                        .and_then(|b| b.namespaced("handoff.base_commit_sha", base_sha.clone()))
+                        .and_then(|b| {
+                            b.namespaced("handoff.worktree_digest", worktree_digest.clone())
+                        })
+                        .and_then(|b| {
+                            b.namespaced("handoff.invalidation_policy", inv_policy.clone())
+                        })
+                        .and_then(|b| b.namespaced("handoff.task_count", task_count))
+                        .and_then(|b| b.namespaced("handoff.finding_count", finding_count));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Info,
+                                serde_json::json!({
+                                    "event": "handoff.created",
+                                    "packet_id": packet_id_clone,
+                                    "title": title_clone,
+                                    "author": author_clone,
+                                    "repo_ref": repo_ref_clone,
+                                    "base_commit_sha": base_sha,
+                                    "worktree_digest": worktree_digest,
+                                    "invalidation_policy": inv_policy,
+                                    "task_count": task_count,
+                                    "finding_count": finding_count,
+                                }),
+                            );
+                        }
+                    }
                     let evts = vec![upsert_event.clone(), status_event.clone()];
                     (
                         ServerAck {
@@ -1993,16 +2605,36 @@ pub async fn dispatch_command(
                         );
                     }
 
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Info,
-                        serde_json::json!({
-                            "event": "handoff.dispatch_allowed",
-                            "packet_id": packet_id,
-                            "repo_ref": packet.pin.repo_ref,
-                        }),
-                    );
+                    // Slice 41 (Pass #19): structured emitter migration.
+                    let packet_id_clone = packet_id.clone();
+                    let repo_ref_clone = packet.pin.repo_ref.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.dispatch_allowed",
+                        LogActor::User,
+                        LogSeverity::Info,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("");
+                    let chain = builder
+                        .namespaced("handoff.packet_id", packet_id_clone.clone())
+                        .and_then(|b| b.namespaced("handoff.repo_ref", repo_ref_clone.clone()));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Info,
+                                serde_json::json!({
+                                    "event": "handoff.dispatch_allowed",
+                                    "packet_id": packet_id_clone,
+                                    "repo_ref": repo_ref_clone,
+                                }),
+                            );
+                        }
+                    }
                     let executor_handle = match state
                         .sessions
                         .create_with_agent_and_workflow(
@@ -2030,18 +2662,43 @@ pub async fn dispatch_command(
                                 events.push(upsert_event);
                                 events.push(status_event);
                             }
-                            state.audit.log(
-                                &cmd.session_id,
-                                "handoff",
-                                bridge_core::AuditSeverity::Warn,
-                                serde_json::json!({
-                                    "event": "handoff.dispatch_rejected",
-                                    "packet_id": packet_id,
-                                    "code": "executor.spawn_failed",
-                                    "reason_tag": "provider_error",
-                                    "reason": detail,
-                                }),
-                            );
+                            // Slice 41 (Pass #21): structured emitter migration to
+                            // `handoff.dispatch_rejected` (executor.spawn_failed branch
+                            // when sessions.create_with_agent_and_workflow fails).
+                            let packet_id_clone = packet_id.clone();
+                            let detail_clone = detail.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "handoff.dispatch_rejected",
+                                LogActor::User,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(&cmd.session_id)
+                            .code("executor.spawn_failed");
+                            let chain = builder
+                                .namespaced("handoff.packet_id", packet_id_clone.clone())
+                                .and_then(|b| {
+                                    b.namespaced("handoff.reason_tag", "provider_error".to_string())
+                                })
+                                .and_then(|b| b.namespaced("handoff.reason", detail_clone.clone()));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "handoff", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &cmd.session_id,
+                                        "handoff",
+                                        bridge_core::AuditSeverity::Warn,
+                                        serde_json::json!({
+                                            "event": "handoff.dispatch_rejected",
+                                            "packet_id": packet_id_clone,
+                                            "code": "executor.spawn_failed",
+                                            "reason_tag": "provider_error",
+                                            "reason": detail_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -2099,17 +2756,41 @@ pub async fn dispatch_command(
                         }
                         crate::handoff::HandoffDispatchOutcome::Err { code, message } => {
                             let _ = executor_handle.close_stdin().await;
-                            state.audit.log(
-                                &cmd.session_id,
-                                "handoff",
-                                bridge_core::AuditSeverity::Warn,
-                                serde_json::json!({
-                                    "event": "handoff.dispatch_state_error",
-                                    "packet_id": packet_id,
-                                    "code": code,
-                                    "reason": message,
-                                }),
-                            );
+                            // Slice 41 (Pass #21): structured emitter migration to
+                            // `handoff.dispatch_state_error` (HandoffDispatchOutcome::Err).
+                            let packet_id_clone = packet_id.clone();
+                            let code_clone = code.clone();
+                            let message_clone = message.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "handoff.dispatch_state_error",
+                                LogActor::User,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(&cmd.session_id)
+                            .code(&code_clone);
+                            let chain = builder
+                                .namespaced("handoff.packet_id", packet_id_clone.clone())
+                                .and_then(|b| {
+                                    b.namespaced("handoff.reason", message_clone.clone())
+                                });
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "handoff", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &cmd.session_id,
+                                        "handoff",
+                                        bridge_core::AuditSeverity::Warn,
+                                        serde_json::json!({
+                                            "event": "handoff.dispatch_state_error",
+                                            "packet_id": packet_id_clone,
+                                            "code": code_clone,
+                                            "reason": message_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -2137,17 +2818,41 @@ pub async fn dispatch_command(
                         }
                         crate::handoff::HandoffExecutionBindOutcome::Err { code, message } => {
                             let _ = executor_handle.close_stdin().await;
-                            state.audit.log(
-                                &cmd.session_id,
-                                "handoff",
-                                bridge_core::AuditSeverity::Warn,
-                                serde_json::json!({
-                                    "event": "handoff.execution_bind_failed",
-                                    "packet_id": packet_id,
-                                    "code": code,
-                                    "reason": message,
-                                }),
-                            );
+                            // Slice 41 (Pass #21): structured emitter migration to
+                            // `handoff.execution_bind_failed` (HandoffExecutionBindOutcome::Err).
+                            let packet_id_clone = packet_id.clone();
+                            let code_clone = code.clone();
+                            let message_clone = message.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "handoff.execution_bind_failed",
+                                LogActor::User,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(&cmd.session_id)
+                            .code(&code_clone);
+                            let chain = builder
+                                .namespaced("handoff.packet_id", packet_id_clone.clone())
+                                .and_then(|b| {
+                                    b.namespaced("handoff.reason", message_clone.clone())
+                                });
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "handoff", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &cmd.session_id,
+                                        "handoff",
+                                        bridge_core::AuditSeverity::Warn,
+                                        serde_json::json!({
+                                            "event": "handoff.execution_bind_failed",
+                                            "packet_id": packet_id_clone,
+                                            "code": code_clone,
+                                            "reason": message_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             return (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -2203,18 +2908,42 @@ pub async fn dispatch_command(
                                 events.push(terminal_event);
                             }
                             let _ = executor_handle.close_stdin().await;
-                            state.audit.log(
-                                &cmd.session_id,
-                                "handoff",
-                                bridge_core::AuditSeverity::Warn,
-                                serde_json::json!({
-                                    "event": "handoff.execution_failed",
-                                    "packet_id": packet_id,
-                                    "code": "executor.dispatch_failed",
-                                    "reason_tag": "provider_error",
-                                    "reason": detail,
-                                }),
-                            );
+                            // Slice 41 (Pass #21): structured emitter migration to
+                            // `handoff.execution_failed` (executor.dispatch_failed).
+                            let packet_id_clone = packet_id.clone();
+                            let detail_clone = detail.clone();
+                            let builder = StructuredLogBuilder::new(
+                                "handoff.execution_failed",
+                                LogActor::User,
+                                LogSeverity::Warning,
+                            )
+                            .session_id(&cmd.session_id)
+                            .code("executor.dispatch_failed");
+                            let chain = builder
+                                .namespaced("handoff.packet_id", packet_id_clone.clone())
+                                .and_then(|b| {
+                                    b.namespaced("handoff.reason_tag", "provider_error".to_string())
+                                })
+                                .and_then(|b| b.namespaced("handoff.reason", detail_clone.clone()));
+                            match chain {
+                                Ok(b) => {
+                                    let _ = log_structured(&state, "handoff", b);
+                                }
+                                Err(_) => {
+                                    state.audit.log(
+                                        &cmd.session_id,
+                                        "handoff",
+                                        bridge_core::AuditSeverity::Warn,
+                                        serde_json::json!({
+                                            "event": "handoff.execution_failed",
+                                            "packet_id": packet_id_clone,
+                                            "code": "executor.dispatch_failed",
+                                            "reason_tag": "provider_error",
+                                            "reason": detail_clone,
+                                        }),
+                                    );
+                                }
+                            }
                             (
                                 ServerAck {
                                     ack_of: cmd.id.clone(),
@@ -2246,18 +2975,42 @@ pub async fn dispatch_command(
                         events.push(upsert_event);
                         events.push(status_event);
                     }
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Warn,
-                        serde_json::json!({
-                            "event": "handoff.dispatch_rejected",
-                            "packet_id": packet_id,
-                            "code": dispatch_err.code(),
-                            "reason_tag": reason_tag,
-                            "reason": reason_msg,
-                        }),
-                    );
+                    // Slice 41 (Pass #21): structured emitter migration to
+                    // `handoff.dispatch_rejected` (outer dispatch_err arm).
+                    let packet_id_clone = packet_id.clone();
+                    let reason_tag_str = reason_tag.to_string();
+                    let reason_msg_clone = reason_msg.clone();
+                    let dispatch_code = dispatch_err.code().to_string();
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.dispatch_rejected",
+                        LogActor::User,
+                        LogSeverity::Warning,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code(&dispatch_code);
+                    let chain = builder
+                        .namespaced("handoff.packet_id", packet_id_clone.clone())
+                        .and_then(|b| b.namespaced("handoff.reason_tag", reason_tag_str.clone()))
+                        .and_then(|b| b.namespaced("handoff.reason", reason_msg_clone.clone()));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.dispatch_rejected",
+                                    "packet_id": packet_id_clone,
+                                    "code": dispatch_code,
+                                    "reason_tag": reason_tag_str,
+                                    "reason": reason_msg_clone,
+                                }),
+                            );
+                        }
+                    }
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -2343,21 +3096,51 @@ pub async fn dispatch_command(
                     ref status_event,
                     became_approved,
                 } => {
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Info,
-                        serde_json::json!({
-                            "event": "handoff.approved",
-                            "packet_id": packet.id,
-                            "approver": approver,
-                            "role": role,
-                            "signers": packet.signers.len(),
-                            "required_signers": packet.required_signers,
-                            "status": packet.status.as_str(),
-                            "became_approved": became_approved,
-                        }),
-                    );
+                    // Slice 41 (Pass #21): structured emitter migration to
+                    // `handoff.approved` (HandoffApproveOutcome::Ok success).
+                    let packet_id_str = packet.id.clone();
+                    let approver_clone = approver.clone();
+                    let role_clone = role.clone();
+                    let signers_count = packet.signers.len() as f64;
+                    let required_signers = packet.required_signers as f64;
+                    let status_str = packet.status.as_str().to_string();
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.approved",
+                        LogActor::User,
+                        LogSeverity::Info,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("");
+                    let chain = builder
+                        .namespaced("handoff.packet_id", packet_id_str.clone())
+                        .and_then(|b| b.namespaced("handoff.approver", approver_clone.clone()))
+                        .and_then(|b| b.namespaced("handoff.role", role_clone.clone()))
+                        .and_then(|b| b.namespaced("handoff.signers", signers_count))
+                        .and_then(|b| b.namespaced("handoff.required_signers", required_signers))
+                        .and_then(|b| b.namespaced("handoff.status", status_str.clone()))
+                        .and_then(|b| b.namespaced("handoff.became_approved", became_approved));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Info,
+                                serde_json::json!({
+                                    "event": "handoff.approved",
+                                    "packet_id": packet_id_str,
+                                    "approver": approver_clone,
+                                    "role": role_clone,
+                                    "signers": packet.signers.len(),
+                                    "required_signers": packet.required_signers,
+                                    "status": status_str,
+                                    "became_approved": became_approved,
+                                }),
+                            );
+                        }
+                    }
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -2371,17 +3154,39 @@ pub async fn dispatch_command(
                     ref code,
                     ref message,
                 } => {
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Warn,
-                        serde_json::json!({
-                            "event": "handoff.approve_failed",
-                            "packet_id": packet_id,
-                            "code": code,
-                            "reason": message,
-                        }),
-                    );
+                    // Slice 41 (Pass #21): structured emitter migration to
+                    // `handoff.approve_failed` (HandoffApproveOutcome::Err).
+                    let packet_id_clone = packet_id.clone();
+                    let code_clone = code.clone();
+                    let message_clone = message.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.approve_failed",
+                        LogActor::User,
+                        LogSeverity::Warning,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code(&code_clone);
+                    let chain = builder
+                        .namespaced("handoff.packet_id", packet_id_clone.clone())
+                        .and_then(|b| b.namespaced("handoff.reason", message_clone.clone()));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.approve_failed",
+                                    "packet_id": packet_id_clone,
+                                    "code": code_clone,
+                                    "reason": message_clone,
+                                }),
+                            );
+                        }
+                    }
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -2461,17 +3266,43 @@ pub async fn dispatch_command(
                     ref upsert_event,
                     ref status_event,
                 } => {
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Info,
-                        serde_json::json!({
-                            "event": "handoff.rejected",
-                            "packet_id": packet.id,
-                            "rejector": rejector,
-                            "reason": reason,
-                        }),
-                    );
+                    // Slice 41 (Pass #21): structured emitter migration to
+                    // `handoff.rejected` (HandoffRejectOutcome::Ok success).
+                    // `reason` is `Option<String>`; only namespace it when present.
+                    let packet_id_str = packet.id.clone();
+                    let rejector_clone = rejector.clone();
+                    let reason_clone = reason.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.rejected",
+                        LogActor::User,
+                        LogSeverity::Info,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code("");
+                    let mut chain = builder
+                        .namespaced("handoff.packet_id", packet_id_str.clone())
+                        .and_then(|b| b.namespaced("handoff.rejector", rejector_clone.clone()));
+                    if let Some(r) = reason_clone.clone() {
+                        chain = chain.and_then(|b| b.namespaced("handoff.reason", r));
+                    }
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Info,
+                                serde_json::json!({
+                                    "event": "handoff.rejected",
+                                    "packet_id": packet_id_str,
+                                    "rejector": rejector_clone,
+                                    "reason": reason_clone,
+                                }),
+                            );
+                        }
+                    }
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -2485,17 +3316,39 @@ pub async fn dispatch_command(
                     ref code,
                     ref message,
                 } => {
-                    state.audit.log(
-                        &cmd.session_id,
-                        "handoff",
-                        bridge_core::AuditSeverity::Warn,
-                        serde_json::json!({
-                            "event": "handoff.reject_failed",
-                            "packet_id": packet_id,
-                            "code": code,
-                            "reason": message,
-                        }),
-                    );
+                    // Slice 41 (Pass #21): structured emitter migration to
+                    // `handoff.reject_failed` (HandoffRejectOutcome::Err).
+                    let packet_id_clone = packet_id.clone();
+                    let code_clone = code.clone();
+                    let message_clone = message.clone();
+                    let builder = StructuredLogBuilder::new(
+                        "handoff.reject_failed",
+                        LogActor::User,
+                        LogSeverity::Warning,
+                    )
+                    .session_id(&cmd.session_id)
+                    .code(&code_clone);
+                    let chain = builder
+                        .namespaced("handoff.packet_id", packet_id_clone.clone())
+                        .and_then(|b| b.namespaced("handoff.reason", message_clone.clone()));
+                    match chain {
+                        Ok(b) => {
+                            let _ = log_structured(&state, "handoff", b);
+                        }
+                        Err(_) => {
+                            state.audit.log(
+                                &cmd.session_id,
+                                "handoff",
+                                bridge_core::AuditSeverity::Warn,
+                                serde_json::json!({
+                                    "event": "handoff.reject_failed",
+                                    "packet_id": packet_id_clone,
+                                    "code": code_clone,
+                                    "reason": message_clone,
+                                }),
+                            );
+                        }
+                    }
                     (
                         ServerAck {
                             ack_of: cmd.id.clone(),
@@ -2603,23 +3456,82 @@ pub async fn dispatch_command(
                             &resolution.tool_call,
                             TOOL_CALL_HASH_DROP_FIELDS,
                         );
-                        state.audit.log(
-                            &cmd.session_id,
-                            "approval",
-                            AuditSeverity::Info,
-                            json!({
-                                "event": "resolved",
-                                "approval_id": approval_id,
-                                "option_id": resolution.option_id,
-                                "outcome": outcome_label,
-                                "agent_id": handle.agent_id,
-                                "agent_kind": handle.agent_kind.as_str(),
-                                "toolCallId": resolution.tool_call.get("toolCallId"),
-                                "kind": resolution.tool_call.get("kind"),
-                                "locations": resolution.tool_call.get("locations"),
-                                "args_hash": args_hash,
-                            }),
-                        );
+                        // Slice 41 (Pass #22): structured emitter migration to
+                        // `approval.resolved`. `approval.*` namespace newly
+                        // allowed in Pass #22 (see observability.rs +
+                        // schema/observability-events.yaml). `agent.*`
+                        // namespace also newly allowed; used for handle
+                        // metadata fields.
+                        let approval_id_clone = approval_id.clone();
+                        let option_id_clone = resolution.option_id.clone();
+                        let outcome_clone = outcome_label.to_string();
+                        let agent_id_clone = handle.agent_id.clone();
+                        let agent_kind_clone = handle.agent_kind.as_str().to_string();
+                        let tool_call_id_value = resolution
+                            .tool_call
+                            .get("toolCallId")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let kind_value = resolution
+                            .tool_call
+                            .get("kind")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let locations_value = resolution
+                            .tool_call
+                            .get("locations")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let args_hash_clone = args_hash.clone();
+                        let builder = StructuredLogBuilder::new(
+                            "approval.resolved",
+                            LogActor::User,
+                            LogSeverity::Info,
+                        )
+                        .session_id(&cmd.session_id)
+                        .code("");
+                        let chain = builder
+                            .namespaced("approval.approval_id", approval_id_clone.clone())
+                            .and_then(|b| {
+                                b.namespaced("approval.option_id", option_id_clone.clone())
+                            })
+                            .and_then(|b| b.namespaced("approval.outcome", outcome_clone.clone()))
+                            .and_then(|b| b.namespaced("agent.id", agent_id_clone.clone()))
+                            .and_then(|b| b.namespaced("agent.kind", agent_kind_clone.clone()))
+                            .and_then(|b| {
+                                b.namespaced("approval.tool_call_id", tool_call_id_value.clone())
+                            })
+                            .and_then(|b| b.namespaced("approval.kind", kind_value.clone()))
+                            .and_then(|b| {
+                                b.namespaced("approval.locations", locations_value.clone())
+                            })
+                            .and_then(|b| {
+                                b.namespaced("approval.args_hash", args_hash_clone.clone())
+                            });
+                        match chain {
+                            Ok(b) => {
+                                let _ = log_structured(&state, "approval", b);
+                            }
+                            Err(_) => {
+                                state.audit.log(
+                                    &cmd.session_id,
+                                    "approval",
+                                    AuditSeverity::Info,
+                                    json!({
+                                        "event": "resolved",
+                                        "approval_id": approval_id_clone,
+                                        "option_id": option_id_clone,
+                                        "outcome": outcome_clone,
+                                        "agent_id": agent_id_clone,
+                                        "agent_kind": agent_kind_clone,
+                                        "toolCallId": tool_call_id_value,
+                                        "kind": kind_value,
+                                        "locations": locations_value,
+                                        "args_hash": args_hash_clone,
+                                    }),
+                                );
+                            }
+                        }
                         (
                             ServerAck {
                                 ack_of: cmd.id.clone(),
@@ -2640,19 +3552,46 @@ pub async fn dispatch_command(
                             E::OptionForbidden(_) => "approval.option_forbidden",
                             E::Transport(_) => "engine.unreachable",
                         };
-                        state.audit.log(
-                            &cmd.session_id,
-                            "approval",
-                            AuditSeverity::Warn,
-                            json!({
-                                "event": "resolve_failed",
-                                "approval_id": approval_id,
-                                "code": code,
-                                "reason": e.to_string(),
-                                "agent_id": handle.agent_id,
-                                "agent_kind": handle.agent_kind.as_str(),
-                            }),
-                        );
+                        // Slice 41 (Pass #22): structured emitter migration to
+                        // `approval.resolve_failed`. `approval.*`/`agent.*`
+                        // newly allowed prefixes (see Pass #22 mini-ADR).
+                        let approval_id_clone = approval_id.clone();
+                        let code_str = code.to_string();
+                        let reason_str = e.to_string();
+                        let agent_id_clone = handle.agent_id.clone();
+                        let agent_kind_clone = handle.agent_kind.as_str().to_string();
+                        let builder = StructuredLogBuilder::new(
+                            "approval.resolve_failed",
+                            LogActor::User,
+                            LogSeverity::Warning,
+                        )
+                        .session_id(&cmd.session_id)
+                        .code(&code_str);
+                        let chain = builder
+                            .namespaced("approval.approval_id", approval_id_clone.clone())
+                            .and_then(|b| b.namespaced("approval.reason", reason_str.clone()))
+                            .and_then(|b| b.namespaced("agent.id", agent_id_clone.clone()))
+                            .and_then(|b| b.namespaced("agent.kind", agent_kind_clone.clone()));
+                        match chain {
+                            Ok(b) => {
+                                let _ = log_structured(&state, "approval", b);
+                            }
+                            Err(_) => {
+                                state.audit.log(
+                                    &cmd.session_id,
+                                    "approval",
+                                    AuditSeverity::Warn,
+                                    json!({
+                                        "event": "resolve_failed",
+                                        "approval_id": approval_id_clone,
+                                        "code": code_str,
+                                        "reason": reason_str,
+                                        "agent_id": agent_id_clone,
+                                        "agent_kind": agent_kind_clone,
+                                    }),
+                                );
+                            }
+                        }
                         (
                             ServerAck {
                                 ack_of: cmd.id.clone(),
@@ -2774,20 +3713,50 @@ fn build_mcp_drift_event(
         McpDriftPolicy::Fail => AuditSeverity::Error,
         _ => AuditSeverity::Warn,
     };
-    state.audit.log(
-        target_id,
-        "session",
-        severity,
-        json!({
-            "event": "resume_mcp_drift",
-            "vac_session_id": target_id,
-            "agent_id": meta.agent_id,
-            "mode": mode,
-            "policy": policy.as_str(),
-            "persisted_count": meta.mcp_servers.len(),
-            "live_count": agent.mcp_servers.len(),
-        }),
-    );
+    // Slice 41 (Pass #21): structured emitter migration to
+    // `session.resume_mcp_drift` (top-level helper). `session.*` not in
+    // allowed namespace prefixes — bespoke fields routed via `profile.*`.
+    let agent_id_clone = meta.agent_id.clone();
+    let mode_clone = mode.to_string();
+    let policy_str = policy.as_str().to_string();
+    let persisted_count = meta.mcp_servers.len() as f64;
+    let live_count = agent.mcp_servers.len() as f64;
+    let log_severity = match severity {
+        AuditSeverity::Error => LogSeverity::Error,
+        AuditSeverity::Warn => LogSeverity::Warning,
+        _ => LogSeverity::Info,
+    };
+    let builder =
+        StructuredLogBuilder::new("session.resume_mcp_drift", LogActor::System, log_severity)
+            .session_id(target_id)
+            .code("");
+    let chain = builder
+        .namespaced("profile.agent_id", agent_id_clone.clone())
+        .and_then(|b| b.namespaced("profile.mode", mode_clone.clone()))
+        .and_then(|b| b.namespaced("profile.policy", policy_str.clone()))
+        .and_then(|b| b.namespaced("profile.persisted_count", persisted_count))
+        .and_then(|b| b.namespaced("profile.live_count", live_count));
+    match chain {
+        Ok(b) => {
+            let _ = log_structured(state, "session", b);
+        }
+        Err(_) => {
+            state.audit.log(
+                target_id,
+                "session",
+                severity,
+                json!({
+                    "event": "resume_mcp_drift",
+                    "vac_session_id": target_id,
+                    "agent_id": agent_id_clone,
+                    "mode": mode_clone,
+                    "policy": policy_str,
+                    "persisted_count": meta.mcp_servers.len(),
+                    "live_count": agent.mcp_servers.len(),
+                }),
+            );
+        }
+    }
     let event_type = match policy {
         McpDriftPolicy::Fail => "session.resume.failed",
         _ => "session.resume.warning",
@@ -2955,17 +3924,37 @@ async fn resume_persistence_replay(
         v: 1,
         ts: chrono::Utc::now().to_rfc3339(),
     });
-    state.audit.log(
-        &target_id,
-        "session",
-        AuditSeverity::Info,
-        json!({
-            "event": "resumed",
-            "mode": mode_for_started,
-            "resume_mode": resume_mode_resolved,
-            "replayed": replayed,
-        }),
-    );
+    // Slice 41 (Pass #21): structured emitter migration to
+    // `session.resumed` (resume_persistence_replay terminal log).
+    // `session.*` not in allowed namespace prefixes — fields via `profile.*`.
+    let mode_clone = mode_for_started.to_string();
+    let resume_mode_clone = resume_mode_resolved.to_string();
+    let replayed_count = replayed as f64;
+    let builder = StructuredLogBuilder::new("session.resumed", LogActor::System, LogSeverity::Info)
+        .session_id(&target_id)
+        .code("");
+    let chain = builder
+        .namespaced("profile.mode", mode_clone.clone())
+        .and_then(|b| b.namespaced("profile.resume_mode", resume_mode_clone.clone()))
+        .and_then(|b| b.namespaced("profile.replayed", replayed_count));
+    match chain {
+        Ok(b) => {
+            let _ = log_structured(&state, "session", b);
+        }
+        Err(_) => {
+            state.audit.log(
+                &target_id,
+                "session",
+                AuditSeverity::Info,
+                json!({
+                    "event": "resumed",
+                    "mode": mode_clone,
+                    "resume_mode": resume_mode_clone,
+                    "replayed": replayed,
+                }),
+            );
+        }
+    }
     (
         ServerAck {
             ack_of: cmd.id.clone(),

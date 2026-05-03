@@ -1,0 +1,284 @@
+# Canonical event catalog (slice 32 step_01).
+#
+# This file is the source of truth for every event the bridge or web cockpit
+# emits or consumes. Generated bindings live in:
+#   * apps/local-bridge/src/generated/event_catalog.rs (planned)
+#   * apps/web/src/generated/eventCatalog.ts            (planned)
+#
+# Migration rule:
+#   1. New events must land here BEFORE being emitted in code.
+#   2. Mock-engine may use canonical events or `legacy_mock_only` events.
+#      Legacy mock events MUST declare a replacement.
+#   3. Capability classifier modules under apps/web/src/domain/capabilities/
+#      consume IDs from the generated TS catalog, not inline strings.
+
+version: 1
+status: planned # codegen pipeline not yet implemented
+
+events:
+  # ---- session lifecycle -------------------------------------------------
+  - id: session.started
+    owner: bridge
+    status: implemented
+    producer: translator.session_started
+    consumers:
+      - domain.sessions.handlers
+      - SessionPicker
+      - capabilities.sessionLifecycle
+  - id: session.closed
+    owner: bridge
+    status: implemented
+    producer: translator.session_closed
+    consumers:
+      - domain.sessions.handlers
+      - capabilities.sessionLifecycle
+  - id: session.context.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.prompt_response_usage
+    consumers:
+      - domain.sessions.handlers
+      - Topbar.ModelContextChip
+  - id: session.renamed
+    owner: bridge
+    status: implemented
+    producer: translator.session_renamed
+    consumers:
+      - SessionPicker
+      - capabilities.sessionLifecycle
+
+  # ---- review taxonomy ---------------------------------------------------
+  - id: review.changeset_updated
+    owner: bridge
+    status: implemented
+    producer: translator.review_changeset_updated
+    consumers:
+      - domain.review.handlers
+  - id: review.file_diff_chunk
+    owner: bridge
+    status: implemented
+    producer: translator.review_file_diff_chunk
+    consumers:
+      - domain.review.handlers
+
+  # ---- assessment index --------------------------------------------------
+  - id: assessment.index.rebuild_started
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.index.rebuild_progress
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.index.rebuilt
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.index.rebuild_failed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.index.status_failed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.assessmentIndex
+
+  # ---- workflow ----------------------------------------------------------
+  - id: workflow.started
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.step.started
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.step.updated
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.step.completed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.step.failed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.completed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.failed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.artifact.created
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.workflowEvents
+  - id: workflow.input.message_submit
+    owner: bridge
+    status: implemented
+    internal: true
+    consumers:
+      - capabilities.workflowEvents
+
+  # ---- shell / terminal --------------------------------------------------
+  - id: shell.started
+    owner: bridge
+    status: not_wired
+    consumers:
+      - capabilities.shellTerminal
+  - id: shell.output
+    owner: bridge
+    status: not_wired
+    consumers:
+      - capabilities.shellTerminal
+  - id: terminal.activity
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.shellTerminal
+
+  # ---- handoff -----------------------------------------------------------
+  - id: handoff.execution_progress
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.handoffErrors
+  - id: handoff.completed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.handoffErrors
+
+  # ---- runtime jobs ------------------------------------------------------
+  - id: runtime.job_started
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.runtimeJobs
+  - id: runtime.job_completed
+    owner: bridge
+    status: implemented
+    consumers:
+      - capabilities.runtimeJobs
+
+  # ---- activity log ------------------------------------------------------
+  - id: activity.appended
+    owner: bridge
+    status: implemented
+    producer: translator.activity_appended
+    consumers:
+      - capabilities.notifyAttention
+
+  # ---- assessment streaming ---------------------------------------------
+  - id: assessment.candidate_received
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.candidate_rejected
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.evidence_attached
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.finding_added
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.progress
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.sweep.started
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.sweep.progress
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.worker_output_rejected
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+
+  # ---- pairing (HTTP token exchange) ------------------------------------
+  - id: pairing.mint
+    owner: bridge
+    status: implemented
+    producer: auth.mint_pair
+    consumers:
+      - audit.pairing_shard
+  - id: pairing.exchange
+    owner: bridge
+    status: implemented
+    producer: auth.exchange_pair
+    consumers:
+      - audit.pairing_shard
+  - id: pairing.exchange_denied
+    owner: bridge
+    status: implemented
+    producer: auth.exchange_pair
+    consumers:
+      - audit.pairing_shard
+
+  # ---- websocket lifecycle ----------------------------------------------
+  - id: ws.connected
+    owner: bridge
+    status: implemented
+    producer: ws.handler.run_socket
+    consumers:
+      - audit.ws_shard
+  - id: ws.disconnected
+    owner: bridge
+    status: implemented
+    producer: ws.handler.run_socket
+    consumers:
+      - audit.ws_shard
+  - id: ws.auth_failed
+    owner: bridge
+    status: implemented
+    producer: ws.handler.run_socket
+    consumers:
+      - audit.ws_shard
+
+  # ---- legacy / mock-only adapters --------------------------------------
+  - id: changeset.updated
+    owner: mock
+    status: legacy_mock_only
+    replacement: review.changeset_updated
+    consumers:
+      - tools.mock_engine.scenarios

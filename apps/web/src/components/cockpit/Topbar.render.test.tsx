@@ -55,8 +55,14 @@ describe('cockpit Topbar', () => {
       agentKind: 'acp',
       acpModel: {
         currentModelId: 'gemini-pro',
-        models: [{ id: 'gemini-pro' }, { id: 'gemini-flash' }],
-        modes: [{ id: 'gemini-pro' }, { id: 'gemini-flash' }],
+        models: [
+          { id: 'gemini-pro', context_window: 1000000 },
+          { id: 'gemini-flash', context_window: 500000 },
+        ],
+        modes: [
+          { id: 'gemini-pro', context_window: 1000000 },
+          { id: 'gemini-flash', context_window: 500000 },
+        ],
         configOptions: null,
         contextUsed: 157000,
         contextLimit: 1000000,
@@ -71,6 +77,6 @@ describe('cockpit Topbar', () => {
       expect(send).toHaveBeenCalledWith('sess_01', 'session.mode.set', { mode_id: 'gemini-flash' }),
     );
     await waitFor(() => expect(useSession.getState().acpModel.currentModelId).toBe('gemini-flash'));
-    expect(screen.getByTestId('model-context-chip')).toHaveTextContent('ctx 157k/1m');
+    expect(screen.getByTestId('model-context-chip')).toHaveTextContent('ctx 157k/500k');
   });
 });

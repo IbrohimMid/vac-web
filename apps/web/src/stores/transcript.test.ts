@@ -130,4 +130,19 @@ describe('transcript store', () => {
   it('HOT_WINDOW_SIZE constant exposed', () => {
     expect(HOT_WINDOW_SIZE).toBeGreaterThan(0);
   });
+
+  // Slice 50: rendering pipeline mode field on the transcript store.
+  it('defaults rendering mode to live', () => {
+    expect(useTranscript.getState().mode).toBe('live');
+  });
+
+  it('setMode transitions through live/replay/frozen', () => {
+    const { setMode } = useTranscript.getState();
+    setMode('replay');
+    expect(useTranscript.getState().mode).toBe('replay');
+    setMode('frozen');
+    expect(useTranscript.getState().mode).toBe('frozen');
+    setMode('live');
+    expect(useTranscript.getState().mode).toBe('live');
+  });
 });

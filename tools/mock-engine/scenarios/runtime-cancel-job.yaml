@@ -1,0 +1,25 @@
+scenario: runtime_cancel_job
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  job_id: "$input.job_id"
+input:
+  command: runtime.cancel_job
+  payload:
+    job_id: "<job-id>"
+timeline:
+  - event: runtime.job.upserted
+    after_ms: 0
+    payload:
+      job_id: "${job_id}"
+      kind: watcher
+      label: watcher
+      status: cancelled
+      finished_at: "2026-04-24T10:05:00Z"
+final_response:
+  ok: true
+assertions:
+  - mock-engine echoes the inbound job_id in a runtime.job.upserted notification
+    with status=cancelled and a deterministic finished_at timestamp
+  - kind/label are hardcoded to watcher; future variants may parameterise these
+    once additional runtime job kinds land

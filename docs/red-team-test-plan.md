@@ -203,4 +203,5 @@ Dashboard generated from annotations at `docs/red-team-dashboard.md` (automated)
 - [`capability-profiles.md`](./capability-profiles.md) §11 — authoritative attack matrix origin.
 - [`handoff-contract.md`](./handoff-contract.md) §5 — state machine under attack.
 - [`gates.md`](./gates.md) §7 — override governance invariants.
-- [`upstream-vac-prs.md`](./upstream-vac-prs.md) §6 — engine-side enforcement PR.
+- [`agent-runtime.md`](./agent-runtime.md) — runtime trust boundary and ACP enforcement model.
+- [`plans/backend-ui-wiring.md`](./plans/backend-ui-wiring.md) — active command/event wiring plan; use it to add red-team cases for newly wired controls.

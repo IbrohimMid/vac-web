@@ -4,11 +4,26 @@
 
 import { useCockpit } from '../../stores/cockpit';
 import { authMethodSummary } from '../../domain/sessions/auth';
+import {
+  affordanceFor,
+  type AffordanceCommandStatus,
+} from '../../domain/capabilities/affordanceCatalog';
+import { commandStatus } from '../../generated/commandCatalog';
 import { GATE_ORDER, useGates, type GateState } from '../../stores/gates';
 import { useSession } from '../../stores/session';
 import { useSessionHistory } from '../../stores/sessionHistory';
 import type { TransportHandle } from '../../transport';
 import { Avatar, Icon } from './primitives';
+
+// Slice 33 follow-up: route surface controls through the declarative
+// affordance catalog. `commandStatus()` may return a longer status union
+// than the catalog accepts (e.g. legacy planning states); this narrows it
+// to the four catalog-accepted variants.
+function toAffordanceStatus(id: string): AffordanceCommandStatus {
+  const s = commandStatus(id);
+  if (s === 'implemented' || s === 'frontend_owned' || s === 'not_wired') return s;
+  return 'unknown';
+}
 
 interface Props {
   onCmdK: () => void;
@@ -70,6 +85,36 @@ function getModelId(model: Record<string, unknown>, fallback: string): string {
   return fallback;
 }
 
+function numberValue(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  return null;
+}
+
+function contextLimitFromModel(model: Record<string, unknown>): number | null {
+  for (const key of ['contextLimit', 'context_limit', 'contextWindow', 'context_window', 'maxContextTokens', 'max_context_tokens']) {
+    const direct = numberValue(model[key]);
+    if (direct !== null) return direct;
+  }
+  const nested =
+    model.context && typeof model.context === 'object' && !Array.isArray(model.context)
+      ? (model.context as Record<string, unknown>)
+      : model.context_window && typeof model.context_window === 'object' && !Array.isArray(model.context_window)
+        ? (model.context_window as Record<string, unknown>)
+        : model.contextWindow && typeof model.contextWindow === 'object' && !Array.isArray(model.contextWindow)
+          ? (model.contextWindow as Record<string, unknown>)
+          : null;
+  if (!nested) return null;
+  for (const key of ['limit', 'window', 'tokens', 'maxTokens', 'max_tokens']) {
+    const value = numberValue(nested[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
 function formatContextWindow(used: number | null, limit: number | null): string {
   if (typeof used === 'number' && typeof limit === 'number' && limit > 0) {
     const fmt = (n: number) => n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}m` : n >= 1000 ? `${Math.round(n / 100) / 10}k` : String(n);
@@ -91,21 +136,46 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   if (agentKind !== 'acp' && choices.length === 0 && !acpModel.currentModelId) return null;
   const current = acpModel.currentModelId ?? (choices[0] ? getModelId(choices[0], 'model') : 'model unknown');
   const context = formatContextWindow(acpModel.contextUsed, acpModel.contextLimit);
-  const canSwitch = Boolean(transport && sessionId && choices.length > 0 && current !== 'model unknown');
+  // Slice 33 follow-up: route the model/mode picker through the declarative
+  // affordance catalog (`topbar.model.select`). The catalog gates visibility
+  // on ACP session + transport + sessionId + advertised modes/models, and
+  // enables only when the corresponding command (`session.mode.set` or
+  // `session.config_option.set`) is implemented end-to-end.
+  const modelCommandId = source === 'mode' ? 'session.mode.set' : 'session.config_option.set';
+  const modelSelectStatus = toAffordanceStatus(modelCommandId);
+  const metadataKeys: Array<string> = [];
+  if (modes.length > 0) metadataKeys.push('modes');
+  if (models.length > 0) metadataKeys.push('models');
+  const modelSelectAffordance = affordanceFor('topbar.model.select', {
+    commandStatus: modelSelectStatus,
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+    sessionKind: agentKind === 'acp' ? 'acp' : 'unknown',
+    metadataKeys,
+  });
+  const canSwitch = Boolean(
+    modelSelectAffordance.enabled && choices.length > 0 && current !== 'model unknown',
+  );
   const switchModel = async (next: string) => {
     if (!transport || !sessionId || !next || next === current) return;
     const cmd = source === 'mode' ? 'session.mode.set' : 'session.config_option.set';
     const payload = source === 'mode' ? { mode_id: next } : { option_id: 'model', value: next };
     const ack = await transport.send(sessionId, cmd, payload);
     if (ack.ok) {
-      setAcpModelSnapshot({ currentModelId: next });
+      const nextChoice = choices.find((model, index) => getModelId(model, `model-${index + 1}`) === next);
+      setAcpModelSnapshot({
+        currentModelId: next,
+        contextLimit: nextChoice ? contextLimitFromModel(nextChoice) : null,
+      });
     }
   };
   const title = [
     choices.length > 0 ? `${choices.length} ACP ${source} entries advertised` : 'No ACP model/mode list advertised yet',
     acpModel.currentModelId ? `Current model/mode: ${acpModel.currentModelId}` : 'Current model/mode not advertised',
     acpModel.contextLimit ? `Context window: ${context}` : 'Context window telemetry unavailable from this ACP adapter',
-    canSwitch ? 'Changing this selector calls the active ACP adapter.' : 'Switching requires an active ACP session and advertised model/mode entries.',
+    canSwitch
+      ? 'Changing this selector calls the active ACP adapter.'
+      : (modelSelectAffordance.disabledReason ?? 'Switching requires an active ACP session and advertised model/mode entries.'),
   ].join(' · ');
   if (choices.length > 0) {
     return (
@@ -115,6 +185,7 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
           aria-label="ACP model"
           value={current}
           disabled={!canSwitch}
+          data-affordance-id={modelSelectAffordance.affordanceId}
           onChange={(event) => void switchModel(event.target.value)}
         >
           {choices.map((model, index) => {
@@ -244,14 +315,7 @@ export function Topbar({ onCmdK, onTweaks, transport }: Props) {
       <div className="topbar-divider"></div>
       <GateRibbon />
       <div className="topbar-spacer"></div>
-      <button className="search-trigger" onClick={onCmdK} aria-label="Search">
-        <Icon name="search" size={14} />
-        <span>Search, run, navigate…</span>
-        <span className="kbd">
-          <kbd>⌘</kbd>
-          <kbd>K</kbd>
-        </span>
-      </button>
+      <SearchTriggerButton onCmdK={onCmdK} />
       <button
         className="icon-btn"
         onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -273,6 +337,37 @@ export function Topbar({ onCmdK, onTweaks, transport }: Props) {
       </button>
       <Avatar name="Asa" />
     </header>
+  );
+}
+
+// Slice 33 (frontend declarative affordances): the search trigger consults
+// `affordanceCatalog` so the deterministic enabled/disabled decision lives
+// in the catalog instead of the JSX. The trigger is `frontend_owned` —
+// always enabled — but going through the catalog keeps the wiring honest
+// so `not_wired` regressions automatically disable the surface control.
+function SearchTriggerButton({ onCmdK }: { onCmdK: () => void }) {
+  const decision = affordanceFor('topbar.search.trigger', {
+    commandStatus: 'frontend_owned',
+    hasTransport: false,
+    hasSessionId: false,
+  });
+  if (!decision.visible) return null;
+  return (
+    <button
+      className="search-trigger"
+      onClick={onCmdK}
+      aria-label="Search"
+      data-affordance-id={decision.affordanceId}
+      disabled={!decision.enabled}
+      title={decision.disabledReason ?? undefined}
+    >
+      <Icon name="search" size={14} />
+      <span>Search, run, navigate…</span>
+      <span className="kbd">
+        <kbd>⌘</kbd>
+        <kbd>K</kbd>
+      </span>
+    </button>
   );
 }
 
@@ -363,4 +458,3 @@ function ConfigStatusChip() {
     </span>
   );
 }
-

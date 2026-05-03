@@ -1,9 +1,9 @@
-//! Stage X.5b ACP client — JSON-RPC 2.0 over ndjson against an ACP
-//! Agent (e.g. `claude-agent-acp`).
+//! ACP client — JSON-RPC 2.0 over ndjson against an ACP Agent
+//! (e.g. `claude-agent-acp`).
 //!
-//! See [`docs/plans/stage-x5a-acp-client-design.md`](../../../../../docs/plans/stage-x5a-acp-client-design.md)
-//! for the design decision (Rust-native, hand-rolled minimal types,
-//! stream-json adapter demoted to fallback).
+//! See [`docs/agent-runtime.md`](../../../../../docs/agent-runtime.md)
+//! for the durable runtime contract. Historical stage-plan notes were
+//! retired; current implementation work is tracked in `docs/plans/`.
 
 pub mod client;
 pub mod debug;

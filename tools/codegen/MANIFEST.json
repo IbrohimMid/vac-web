@@ -1,0 +1,66 @@
+{
+  "$schema": "./manifest.schema.json",
+  "version": 1,
+  "description": "Inventory of generated files and the codegen scripts that produce them. Used by drift CI (scripts/verify-codegen.sh) and by the docs at docs/generated-code.md.",
+  "entries": [
+    {
+      "id": "command-catalog-rs",
+      "output": "apps/local-bridge/src/generated/command_catalog.rs",
+      "sources": ["config/control-plane/command-manifest.yaml"],
+      "generator": "scripts/codegen-command-catalog.mjs",
+      "status": "shipped",
+      "language": "rust"
+    },
+    {
+      "id": "command-catalog-ts",
+      "output": "apps/web/src/generated/commandCatalog.ts",
+      "sources": ["config/control-plane/command-manifest.yaml"],
+      "generator": "scripts/codegen-command-catalog.mjs",
+      "status": "shipped",
+      "language": "typescript"
+    },
+    {
+      "id": "event-catalog-ts",
+      "output": "apps/web/src/generated/eventCatalog.ts",
+      "sources": ["config/control-plane/event-catalog.yaml"],
+      "generator": "scripts/codegen-event-catalog.mjs",
+      "status": "planned",
+      "language": "typescript"
+    },
+    {
+      "id": "event-catalog-rs",
+      "output": "apps/local-bridge/src/generated/event_catalog.rs",
+      "sources": ["config/control-plane/event-catalog.yaml"],
+      "generator": "scripts/codegen-event-catalog.mjs",
+      "status": "planned",
+      "language": "rust"
+    },
+    {
+      "id": "mock-scenario-catalog-rs",
+      "output": "tools/mock-engine/src/generated/scenario_catalog.rs",
+      "sources": [
+        "tools/mock-engine/scenarios/",
+        "schema/mock-scenario.schema.json"
+      ],
+      "generator": "scripts/codegen-mock-scenarios.mjs",
+      "status": "planned",
+      "language": "rust"
+    },
+    {
+      "id": "error-taxonomy-ts",
+      "output": "apps/web/src/generated/errorTaxonomy.ts",
+      "sources": ["schema/error-taxonomy.yaml"],
+      "generator": "scripts/codegen-error-taxonomy.mjs",
+      "status": "planned",
+      "language": "typescript"
+    },
+    {
+      "id": "error-taxonomy-rs",
+      "output": "apps/local-bridge/src/generated/error_taxonomy.rs",
+      "sources": ["schema/error-taxonomy.yaml"],
+      "generator": "scripts/codegen-error-taxonomy.mjs",
+      "status": "planned",
+      "language": "rust"
+    }
+  ]
+}

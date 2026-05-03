@@ -49,7 +49,80 @@ interface SessionChangedPayload {
   configOptions?: unknown;
   model_id?: string;
   modelId?: string;
+  context_used?: unknown;
+  contextUsed?: unknown;
+  context_limit?: unknown;
+  contextLimit?: unknown;
 }
+
+function asNumber(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  return null;
+}
+
+function asObject(raw: unknown): Record<string, unknown> | null {
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+}
+
+function asArray(raw: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(raw)) return raw.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+  const obj = asObject(raw);
+  if (!obj) return [];
+  for (const key of ['models', 'modes', 'items', 'options', 'available']) {
+    const value = obj[key];
+    if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+  }
+  return [];
+}
+
+function modelIdOf(entry: Record<string, unknown>, fallback: string): string {
+  for (const key of ['id', 'modelId', 'model_id', 'modeId', 'mode_id', 'name', 'value']) {
+    const value = entry[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return fallback;
+}
+
+function contextLimitOf(entry: Record<string, unknown>): number | null {
+  for (const key of ['contextLimit', 'context_limit', 'contextWindow', 'context_window', 'maxContextTokens', 'max_context_tokens']) {
+    const direct = asNumber(entry[key]);
+    if (direct !== null) return direct;
+  }
+  const nested = asObject(entry.context) ?? asObject(entry.context_window) ?? asObject(entry.contextWindow);
+  if (nested) {
+    for (const key of ['limit', 'window', 'tokens', 'maxTokens', 'max_tokens']) {
+      const value = asNumber(nested[key]);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
+function contextLimitForModel(modelId: string | null, sources: unknown[]): number | null {
+  if (!modelId) return null;
+  for (const source of sources) {
+    const entries = asArray(source);
+    const match = entries.find((entry, index) => modelIdOf(entry, `entry-${index + 1}`) === modelId);
+    if (match) {
+      const limit = contextLimitOf(match);
+      if (limit !== null) return limit;
+    }
+  }
+  return null;
+}
+
+function modelValueFromOptions(raw: unknown): string | null {
+  for (const option of asArray(raw)) {
+    const id = asString(option.id) ?? asString(option.option_id) ?? asString(option.optionId) ?? asString(option.name);
+    if (id === 'model') return asString(option.value) ?? asString(option.currentValue) ?? asString(option.current_value);
+  }
+  return null;
+}
+
 function coerceRow(p: SessionChangedPayload): SessionRow | null {
   if (!p.id) return null;
   return {
@@ -98,6 +171,10 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
         modes: p?.modes ?? null,
         configOptions: p?.config_options ?? p?.configOptions ?? null,
         currentModelId: p?.model_id ?? p?.modelId ?? p?.model ?? null,
+        contextUsed: asNumber(p?.context_used ?? p?.contextUsed),
+        contextLimit:
+          asNumber(p?.context_limit ?? p?.contextLimit) ??
+          contextLimitForModel(p?.model_id ?? p?.modelId ?? p?.model ?? null, [p?.modes, p?.models]),
       });
     }),
   );
@@ -114,15 +191,47 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
     transport.on('session.mode.updated', (ev) => {
       const p = (ev.payload ?? {}) as { mode_id?: unknown; modeId?: unknown };
       const modeId = asString(p.mode_id) ?? asString(p.modeId);
-      if (modeId) useSession.getState().setAcpModelSnapshot({ currentModelId: modeId });
+      if (modeId) {
+        const state = useSession.getState().acpModel;
+        useSession.getState().setAcpModelSnapshot({
+          currentModelId: modeId,
+          contextLimit: contextLimitForModel(modeId, [state.modes, state.models, state.configOptions]),
+        });
+      }
     }),
   );
 
   offs.push(
     transport.on('session.config_options.updated', (ev) => {
       const p = (ev.payload ?? {}) as { options?: unknown; config_options?: unknown; configOptions?: unknown };
+      const configOptions = p.options ?? p.config_options ?? p.configOptions ?? null;
+      const modelId = modelValueFromOptions(configOptions);
+      const state = useSession.getState().acpModel;
       useSession.getState().setAcpModelSnapshot({
-        configOptions: p.options ?? p.config_options ?? p.configOptions ?? null,
+        configOptions,
+        ...(modelId
+          ? {
+              currentModelId: modelId,
+              contextLimit: contextLimitForModel(modelId, [state.modes, state.models, configOptions]),
+            }
+          : {}),
+      });
+    }),
+  );
+
+  offs.push(
+    transport.on('session.context.updated', (ev) => {
+      const p = (ev.payload ?? {}) as {
+        context_used?: unknown;
+        contextUsed?: unknown;
+        context_limit?: unknown;
+        contextLimit?: unknown;
+      };
+      const contextUsed = asNumber(p.context_used ?? p.contextUsed);
+      const contextLimit = asNumber(p.context_limit ?? p.contextLimit);
+      useSession.getState().setAcpModelSnapshot({
+        ...(contextUsed !== null ? { contextUsed } : {}),
+        ...(contextLimit !== null ? { contextLimit } : {}),
       });
     }),
   );

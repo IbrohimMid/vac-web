@@ -1,0 +1,21 @@
+scenario: review_revert_file
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  path: "$input.path"
+input:
+  command: review.revert_file
+  payload:
+    path: src/foo.ts
+timeline:
+  - event: review.changeset_updated
+    after_ms: 0
+    payload:
+      files: []
+      reverted_path: "${path}"
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits review.changeset_updated with empty files when a single path is reverted
+  - matches the bridge-side review.* canonicalization (Slice 05) so the cockpit DiffViewer drops the reverted entry
+  - reverted_path echoes the inbound params via state_seeds.$input.path so the store can dedupe

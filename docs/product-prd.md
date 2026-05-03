@@ -310,6 +310,7 @@ Recorded explicitly so they don't creep back:
 - [`ux-grammar.md`](./ux-grammar.md) — severity, subsystems, notify lanes.
 - [`frontend-rules.md`](./frontend-rules.md) — performance + architecture rules.
 - [`connectors.md`](./connectors.md) — connector adapter contracts.
-- [`upstream-vac-prs.md`](./upstream-vac-prs.md) — required changes in repo VAC.
+- [`agent-runtime.md`](./agent-runtime.md) — current runtime / ACP bridge contract.
+- [`plans/backend-ui-wiring.md`](./plans/backend-ui-wiring.md) — active implementation plan for closing backend ↔ UI command/event gaps.
 - [`red-team-test-plan.md`](./red-team-test-plan.md) — security test matrix.
 - [`perf-test-plan.md`](./perf-test-plan.md) — performance test harness.

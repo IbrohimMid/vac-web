@@ -1,0 +1,13 @@
+scenario: changeset_legacy_compat
+status: legacy_mock_only
+replacement: review.changeset_updated
+input:
+  command: review.subscribe
+timeline:
+  - event: changeset.updated
+    after_ms: 0
+    payload:
+      changeset_id: cs_legacy_01
+assertions:
+  - mock-engine emits the legacy `changeset.updated` for compatibility tests only
+  - production review surface should not subscribe to this scenario

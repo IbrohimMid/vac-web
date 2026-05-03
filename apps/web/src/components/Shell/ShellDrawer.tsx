@@ -8,6 +8,17 @@ import { useEffect, useRef, useState } from 'react';
 import { useShell } from '../../stores/shell';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import {
+  affordanceFor,
+  type AffordanceCommandStatus,
+} from '../../domain/capabilities/affordanceCatalog';
+import { commandStatus } from '../../generated/commandCatalog';
+
+function toAffordanceStatus(id: string): AffordanceCommandStatus {
+  const s = commandStatus(id);
+  if (s === 'implemented' || s === 'frontend_owned' || s === 'not_wired') return s;
+  return 'unknown';
+}
 
 interface Props {
   transport: TransportHandle | null;
@@ -23,8 +34,21 @@ export function ShellDrawer({ transport }: Props) {
   const termRef = useRef<{ dispose: () => void; write: (s: string) => void } | null>(null);
   const offRef = useRef<(() => void) | null>(null);
 
+  // Slice 33 follow-up: gate the auto-start path through the declarative
+  // affordance catalog so the drawer doesn't try to spawn a shell when
+  // the backend command is re-tagged as `not_wired`. Today `shell.start`
+  // is implemented end-to-end so this is a no-op guard, but it keeps the
+  // disabled-copy story consistent with other surfaces.
+  const shellStartStatus = toAffordanceStatus('shell.start');
+  const startDecision = affordanceFor('shell.start', {
+    commandStatus: shellStartStatus,
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+  });
+
   useEffect(() => {
     if (!open || !hostRef.current || !transport || !sessionId) return;
+    if (!startDecision.enabled) return;
     let disposed = false;
     let localShellId: string | null = null;
 
@@ -105,7 +129,7 @@ export function ShellDrawer({ transport }: Props) {
       setShellId(null);
       setReady(false);
     };
-  }, [open, transport, sessionId, setShellId]);
+  }, [open, transport, sessionId, setShellId, startDecision.enabled]);
 
   if (!open) return null;
   return (

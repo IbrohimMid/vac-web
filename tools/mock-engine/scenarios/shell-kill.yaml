@@ -1,0 +1,15 @@
+scenario: shell_kill
+status: future_when_backend_lands
+runtime_dispatch: true
+input:
+  command: shell.kill
+  payload:
+    shell_id: "<shell-id>"
+timeline: []
+final_response:
+  ok: true
+assertions:
+  - mock-engine acknowledges shell.kill as a response-only ack; the cockpit
+    locally tears down its xterm instance once the response lands
+  - no shell.exited / shell.output notification is emitted in the mock; legacy
+    bridges may emit a shell.exited follow-up which is out of scope here

@@ -1,0 +1,20 @@
+scenario: approval_approve
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  tool_call_id: "$input.approval_id"
+input:
+  command: approval.approve
+  payload:
+    approval_id: "<approval-id>"
+timeline:
+  - event: tool_call.decided
+    after_ms: 0
+    payload:
+      tool_call_id: "${tool_call_id}"
+      decision: "approved"
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits tool_call.decided with decision=approved seeded from $input.approval_id
+  - the legacy or-fallback to tool_call_id is intentionally dropped (web only sends approval_id)

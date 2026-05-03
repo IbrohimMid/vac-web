@@ -1,13 +1,64 @@
 // Wire transport events → transcript store with typed payload narrowing.
 
+import {
+  evaluateFreeze,
+  type TranscriptEdit,
+} from '../capabilities/transcriptFreeze';
 import { onMessageCompleted } from '../../transcript/FreezeController';
 import { useTranscript, type Role } from '../../stores/transcript';
 import type { TransportHandle } from '../../transport';
+
+/**
+ * Slice 50: gate every transport-driven transcript edit through the
+ * `evaluateFreeze` capability before mutating the store. The store
+ * itself is not session-aware, so this helper composes the session
+ * id (from the inbound event) with the active rendering mode (from
+ * the transcript store) into a `TranscriptSessionState` and asks the
+ * pure capability whether the edit should be applied.
+ *
+ * Default mode is `'live'`, so live_stream events continue to flow
+ * unchanged. Once the session-mode bridge wires `replay`/`frozen`
+ * states onto the transcript store, this gate becomes the single
+ * source of truth for write-side rejection.
+ */
+function shouldApply(
+  sessionId: string,
+  origin: TranscriptEdit['origin'],
+  eventTimestamp?: string,
+): boolean {
+  const state = useTranscript.getState();
+  const decision = evaluateFreeze(
+    {
+      sessionId,
+      mode: state.mode,
+    },
+    {
+      sessionId,
+      origin,
+      eventTimestamp,
+    },
+  );
+  return decision.accepted;
+}
 
 interface MessageAddedPayload {
   message_id: string;
   role: string;
   created_at: string;
+}
+
+interface DeltaPayload {
+  message_id?: string;
+  delta: string;
+}
+
+interface CompletedPayload {
+  message_id?: string;
+}
+
+interface ErrorPayload {
+  message_id?: string;
+  error?: string;
 }
 
 function asRole(raw: string | undefined): Role {
@@ -42,6 +93,7 @@ export function registerTranscriptHandlers(transport: TransportHandle): () => vo
     transport.on('transcript.message_added', (ev) => {
       const p = ev.payload as MessageAddedPayload | null;
       if (!p?.message_id) return;
+      if (!shouldApply(ev.session_id, 'live_stream', p.created_at)) return;
       useTranscript.getState().upsert({
         id: p.message_id,
         role: asRole(p.role),
@@ -54,8 +106,9 @@ export function registerTranscriptHandlers(transport: TransportHandle): () => vo
 
   offs.push(
     transport.on('transcript.delta', (ev) => {
-      const p = ev.payload as any;
-      if (typeof p?.delta !== 'string') return;
+      const p = ev.payload as DeltaPayload | null;
+      if (!p || typeof p.delta !== 'string') return;
+      if (!shouldApply(ev.session_id, 'live_stream')) return;
 
       const messageId = p.message_id || resolveMessageId(ev.session_id, true);
       const store = useTranscript.getState();
@@ -75,7 +128,8 @@ export function registerTranscriptHandlers(transport: TransportHandle): () => vo
 
   offs.push(
     transport.on('transcript.completed', (ev) => {
-      const p = ev.payload as any;
+      const p = ev.payload as CompletedPayload | null;
+      if (!shouldApply(ev.session_id, 'live_stream')) return;
       const messageId = p?.message_id || resolveMessageId(ev.session_id, false);
       useTranscript.getState().complete(messageId);
       onMessageCompleted(messageId);
@@ -84,7 +138,8 @@ export function registerTranscriptHandlers(transport: TransportHandle): () => vo
 
   offs.push(
     transport.on('transcript.error', (ev) => {
-      const p = ev.payload as any;
+      const p = ev.payload as ErrorPayload | null;
+      if (!shouldApply(ev.session_id, 'live_stream')) return;
       const messageId = p?.message_id || resolveMessageId(ev.session_id, false);
       useTranscript.getState().error(messageId, p?.error ?? 'unknown error');
     }),

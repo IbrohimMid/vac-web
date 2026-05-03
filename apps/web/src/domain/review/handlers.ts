@@ -1,4 +1,9 @@
 // Wire transport events → review store.
+//
+// Slice 05 (wiring.review_taxonomy): the bridge canonicalizes on `review.*`
+// events. Legacy `changeset.*` listeners are removed; the mock-engine has
+// been updated to emit `review.changeset_updated` and `review.file_diff_chunk`
+// to match. There is exactly one canonical event taxonomy here.
 
 import { useReview, type ReviewFile } from '../../stores/review';
 import type { TransportHandle } from '../../transport';
@@ -27,25 +32,40 @@ function mergeStatus(a: ReviewFile['status'], b: ReviewFile['status']): ReviewFi
   return order.indexOf(b) > order.indexOf(a) ? b : a;
 }
 
-function deriveFilesFromReviewPayload(payload: Record<string, unknown>): ReviewFile[] {
-  if (Array.isArray(payload.files)) {
-    return payload.files
-      .filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x))
-      .filter((f) => typeof f.path === 'string')
-      .map((f) => ({
-        path: f.path as string,
-        status: asStatus(typeof f.status === 'string' ? f.status : 'modified'),
-        additions: typeof f.additions === 'number' ? f.additions : 0,
-        deletions: typeof f.deletions === 'number' ? f.deletions : 0,
-        ...(typeof f.tool_call_id === 'string' && { toolCallId: f.tool_call_id }),
-        ...(typeof f.approved_by_approval_id === 'string' && { approvedByApprovalId: f.approved_by_approval_id }),
-        ...(typeof f.source_event_type === 'string' && { sourceEventType: f.source_event_type }),
-      }));
-  }
+function filesFromArray(rawFiles: unknown, fallbackToolCallId: string | null, fallbackApprovalId: string | null, fallbackSourceEvent: string): ReviewFile[] {
+  if (!Array.isArray(rawFiles)) return [];
+  return rawFiles
+    .filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x))
+    .filter((f) => typeof f.path === 'string')
+    .map((f) => ({
+      path: f.path as string,
+      status: asStatus(typeof f.status === 'string' ? f.status : 'modified'),
+      additions: typeof f.additions === 'number' ? f.additions : 0,
+      deletions: typeof f.deletions === 'number' ? f.deletions : 0,
+      ...(typeof f.tool_call_id === 'string'
+        ? { toolCallId: f.tool_call_id }
+        : fallbackToolCallId
+          ? { toolCallId: fallbackToolCallId }
+          : {}),
+      ...(typeof f.approved_by_approval_id === 'string'
+        ? { approvedByApprovalId: f.approved_by_approval_id }
+        : fallbackApprovalId
+          ? { approvedByApprovalId: fallbackApprovalId }
+          : {}),
+      sourceEventType: typeof f.source_event_type === 'string' ? f.source_event_type : fallbackSourceEvent,
+    }));
+}
 
+function deriveFilesFromReviewPayload(payload: Record<string, unknown>): ReviewFile[] {
   const toolCallId = asString(payload.tool_call_id) ?? asString(payload.toolCallId);
   const approvalId = asString(payload.approved_by_approval_id) ?? asString(payload.approvedByApprovalId);
   const sourceEventType = asString(payload.source_event_type) ?? asString(payload.sourceEventType) ?? 'review.changeset_updated';
+
+  const fromArray = filesFromArray(payload.files, toolCallId, approvalId, sourceEventType);
+  if (fromArray.length > 0) return fromArray;
+  // Empty-array payload signals "no changes" (e.g., revert_all). Return [] so the store clears.
+  if (Array.isArray(payload.files)) return [];
+
   const files = new Map<string, ReviewFile>();
   const diffs = Array.isArray(payload.diffs) ? payload.diffs : [];
   for (const diff of diffs) {
@@ -99,38 +119,29 @@ function deriveFilesFromReviewPayload(payload: Record<string, unknown>): ReviewF
 export function registerReviewHandlers(transport: TransportHandle): () => void {
   const offs: Array<() => void> = [];
 
+  // Canonical review.changeset_updated: full file list, may also signal a single
+  // reverted path via reverted_path. Empty files: [] means "no changes" (revert_all).
   offs.push(
     transport.on('review.changeset_updated', (ev) => {
       const p = asRecord(ev.payload);
+      const revertedPath = asString(p.reverted_path) ?? asString(p.revertedPath);
+      if (revertedPath && !Array.isArray(p.files)) {
+        useReview.getState().removeFile(revertedPath);
+        return;
+      }
       const files = deriveFilesFromReviewPayload(p);
-      if (files.length === 0) return;
+      // setFiles also accepts [] as a clear; trust the canonical event.
       useReview.getState().setFiles(files);
+      if (revertedPath) {
+        useReview.getState().removeFile(revertedPath);
+      }
     }),
   );
 
+  // Canonical review.file_diff_chunk: streaming diff body for a single file,
+  // fetched lazily after `review.open_file`.
   offs.push(
-    transport.on('changeset.updated', (ev) => {
-      const p = asRecord(ev.payload);
-      if (!Array.isArray(p.files)) return;
-      useReview.getState().setFiles(
-        p.files
-          .filter((x): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x))
-          .filter((f) => typeof f.path === 'string')
-          .map((f) => ({
-            path: f.path as string,
-            status: asStatus(typeof f.status === 'string' ? f.status : 'modified'),
-            additions: typeof f.additions === 'number' ? f.additions : 0,
-            deletions: typeof f.deletions === 'number' ? f.deletions : 0,
-            ...(typeof f.tool_call_id === 'string' && { toolCallId: f.tool_call_id }),
-            ...(typeof f.approved_by_approval_id === 'string' && { approvedByApprovalId: f.approved_by_approval_id }),
-            ...(typeof f.source_event_type === 'string' && { sourceEventType: f.source_event_type }),
-          })),
-      );
-    }),
-  );
-
-  offs.push(
-    transport.on('changeset.file.diff_chunk', (ev) => {
+    transport.on('review.file_diff_chunk', (ev) => {
       const p = ev.payload as { path?: string; unified?: string; truncated?: boolean } | null;
       if (!p?.path || typeof p.unified !== 'string') return;
       useReview.getState().setDiff({
@@ -138,14 +149,6 @@ export function registerReviewHandlers(transport: TransportHandle): () => void {
         unified: p.unified,
         truncated: Boolean(p.truncated),
       });
-    }),
-  );
-
-  offs.push(
-    transport.on('changeset.file.reverted', (ev) => {
-      const p = ev.payload as { path?: string } | null;
-      if (!p?.path) return;
-      useReview.getState().removeFile(p.path);
     }),
   );
 

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { authMethodSummary } from '../../domain/sessions/auth';
 import { activateSessionFromReady } from '../../domain/sessions/activation';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import { useSession } from '../../stores/session';
 import { useAgentSession } from '../../stores/agentSession';
 import { useTranscript } from '../../stores/transcript';
@@ -459,9 +460,32 @@ export function SessionPicker({ transport }: { transport: TransportHandle }) {
         />
       </label>
       <div className="screen-actions">
-        <button className="btn primary" onClick={create} disabled={creating || !agentRegistryAvailable}>
-        {creating ? 'creating…' : 'Create session'}
-        </button>
+        {(() => {
+          // Slice 33: route the Create-session button through the
+          // declarative affordance catalog so the wiring is honest.
+          // `session.create` is a real backend command, so the gate
+          // here is `commandStatus: 'implemented'`. If a future
+          // refactor tags the command as `not_wired`, this button
+          // will visibly disable with the catalog-supplied copy.
+          const decision = affordanceFor('session.create', {
+            commandStatus: 'implemented',
+            hasTransport: true,
+            hasSessionId: false,
+          });
+          const localDisable = creating || !agentRegistryAvailable;
+          const disabled = !decision.enabled || localDisable;
+          return (
+            <button
+              className="btn primary"
+              onClick={create}
+              disabled={disabled}
+              data-affordance-id={decision.affordanceId}
+              title={decision.disabledReason ?? undefined}
+            >
+              {creating ? 'creating…' : 'Create session'}
+            </button>
+          );
+        })()}
       </div>
       {error && <div className="session-picker-error">{error}</div>}
       </div>

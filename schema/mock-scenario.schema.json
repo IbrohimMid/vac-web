@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://vac-web.local/schema/mock-scenario.schema.json",
+  "title": "Mock scenario",
+  "description": "Slice 34: declarative mock-engine scenarios. Schema-validated alternative to imperative legacy_scenarios.rs. Runtime-dispatched scenarios (runtime_dispatch=true) drive the timeline via tools/mock-engine/src/scenarios.rs and short-circuit before legacy fallback.",
+  "type": "object",
+  "required": ["scenario", "input", "timeline"],
+  "additionalProperties": false,
+  "properties": {
+    "scenario": {
+      "type": "string",
+      "description": "Stable scenario ID; matches the Rust runtime registry key."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["canonical", "future_when_backend_lands", "legacy_mock_only", "production_parity", "fixture_only"],
+      "description": "How this scenario relates to canonical event catalog. legacy_mock_only requires a replacement."
+    },
+    "replacement": {
+      "type": "string",
+      "description": "Required when status=legacy_mock_only; ID of the canonical scenario or event that replaces this one."
+    },
+    "runtime_dispatch": {
+      "type": "boolean",
+      "description": "When true, scenarios.rs short-circuits this command and drives the timeline + final_response. When false/absent, legacy_scenarios.rs still owns the handler."
+    },
+    "state_seeds": {
+      "type": "object",
+      "description": "Per-scenario template variables. Values may be a literal string (used verbatim) or a generator name: 'next_shell_id', 'next_msg_id', 'next_tool_call_id', 'next_job_id', 'session_id'. Each generator is invoked once per dispatch.",
+      "additionalProperties": { "type": "string" }
+    },
+    "input": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": { "type": "string" },
+        "payload": { "type": "object" }
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["event"],
+        "additionalProperties": false,
+        "properties": {
+          "event": { "type": "string" },
+          "after_ms": { "type": "integer", "minimum": 0 },
+          "payload": {
+            "type": "object",
+            "description": "Notification params. String values containing ${var} are substituted from state_seeds at dispatch time."
+          }
+        }
+      }
+    },
+    "final_response": {
+      "type": "object",
+      "description": "JSON-RPC response result emitted after the timeline. String values support ${var} substitution. Omit for notification-only scenarios.",
+      "additionalProperties": true
+    },
+    "assertions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "legacy_mock_only" } }, "required": ["status"] },
+      "then": { "required": ["replacement"] }
+    }
+  ]
+}

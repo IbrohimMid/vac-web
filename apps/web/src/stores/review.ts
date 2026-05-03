@@ -1,7 +1,8 @@
 // Review store: files in a pending changeset + lazy diff bodies.
 //
-// Files arrive via `changeset.updated`; diff bodies are fetched lazily via
-// `review.open_file` when the user clicks a row.
+// Files arrive via the canonical `review.changeset_updated` event; diff bodies
+// arrive via `review.file_diff_chunk` after `review.open_file` is invoked.
+// Slice 05 (wiring.review_taxonomy) removed the legacy `changeset.*` taxonomy.
 
 import { create } from 'zustand';
 

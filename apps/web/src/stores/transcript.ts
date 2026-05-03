@@ -31,16 +31,30 @@ export interface Message {
 
 export const HOT_WINDOW_SIZE = 50;
 
+/**
+ * Slice 50: rendering pipeline mode for the transcript surface.
+ * - `live`   : streaming new messages.
+ * - `replay` : closed session being replayed.
+ * - `frozen` : read-only (e.g. archived session).
+ *
+ * The `transcriptFreeze` capability owns the catalog of pipeline
+ * modes (`PIPELINE_MODES`); this store field selects the active one.
+ */
+export type TranscriptRenderMode = 'live' | 'replay' | 'frozen';
+
 interface TranscriptSlice {
   messages: Map<string, Message>;
   order: string[];
   hotWindowIds: Set<string>;
+  /** Slice 50: active rendering pipeline mode. Defaults to `'live'`. */
+  mode: TranscriptRenderMode;
   upsert(m: Omit<Message, 'isCold'>): void;
   appendDelta(id: string, delta: string): void;
   complete(id: string): void;
   error(id: string, msg: string): void;
   freeze(id: string, html: string): void;
   unfreeze(id: string): void;
+  setMode(mode: TranscriptRenderMode): void;
   clear(): void;
 }
 
@@ -48,6 +62,10 @@ export const useTranscript = create<TranscriptSlice>((set) => ({
   messages: new Map(),
   order: [],
   hotWindowIds: new Set(),
+  mode: 'live',
+  setMode(mode) {
+    set({ mode });
+  },
 
   upsert(m) {
     set((s) => {

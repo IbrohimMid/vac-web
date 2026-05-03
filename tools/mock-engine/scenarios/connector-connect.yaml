@@ -1,0 +1,22 @@
+scenario: connector_connect
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  provider: "$input.provider"
+input:
+  command: connector.connect
+  payload:
+    provider: "<provider-id>"
+timeline:
+  - event: connector.oauth_url
+    after_ms: 0
+    payload:
+      provider: "${provider}"
+      url: "{https://example.invalid/oauth/${provider}}?state=mock"
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits a connector.oauth_url notification carrying the inbound
+    provider id and a deterministic mock OAuth URL
+  - the URL is intentionally hostile (literal braces, .invalid TLD) to make it
+    obvious in tests that this is a mock and not a real OAuth flow

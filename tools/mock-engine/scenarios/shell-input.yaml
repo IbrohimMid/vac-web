@@ -1,0 +1,24 @@
+scenario: shell_input
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  shell_id: "$input.shell_id"
+  data: "$input.data"
+input:
+  command: shell.input
+  payload:
+    shell_id: "<shell-id>"
+    data: "<keystroke or paste payload>"
+timeline:
+  - event: shell.output
+    after_ms: 0
+    payload:
+      shell_id: "${shell_id}"
+      data: "${data}"
+final_response:
+  ok: true
+assertions:
+  - mock-engine echoes the inbound data back as a shell.output notification
+    on the same shell_id so the cockpit terminal renders local typing
+  - production bridges will not echo input verbatim; this is a deliberate
+    mock-only convenience for offline cockpit demos

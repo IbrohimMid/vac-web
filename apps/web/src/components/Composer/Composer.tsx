@@ -23,6 +23,7 @@ import { useComposer } from '../../stores/composer';
 import { useSession } from '../../stores/session';
 import { useTranscript } from '../../stores/transcript';
 import type { TransportHandle } from '../../transport';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import { serialize, type MentionRef } from '../../composer/serialize';
 import { matchTrigger } from '../../composer/triggers';
 
@@ -351,6 +352,16 @@ function ComposerShell({
   footnote,
   children,
 }: ShellProps) {
+  // Slice 33 follow-up: route the Send button through the declarative
+  // affordance catalog so disabled-copy stays consistent with other
+  // command-bound surfaces. `message.submit` is implemented end-to-end
+  // today; if a future command-manifest refactor re-tags it, the catalog
+  // takes over the disabled tooltip without touching this surface.
+  const sendAffordance = affordanceFor('composer.message.submit', {
+    commandStatus: 'implemented',
+    hasTransport: true,
+    hasSessionId: !!sessionId,
+  });
   return (
     <div className="composer-wrap">
       <div className="composer">
@@ -398,6 +409,8 @@ function ComposerShell({
             <button
               onClick={onSendClick}
               disabled={!canSend}
+              data-affordance-id={sendAffordance.affordanceId}
+              title={!canSend && !sessionId ? sendAffordance.disabledReason : undefined}
               className="btn primary"
               style={{
                 fontSize: 12,

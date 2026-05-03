@@ -11,6 +11,7 @@ import {
 } from '../../stores/approvals';
 import { useOverlays } from '../../stores/overlays';
 import { useSession } from '../../stores/session';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import type { TransportHandle } from '../../transport';
 
 const RISK_TO_SEVERITY: Record<RiskLevel, Severity> = {
@@ -79,6 +80,7 @@ export function ApprovalsTab({ transport }: Props) {
     // Deps intentionally limited: decide/approveAll capture `transport` + `sessionId`
     // which live in stable props/selectors; reading order via store inside handler
     // avoids re-registering on every pending-list mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transport, sessionId]);
 
   if (pendingOrder.length === 0 && resolvedOrder.length === 0) {
@@ -114,9 +116,27 @@ export function ApprovalsTab({ transport }: Props) {
             }}
           >
             <strong>{pendingOrder.length} pending</strong>
-            <button onClick={approveAll} disabled={!transport} aria-label="Approve all">
-              Approve all
-            </button>
+            {(() => {
+              // Slice 33 follow-up: "Approve all" is frontend-owned (it loops
+              // and dispatches `approval.respond` per row). Catalog gates the
+              // surface on transport so disabled-copy stays consistent.
+              const decision = affordanceFor('approvals.approve_all', {
+                commandStatus: 'frontend_owned',
+                hasTransport: !!transport,
+                hasSessionId: false,
+              });
+              return (
+                <button
+                  onClick={approveAll}
+                  disabled={!decision.enabled}
+                  data-affordance-id={decision.affordanceId}
+                  title={decision.disabledReason ?? undefined}
+                  aria-label="Approve all"
+                >
+                  Approve all
+                </button>
+              );
+            })()}
           </div>
           <ul className="soft-list panel-card">
             {pendingOrder.map((id) => {
@@ -205,12 +225,42 @@ function ApprovalRow({
       <button onClick={inspect} aria-label="Inspect">
         Inspect
       </button>
-      <button onClick={() => onDecide(tc.approvalId, 'approved')} disabled={busy} aria-label="Approve">
-        Approve
-      </button>
-      <button onClick={() => onDecide(tc.approvalId, 'rejected')} disabled={busy} aria-label="Reject">
-        Reject
-      </button>
+      {(() => {
+        // Slice 33 follow-up: per-row Approve/Reject buttons drive the
+        // `approval.respond` command. The row is only mounted inside the
+        // approvals tab when transport is live, so `hasTransport: true` is
+        // a safe static assumption — local `busy` (deciding) still gates
+        // double-clicks. Catalog provides the disabled tooltip if a future
+        // refactor re-tags the command as not_wired.
+        const decision = affordanceFor('approvals.decide', {
+          commandStatus: 'implemented',
+          hasTransport: true,
+          hasSessionId: true,
+        });
+        const disabled = busy || !decision.enabled;
+        return (
+          <>
+            <button
+              onClick={() => onDecide(tc.approvalId, 'approved')}
+              disabled={disabled}
+              data-affordance-id={decision.affordanceId}
+              title={decision.disabledReason ?? undefined}
+              aria-label="Approve"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => onDecide(tc.approvalId, 'rejected')}
+              disabled={disabled}
+              data-affordance-id={decision.affordanceId}
+              title={decision.disabledReason ?? undefined}
+              aria-label="Reject"
+            >
+              Reject
+            </button>
+          </>
+        );
+      })()}
     </li>
   );
 }

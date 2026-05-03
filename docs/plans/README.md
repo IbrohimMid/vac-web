@@ -1,35 +1,60 @@
 # Implementation Plans
 
-Forward-looking execution plans, grounded in the **current shipped codebase** (commits up to `cd1ff13`) and the **product specs** in [`../product-specs/`](../product-specs/).
+Active implementation plans only. Historical phase/stage docs were removed because they referenced old commits, old stage gates, and behavior that no longer matches the current backend/UI wiring.
 
-The earlier plan tree (Phase 0–8 + Cockpit A–J) has been retired now that those phases shipped. The historical record lives in `git log` and in [`00-shipped.md`](./00-shipped.md). New plans below describe work that has **not yet started** or is **partially blocked**.
+Use `git log` for archaeology. Use this directory for work that should guide the next code changes.
 
-## Reading order
+## Active plan set
 
-1. [`00-shipped.md`](./00-shipped.md) — what's already in `main` (state of the world).
-2. [`10-stage-x-agent-runtime.md`](./10-stage-x-agent-runtime.md) — wire ACP / multi-runtime picker into bridge + web. Design lock at [`../agent-runtime.md`](../agent-runtime.md). Companion notes: [`stage-x-claude-acp-verification.md`](./stage-x-claude-acp-verification.md) (real-binary captures + wire-method names + X.5c.1 lock), [`stage-x5a-acp-client-design.md`](./stage-x5a-acp-client-design.md) (Rust vs Node spike + decision), and [`stage-x5c2-tool-activity-observation.md`](./stage-x5c2-tool-activity-observation.md) (X.5c.2 — observe-only tool activity mapping; **implemented**, lock candidate `681340b`).
-   - [`stage-x5d-acp-reauth-flow.md`](./stage-x5d-acp-reauth-flow.md) — ACP auth metadata surfacing + Zed-style reauth design.
-3. Surface plans — each declares its own Stage X dependency:
-   - [`20-assess.md`](./20-assess.md) — driven by [`../product-specs/assess.md`](../product-specs/assess.md); depends on X.5 + X.7.
-   - [`21-handoff.md`](./21-handoff.md) — driven by [`../product-specs/handoff.md`](../product-specs/handoff.md); depends on X.5 + X.6.
-   - [`22-release.md`](./22-release.md) — driven by [`../product-specs/release.md`](../product-specs/release.md); depends on Assess gate feed + Handoff dispatch foundations.
-   - [`23-build.md`](./23-build.md) — driven by [`../product-specs/build.md`](../product-specs/build.md); depends on X.4 + X.5 + X.6.
-4. [`30-stage-k-vil-vwfd.md`](./30-stage-k-vil-vwfd.md) — held; upstream `vil-expr` schema + events required first.
+1. [`wiring/00-index.md`](./wiring/00-index.md) — full split-plan index for backend ↔ UI wiring work.
+2. [`wiring/30-product-surface-roadmap.md`](./wiring/30-product-surface-roadmap.md) — implementation waves and recommended ordering.
+3. [`backend-ui-wiring.md`](./backend-ui-wiring.md) — compatibility router that points to the split `wiring/` plan set.
 
-## Plan format
+## Workflow-as-code rule
 
-Each plan uses:
+Plans in `wiring/` use VIL-inspired declarative YAML control-plane blocks. The YAML should feel Pythonic for agents/executors: readable, compact, composable, low ceremony, and easy to maintain.
 
-- **Goal** — single sentence.
-- **Depends on** — other plans / upstream PRs.
-- **Stages** — sequential, each with exit criterion.
-- **Risk / open questions** — explicit unknowns.
-- **Out of scope** — what this plan won't touch.
+The YAML does **not** replace runtime enforcement. Rust and TypeScript remain the source of truth for ACP, filesystem, terminal, auth, persistence, security, policy, and side effects.
 
-Plans are deliberately qualitative. Granular task lists belong in PR descriptions, not here.
+## Planning rules
 
-## Conventions
+- Plans must be grounded in current code, not historical milestones.
+- A plan must name the backend command/event surface and the frontend component/store that consumes it.
+- Every visible UI control must map to either:
+  - a real backend executor, or
+  - an explicit disabled/not-wired state with operator-facing copy.
+- YAML declarative control-plane should describe desired orchestration, source files, dependencies, steps, and acceptance gates.
+- Runtime implementation must remain explicit and testable in Rust/TypeScript.
+- Avoid phase labels unless they correspond to a current branch or open implementation slice.
+- Do not keep completed implementation notes here. Once shipped, summarize behavior in the relevant durable contract doc and let `git log` preserve history.
 
-- Stage labels are `X.1`, `X.2`, … inside a single plan; cross-plan dependencies cite the full plan id (`Stage X.4`, `Assess A2`, etc.).
-- "Shipped" means merged to `main` and reflected in `00-shipped.md`.
-- A plan only ships once its exit criteria are testable and audited.
+## Current priority
+
+The current priority is to make the cockpit truthful before adding product breadth:
+
+1. Command implementation manifest.
+2. Structured `feature.not_wired` fallback.
+3. Protocol/schema/codegen parity.
+4. Declarative config/capability control-plane.
+5. Session model/context telemetry.
+6. Review taxonomy cleanup.
+7. Profile policy enforcement.
+8. Auth/WS security.
+9. CI validation gates.
+
+## Declarative pattern adoption
+
+Declarative pattern adoption starts at [`wiring/31-declarative-pattern-adoption-audit.md`](./wiring/31-declarative-pattern-adoption-audit.md). Use this before adding new product surfaces or refactoring command/event catalogs.
+
+
+## Enterprise maturity layer
+
+Enterprise maturity starts at [`wiring/36-enterprise-maturity-scorecard.md`](./wiring/36-enterprise-maturity-scorecard.md). Implementing wiring plans alone is not enough; maturity requires architecture fitness tests, DX scaffolding, generated-code ownership, security/supply-chain controls, observability, data-versioning, and documentation governance.
+
+## External benchmark
+
+Use [`wiring/48-external-best-practice-benchmark.md`](./wiring/48-external-best-practice-benchmark.md) before declaring the control-plane pattern mature. It checks VAC against common best practices from declarative workflow/control-plane ecosystems.
+
+## Final coverage closure
+
+The final repository coverage scan is closed by [`wiring/49-fixtures-scripts-repo-hygiene.md`](./wiring/49-fixtures-scripts-repo-hygiene.md) and [`wiring/50-web-rendering-worker-pipeline.md`](./wiring/50-web-rendering-worker-pipeline.md).

@@ -1,0 +1,21 @@
+scenario: handoff_reject
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  packet_id: "$input.packet_id"
+input:
+  command: handoff.reject
+  payload:
+    packet_id: pkt_mock_01
+timeline:
+  - event: handoff.status
+    after_ms: 0
+    payload:
+      packet_id: "${packet_id}"
+      status: rejected
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits handoff.status with status=rejected so the cockpit handoff surface flips the packet to a terminal rejected state
+  - rejecting a packet is idempotent in the mock; subsequent rejects are silently accepted by the bridge
+  - packet_id echoes the inbound params so the cockpit can match the rejection to the originating row

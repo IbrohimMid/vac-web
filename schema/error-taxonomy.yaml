@@ -1,0 +1,95 @@
+# Error taxonomy schema (slice 40).
+#
+# Source of truth for the error codes the cockpit handles. Codegen
+# (planned) produces apps/web/src/generated/errorTaxonomy.ts and
+# apps/local-bridge/src/generated/error_taxonomy.rs from this file. While
+# the codegen is in flight, apps/web/src/domain/capabilities/errorTaxonomy.ts
+# carries the runtime entries by hand; they must match this file.
+
+schema_version: 1
+
+severities: [info, warning, error, critical]
+retryability: [idempotent_retry, manual_retry, no_retry]
+recovery_hints:
+  - check_profile
+  - check_connectivity
+  - check_audit
+  - reload_session
+  - reauthenticate
+  - wait_and_retry
+  - contact_admin
+  - no_action
+
+entries:
+  - code: profile.denied
+    severity: error
+    retryable: no_retry
+    recovery: check_profile
+    audit_required: true
+    user_message: Your profile does not allow this action.
+  - code: auth.unauthorized
+    severity: critical
+    retryable: no_retry
+    recovery: reauthenticate
+    audit_required: true
+    user_message: Authentication is required.
+  - code: session.not_found
+    severity: warning
+    retryable: manual_retry
+    recovery: reload_session
+    audit_required: false
+    user_message: Session was not found. Reload to continue.
+  - code: session.closed
+    severity: info
+    retryable: manual_retry
+    recovery: reload_session
+    audit_required: false
+    user_message: Session has ended.
+  - code: feature.not_wired
+    severity: info
+    retryable: no_retry
+    recovery: no_action
+    audit_required: false
+    user_message: This feature is not wired yet.
+  - code: audit.write_failed
+    severity: critical
+    retryable: idempotent_retry
+    recovery: check_audit
+    audit_required: true
+    user_message: Audit log write failed; the action was not committed.
+  - code: persistence.write_failed
+    severity: error
+    retryable: idempotent_retry
+    recovery: wait_and_retry
+    audit_required: true
+    user_message: Persistence write failed. Retrying may help.
+  - code: runtime.job_not_cancellable
+    severity: info
+    retryable: no_retry
+    recovery: no_action
+    audit_required: false
+    user_message: This job cannot be cancelled.
+  - code: runtime.job_not_found
+    severity: warning
+    retryable: no_retry
+    recovery: no_action
+    audit_required: false
+    user_message: Job is no longer running.
+  - code: gate.reason_required
+    severity: warning
+    retryable: manual_retry
+    recovery: no_action
+    audit_required: false
+    user_message: A reason is required for gate override.
+  - code: gate.expiry_required
+    severity: warning
+    retryable: manual_retry
+    recovery: no_action
+    audit_required: false
+    user_message: An expiry date is required for gate override.
+  - code: gate.expiry_in_past
+    severity: warning
+    retryable: manual_retry
+    recovery: no_action
+    audit_required: false
+    user_message: Override expiry must be in the future.

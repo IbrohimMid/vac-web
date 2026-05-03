@@ -45,3 +45,51 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Production-dep audit (high severity blocks)
         run: pnpm audit --prod --audit-level=high
+
+  # Slice 43: secret scanner. Runs gitleaks against the full repo on
+  # every PR and on the weekly schedule so a leaked secret cannot land
+  # silently. Configuration lives in `.gitleaks.toml` (committed) so the
+  # ruleset is auditable.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  # Slice 43: SBOM generation. CycloneDX SBOMs are produced for both
+  # the Rust workspace and the Node workspace and uploaded as build
+  # artifacts so every CI run is reproducibly auditable.
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx
+      - name: Generate Rust SBOM
+        run: cargo cyclonedx --format json --output-pattern bom --target-in-filename
+      - name: Generate Node SBOM
+        run: pnpm dlx @cyclonedx/cdxgen@^10 -o sbom-node.cdx.json -p
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            **/bom*.json
+            sbom-node.cdx.json
+          if-no-files-found: warn

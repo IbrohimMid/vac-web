@@ -1,0 +1,22 @@
+scenario: connector_disconnect
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  connector_id: "$input.id"
+input:
+  command: connector.disconnect
+  payload:
+    id: "<connector-id>"
+timeline:
+  - event: connector.health
+    after_ms: 0
+    payload:
+      id: "${connector_id}"
+      health: disconnected
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits a connector.health notification flipping the inbound
+    connector id to health=disconnected
+  - the cockpit consumes this signal to grey out the corresponding connector
+    chip; no other state is touched

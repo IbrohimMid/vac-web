@@ -1,7 +1,7 @@
-//! Stage X.5c.2 — observe-only tool-activity DTO + redaction helpers.
+//! Observe-only ACP tool-activity DTO + redaction helpers.
 //!
-//! See [`docs/plans/stage-x5c2-tool-activity-observation.md`](../../../../../docs/plans/stage-x5c2-tool-activity-observation.md)
-//! for the full design. This module defines:
+//! See [`docs/agent-runtime.md`](../../../../../docs/agent-runtime.md)
+//! for the ACP runtime boundary. This module defines:
 //!
 //! - [`ObservedToolActivity`] — the bridge-internal normalized shape
 //!   that web stores see (never the agent's raw `_meta` payload).

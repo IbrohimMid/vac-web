@@ -23,6 +23,12 @@ export function MessageRow({ id }: { id: string }) {
     return () => {
       cancelled = true;
     };
+    // Deps target the only fields the effect dereferences (state +
+    // content). Adding `msg` would re-fire on unrelated mutations
+    // (e.g. isCold flip) which would re-render the markdown for an
+    // already-rendered cold message. Selector-style deps keep the
+    // effect cadence tied to actual content/state transitions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, msg?.state, msg?.content]);
 
   if (!msg) return null;

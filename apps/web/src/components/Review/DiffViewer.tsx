@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useReview } from '../../stores/review';
 import { useSession } from '../../stores/session';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import type { OverlayRenderProps } from '../../overlays/registry';
 import type { TransportHandle } from '../../transport';
 
@@ -55,9 +56,27 @@ export function DiffViewer({ params, dismiss }: OverlayRenderProps) {
           {path}
         </span>
         <div className="spacer"></div>
-        <button className="btn" onClick={revert} disabled={!transport}>
-          Revert file
-        </button>
+        {(() => {
+          // Slice 33 follow-up: route Revert through the affordance catalog
+          // (`review.revert_file` is the existing entry). Catalog provides
+          // the disabled-copy when transport+session are absent.
+          const decision = affordanceFor('review.revert_file', {
+            commandStatus: 'implemented',
+            hasTransport: !!transport,
+            hasSessionId: !!sessionId,
+          });
+          return (
+            <button
+              className="btn"
+              onClick={revert}
+              disabled={!decision.enabled}
+              data-affordance-id={decision.affordanceId}
+              title={decision.disabledReason ?? undefined}
+            >
+              Revert file
+            </button>
+          );
+        })()}
         <button className="btn ghost" onClick={dismiss}>
           Close
         </button>

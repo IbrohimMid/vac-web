@@ -1,0 +1,15 @@
+scenario: gate_override
+status: production_parity
+runtime_dispatch: true
+input:
+  command: gate.override
+  payload:
+    gate_id: gate_mock_01
+    reason: mock override
+timeline: []
+final_response:
+  ok: true
+assertions:
+  - mock-engine acknowledges gate.override with a JSON-RPC response { ok: true } and emits no notifications
+  - the cockpit gates surface treats override as response-only and updates local state on the ack
+  - empty timeline + final_response confirms response-only contract is preserved post-runtime port

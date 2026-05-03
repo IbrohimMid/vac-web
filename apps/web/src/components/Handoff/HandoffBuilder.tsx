@@ -36,7 +36,6 @@ export function HandoffBuilder({ transport }: Props) {
       useAssessmentReport.getState().clearSelection();
     }
     // Run only on mount; intentional empty deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [title, setTitle] = useState('');
   const [authorName, setAuthorName] = useState('');
@@ -72,7 +71,7 @@ export function HandoffBuilder({ transport }: Props) {
         policy,
         activeRunId,
       }),
-    [activeRunId, authorName, evidence, findings, policy, runs, selectedFindings, targetProfile, title],
+    [activeRunId, authorName, evidence, policy, runs, selectedFindings, targetProfile, title],
   );
 
   const toggle = (id: string) => {

@@ -10,8 +10,8 @@
 //! `_meta` fields and any field whose schema we don't actively read
 //! stay as `serde_json::Value` so vendor extensions (e.g.
 //! `agentCapabilities._meta.claudeCode.promptQueueing`) pass through
-//! intact. Type-strategy decision recorded in
-//! `docs/plans/stage-x5a-acp-client-design.md` §8.3.
+//! intact. The durable runtime boundary is documented in
+//! `docs/agent-runtime.md`; historical stage-plan notes were retired.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

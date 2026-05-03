@@ -1,9 +1,17 @@
 //! ActionSpec catalog emitted on session.ready as `system.capabilities` event.
 //!
 //! v1 snapshot. Extends as features land in Phases 3+.
+//!
+//! Slice 27 (wiring.config_capabilities_control_plane) contract:
+//! every ActionSpec id MUST be present in `crate::generated::command_catalog`
+//! with status `Implemented`. The unit test at the bottom enforces this so
+//! the YAML control-plane manifest cannot drift away from runtime authority.
 
 use serde::Serialize;
 use serde_json::{json, Value};
+
+#[cfg(test)]
+use crate::generated::command_catalog::{self, CommandStatus};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ActionSpec {
@@ -103,4 +111,43 @@ pub fn capabilities_payload() -> Value {
         "features": ["session", "message", "approval", "replay"],
         "workflows": bundled_workflows(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Slice 27 acceptance: every advertised capability ActionSpec must
+    /// resolve to an implemented entry in the generated command catalog.
+    /// If this fires, either:
+    ///   - mark the action as implemented in config/control-plane/command-manifest.yaml
+    ///     (and re-run scripts/codegen-command-catalog.mjs), OR
+    ///   - remove the ActionSpec from v1_actions() until the executor lands.
+    #[test]
+    fn every_action_id_is_implemented_in_catalog() {
+        for spec in v1_actions() {
+            let entry = command_catalog::lookup(spec.id).unwrap_or_else(|| {
+                panic!(
+                    "action id '{}' missing from generated command catalog",
+                    spec.id
+                )
+            });
+            assert_eq!(
+                entry.status,
+                CommandStatus::Implemented,
+                "action id '{}' has catalog status {:?}, expected Implemented",
+                spec.id,
+                entry.status,
+            );
+        }
+    }
+
+    #[test]
+    fn capabilities_payload_serializes_actions_features_workflows() {
+        let v = capabilities_payload();
+        let obj = v.as_object().expect("capabilities is an object");
+        assert!(obj.contains_key("actions"));
+        assert!(obj.contains_key("features"));
+        assert!(obj.contains_key("workflows"));
+    }
 }

@@ -7,6 +7,17 @@ import { useGates, type GateId } from '../../stores/gates';
 import { useRelease, type DeployTarget } from '../../stores/release';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import {
+  affordanceFor,
+  type AffordanceCommandStatus,
+} from '../../domain/capabilities/affordanceCatalog';
+import { commandStatus } from '../../generated/commandCatalog';
+
+function toAffordanceStatus(id: string): AffordanceCommandStatus {
+  const s = commandStatus(id);
+  if (s === 'implemented' || s === 'frontend_owned' || s === 'not_wired') return s;
+  return 'unknown';
+}
 
 interface Props {
   transport: TransportHandle | null;
@@ -36,6 +47,20 @@ export function ReleaseTab({ transport }: Props) {
     gatesFor(env).every((id) => gates.get(id)?.state === 'pass');
 
   const canPublish = () => gates.get('ReadyToPublish')?.state === 'pass';
+
+  // Slice 33 follow-up: route the Deploy button through the declarative
+  // affordance catalog so disabled-copy stays consistent with other
+  // command-bound surfaces. `release.deploy` is implemented end-to-end
+  // today; if a future command-manifest refactor re-tags it, the catalog
+  // takes over the disabled tooltip without touching this surface.
+  const releaseDeployStatus = toAffordanceStatus('release.deploy');
+  const deployAffordance = (env: DeployTarget['environment']) =>
+    affordanceFor('release.deploy.button', {
+      commandStatus: releaseDeployStatus,
+      hasTransport: !!transport,
+      hasSessionId: !!sessionId,
+      gateReady: canDeploy(env),
+    });
 
   const deploy = async (target: DeployTarget) => {
     if (!transport || !sessionId || !canDeploy(target.environment)) return;
@@ -82,11 +107,11 @@ export function ReleaseTab({ transport }: Props) {
       ) : (
         <ul className="soft-list panel-card">
           {targetList.map((t) => {
-            const deployOk = canDeploy(t.environment);
             const publishOk = canPublish();
             const missing = gatesFor(t.environment).filter(
               (id) => gates.get(id)?.state !== 'pass',
             );
+            const deployDecision = deployAffordance(t.environment);
             return (
               <li
                 key={t.id}
@@ -101,7 +126,12 @@ export function ReleaseTab({ transport }: Props) {
                   <strong style={{ flex: 1 }}>
                     {t.label} <span style={{ fontSize: 11, color: 'var(--text-2)' }}>({t.environment})</span>
                   </strong>
-                  <button onClick={() => deploy(t)} disabled={!deployOk || !transport}>
+                  <button
+                    onClick={() => deploy(t)}
+                    disabled={!deployDecision.enabled}
+                    data-affordance-id={deployDecision.affordanceId}
+                    title={deployDecision.disabledReason ?? ''}
+                  >
                     Deploy
                   </button>
                   <button onClick={() => publish(t)} disabled={!publishOk || !transport}>

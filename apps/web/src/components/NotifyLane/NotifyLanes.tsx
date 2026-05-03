@@ -1,5 +1,18 @@
 import { SeverityIcon } from '../SeverityIcon';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import { useNotify } from '../../stores/notify';
+
+// Slice 33: dismiss is a frontend-owned affordance. Resolve once per
+// module load — the decision is deterministic given the static context
+// so repeating the lookup per click would be wasteful. Surfaces still
+// pass the affordance id as a `data-affordance-id` so a follow-up audit
+// (or a UI test that walks rendered surfaces) can detect a missing
+// catalog entry.
+const DISMISS_AFFORDANCE = affordanceFor('notify.dismiss', {
+  commandStatus: 'frontend_owned',
+  hasTransport: false,
+  hasSessionId: false,
+});
 
 export function TransientToasts() {
   const items = useNotify((s) => s.transient);
@@ -24,6 +37,9 @@ export function TransientToasts() {
           <button
             aria-label="dismiss"
             onClick={() => dismiss(n.id)}
+            data-affordance-id={DISMISS_AFFORDANCE.affordanceId}
+            disabled={!DISMISS_AFFORDANCE.enabled}
+            title={DISMISS_AFFORDANCE.disabledReason ?? undefined}
             style={{
               border: 'none',
               background: 'transparent',
@@ -51,6 +67,7 @@ function toneVar(sev: string): string {
 
 export function StickyBanners() {
   const items = [...useNotify((s) => s.sticky).values()];
+  const dismiss = useNotify((s) => s.dismiss);
   if (items.length === 0) return null;
   return (
     <div aria-live="assertive">
@@ -70,7 +87,26 @@ export function StickyBanners() {
         >
           <SeverityIcon severity={n.severity} />
           <strong>{n.title}</strong>
-          <span style={{ color: 'var(--ink-2)' }}>{n.message}</span>
+          <span style={{ opacity: 0.85 }}>{n.message}</span>
+          <button
+            onClick={() => dismiss(n.id)}
+            aria-label="Dismiss banner"
+            data-affordance-id={DISMISS_AFFORDANCE.affordanceId}
+            disabled={!DISMISS_AFFORDANCE.enabled}
+            title={DISMISS_AFFORDANCE.disabledReason ?? undefined}
+            style={{
+              marginLeft: 'auto',
+              background: 'transparent',
+              border: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
+              fontSize: 16,
+              lineHeight: 1,
+              padding: '0 4px',
+            }}
+          >
+            ×
+          </button>
         </div>
       ))}
     </div>
@@ -123,6 +159,9 @@ export function PersistentRail() {
           <button
             onClick={() => dismiss(n.id)}
             aria-label="Dismiss notification"
+            data-affordance-id={DISMISS_AFFORDANCE.affordanceId}
+            disabled={!DISMISS_AFFORDANCE.enabled}
+            title={DISMISS_AFFORDANCE.disabledReason ?? undefined}
             style={{
               border: 'none',
               background: 'transparent',

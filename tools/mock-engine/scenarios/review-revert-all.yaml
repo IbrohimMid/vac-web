@@ -1,0 +1,16 @@
+scenario: review_revert_all
+status: production_parity
+runtime_dispatch: true
+input:
+  command: review.revert_all
+timeline:
+  - event: review.changeset_updated
+    after_ms: 0
+    payload:
+      files: []
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits review.changeset_updated with empty files when all pending paths are reverted
+  - matches the bridge-side review.* canonicalization (Slice 05) so the ReviewTab clears its pending changeset
+  - payload is fully static; no state_seeds required

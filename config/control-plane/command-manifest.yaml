@@ -1,0 +1,551 @@
+# Command implementation manifest (control-plane source of truth).
+#
+# Status legend:
+#   implemented      — bridge has a real handler that produces side effects or wired protocol responses
+#   not_wired        — declared command with no real bridge executor; must surface feature.not_wired
+#   frontend_owned   — UI-only command, must not cross the bridge
+#   protocol_only    — used as event/response shape, never accepted as a client command
+#   internal         — bridge-internal use, not a client command
+#   deprecated       — alias kept for backward compat; should not be used in new code
+#
+# scope:
+#   sessionless      — accepted without a live session_id (workspace-level)
+#   session          — requires an existing session_id
+#   either           — both forms are accepted at the bridge boundary
+#
+# side_effect:
+#   none       — no observable bridge state change (frontend_owned, protocol_only, transcript.* events)
+#   read_only  — queries/fetches/lists/status; safe to retry, does not mutate bridge state
+#   state      — mutates bridge / session / agent state; default for implemented & not_wired
+#   external   — produces effects outside the bridge process (deploys, dispatches, connector handshakes)
+#
+# This file is THE source of truth for the command implementation
+# manifest. Generated bindings live under:
+#   - apps/local-bridge/src/generated/command_catalog.rs
+#   - apps/web/src/generated/commandCatalog.ts
+# Run `pnpm codegen:catalog` (or `bash scripts/codegen-command-catalog.sh`)
+# after editing.
+
+version: 1
+owner_default: bridge
+
+commands:
+  # System ----------------------------------------------------------------
+  - id: system.ping
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+    summary: Health check that returns pong from the bridge.
+  - id: system.version
+    status: not_wired
+    side_effect: read_only
+    scope: sessionless
+    summary: Bridge version metadata is not exposed as a request yet.
+    ui:
+      gate: hidden
+      reason: Bridge version is read from the WebSocket banner.
+  - id: system.capabilities
+    status: protocol_only
+    side_effect: none
+    scope: sessionless
+    summary: Bridge emits system.capabilities as an event on session.ready; not accepted as a command.
+
+  # Session ---------------------------------------------------------------
+  - id: session.create
+    status: implemented
+    side_effect: state
+    scope: sessionless
+    summary: Create a new session under a profile/agent/workflow.
+  - id: session.resume
+    status: implemented
+    side_effect: state
+    scope: sessionless
+    summary: Resume a previously-created session by id.
+  - id: session.list
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+    summary: List the bridge's active sessions.
+  - id: session.snapshot
+    status: not_wired
+    side_effect: state
+    scope: session
+    summary: Snapshotting is held until persistence/replay v2 lands.
+  - id: session.rename
+    status: not_wired
+    side_effect: state
+    scope: session
+    summary: Persistence-backed rename is not wired; SessionsTab is gated.
+  - id: session.close
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Terminate the active session and release ACP resources.
+  - id: session.authenticate
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: acp
+    summary: Forwards an ACP authenticate.method request to the active provider.
+  - id: session.history.list
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+    summary: List persisted session history rows.
+  - id: session.history.forget
+    status: implemented
+    side_effect: state
+    scope: sessionless
+    summary: Forget a persisted session row.
+  - id: session.mode.set
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: acp
+    summary: ACP-only — switch active session mode/model.
+  - id: session.config_option.set
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: acp
+    summary: ACP-only — update an active session config option.
+
+  # Message ---------------------------------------------------------------
+  - id: message.submit
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Submit a user message to the active agent (ACP/native).
+  - id: message.cancel_stream
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Cancel the in-flight assistant response.
+  - id: message.retry
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Retry the last submission.
+
+  # Approval --------------------------------------------------------------
+  - id: approval.approve
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Approve a pending approval; ACP intercepted and resolved without forwarding.
+  - id: approval.reject
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Reject a pending approval.
+  - id: approval.approve_all
+    status: not_wired
+    side_effect: state
+    scope: session
+    summary: Bulk approval requires explicit scope+audit; not wired.
+    ui:
+      gate: disabled
+      reason: Bulk approval is not enabled until scope and audit are real.
+  - id: approval.inspect
+    status: not_wired
+    side_effect: read_only
+    scope: session
+    summary: Approval inspect endpoint is held until persistence model is finalized.
+
+  # Workbench / overlay (frontend-owned UI plumbing) ----------------------
+  - id: workbench.select_tab
+    status: frontend_owned
+    side_effect: none
+    scope: session
+    summary: UI-only tab selection; should not cross WebSocket.
+  - id: workbench.invoke
+    status: not_wired
+    side_effect: state
+    scope: session
+    summary: Generic workbench invoke is not implemented as a bridge executor.
+    ui:
+      gate: disabled
+      reason: Workbench invoke is not wired to a concrete backend command.
+  - id: overlay.open
+    status: frontend_owned
+    side_effect: none
+    scope: session
+  - id: overlay.dismiss
+    status: frontend_owned
+    side_effect: none
+    scope: session
+  - id: overlay.dismiss_all
+    status: frontend_owned
+    side_effect: none
+    scope: session
+
+  # Review ----------------------------------------------------------------
+  - id: review.open_file
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: fs.read
+    summary: File-open executor with project-root scope is not implemented.
+    ui:
+      gate: disabled
+      reason: File-open is not wired to bridge fs scope yet.
+  - id: review.toggle_hunk
+    status: frontend_owned
+    side_effect: none
+    scope: session
+    summary: Hunk toggle is local UI state.
+  - id: review.revert_file
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: fs.write
+    ui:
+      gate: disabled
+      reason: Revert requires bridge fs executor + audit; not wired.
+  - id: review.revert_all
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: fs.write
+    ui:
+      gate: disabled
+      reason: Bulk revert requires bridge fs executor + audit; not wired.
+
+  # Runtime jobs ----------------------------------------------------------
+  - id: runtime.list_jobs
+    status: not_wired
+    side_effect: read_only
+    scope: session
+    summary: Bridge job registry is read-only via runtime.* events; list endpoint not wired.
+  - id: runtime.cancel_job
+    status: not_wired
+    side_effect: state
+    scope: session
+    summary: Provider-observed jobs are not bridge-cancellable.
+    ui:
+      gate: disabled
+      reason: Cancel requires a bridge-owned job; observed provider jobs are read-only.
+  - id: runtime.inspect_job
+    status: not_wired
+    side_effect: read_only
+    scope: session
+
+  # Plan ------------------------------------------------------------------
+  - id: plan.open
+    status: frontend_owned
+    side_effect: none
+    scope: session
+  - id: plan.edit
+    status: not_wired
+    side_effect: state
+    scope: session
+    ui:
+      gate: disabled
+      reason: Plan editing requires bridge plan state; not wired.
+  - id: plan.approve
+    status: not_wired
+    side_effect: state
+    scope: session
+    ui:
+      gate: disabled
+  - id: plan.reject
+    status: not_wired
+    side_effect: state
+    scope: session
+    ui:
+      gate: disabled
+
+  # Shell -----------------------------------------------------------------
+  - id: shell.start
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: shell.exec
+    ui:
+      gate: disabled
+      reason: Shell backend is not implemented yet.
+  - id: shell.input
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: shell.exec
+  - id: shell.resize
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: shell.exec
+  - id: shell.kill
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: shell.exec
+
+  # Context / palette -----------------------------------------------------
+  - id: context.attach_files
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: fs.read
+    ui:
+      gate: disabled
+      reason: File attach respects project-root/profile policy; not wired.
+  - id: context.mention_search
+    status: not_wired
+    side_effect: read_only
+    scope: session
+    summary: Mention search is held until local indexes are wired.
+  - id: palette.invoke_action
+    status: not_wired
+    side_effect: state
+    scope: session
+    summary: Generic palette invoke must map to a concrete command before execution.
+    ui:
+      gate: disabled
+      reason: Palette actions must be classified before they execute.
+
+  # Assessment ------------------------------------------------------------
+  - id: assessment.run
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: assessment.sweep.run
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: assessment.sweep.cancel
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: assessment.list_runs
+    status: implemented
+    side_effect: read_only
+    scope: session
+  - id: assessment.fetch_report
+    status: implemented
+    side_effect: read_only
+    scope: session
+  - id: assessment.fetch_evidence_preview
+    status: implemented
+    side_effect: read_only
+    scope: session
+  - id: assessment.cancel
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: assessment.replay
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: assessment.diff
+    status: implemented
+    side_effect: read_only
+    scope: session
+  - id: assessment.index.status
+    status: implemented
+    side_effect: read_only
+    scope: session
+  - id: assessment.index.rebuild
+    status: implemented
+    side_effect: state
+    scope: session
+
+  # Handoff ---------------------------------------------------------------
+  - id: handoff.create
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: handoff.fetch
+    status: not_wired
+    side_effect: read_only
+    scope: session
+  - id: handoff.approve
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: handoff.reject
+    status: implemented
+    side_effect: state
+    scope: session
+  - id: handoff.dispatch_local
+    status: implemented
+    side_effect: external
+    scope: session
+    requires_profile_tool: handoff.dispatch
+  - id: handoff.dispatch_web_cli
+    status: not_wired
+    side_effect: external
+    scope: session
+    requires_profile_tool: handoff.dispatch
+    ui:
+      gate: disabled
+      reason: Web-CLI dispatch is held until tunnel/auth is wired.
+  - id: handoff.export_blueprint
+    status: not_wired
+    side_effect: state
+    scope: session
+  - id: handoff.cancel
+    status: not_wired
+    side_effect: state
+    scope: session
+  - id: handoff.status
+    status: implemented
+    side_effect: read_only
+    scope: session
+
+  # Gates -----------------------------------------------------------------
+  - id: gate.evaluate
+    status: not_wired
+    side_effect: read_only
+    scope: session
+  - id: gate.signoff
+    status: not_wired
+    side_effect: state
+    scope: session
+    ui:
+      gate: disabled
+      reason: Gate signoff requires persistence + audit; not wired.
+  - id: gate.override
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: gate.override
+    ui:
+      gate: disabled
+      reason: Gate override requires reason+expiry+audit; not wired.
+  - id: gate.revoke_override
+    status: not_wired
+    side_effect: state
+    scope: session
+    requires_profile_tool: gate.override
+    ui:
+      gate: disabled
+
+  # Connectors ------------------------------------------------------------
+  - id: connector.list
+    status: not_wired
+    side_effect: read_only
+    scope: sessionless
+    summary: Connector registry surface is held until v0 local registry lands.
+  - id: connector.connect
+    status: not_wired
+    side_effect: external
+    scope: sessionless
+    ui:
+      gate: disabled
+      reason: OAuth/connect path is held until real auth exists.
+  - id: connector.disconnect
+    status: not_wired
+    side_effect: external
+    scope: sessionless
+    ui:
+      gate: disabled
+  - id: connector.capabilities
+    status: not_wired
+    side_effect: read_only
+    scope: sessionless
+  - id: connector.health
+    status: not_wired
+    side_effect: read_only
+    scope: sessionless
+
+  # Release ---------------------------------------------------------------
+  - id: release.list_targets
+    status: not_wired
+    side_effect: read_only
+    scope: either
+    ui:
+      gate: disabled
+      reason: Release targets surface is held until config-driven read lands.
+  - id: release.generate_notes
+    status: not_wired
+    side_effect: read_only
+    scope: session
+    ui:
+      gate: disabled
+  - id: release.deploy
+    status: not_wired
+    side_effect: external
+    scope: session
+    ui:
+      gate: disabled
+      reason: Deploy is disabled until gate readiness + audit + executor exist.
+  - id: release.publish
+    status: not_wired
+    side_effect: external
+    scope: session
+    ui:
+      gate: disabled
+
+  # Migration / continuous ------------------------------------------------
+  - id: continuous.write_config
+    status: not_wired
+    side_effect: state
+    scope: sessionless
+    ui:
+      gate: disabled
+      reason: Continuous config write is held until validate+rollback exist.
+  - id: migration.create_draft
+    status: not_wired
+    side_effect: state
+    scope: session
+    ui:
+      gate: disabled
+  - id: migration.dry_run
+    status: not_wired
+    side_effect: read_only
+    scope: session
+    ui:
+      gate: disabled
+  - id: migration.verify_reversibility
+    status: not_wired
+    side_effect: read_only
+    scope: session
+    ui:
+      gate: disabled
+  - id: migration.dispatch
+    status: not_wired
+    side_effect: external
+    scope: session
+    ui:
+      gate: disabled
+
+  # Registry / config -----------------------------------------------------
+  - id: registry.sync
+    status: implemented
+    side_effect: state
+    scope: sessionless
+  - id: registry.add
+    status: implemented
+    side_effect: state
+    scope: sessionless
+  - id: registry.reload
+    status: implemented
+    side_effect: state
+    scope: sessionless
+  - id: config.validate
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+  - id: config.reload
+    status: implemented
+    side_effect: state
+    scope: sessionless
+  - id: config.policy.get
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+
+  # Transcript (internal/protocol-only) -----------------------------------
+  - id: transcript.completed
+    status: protocol_only
+    side_effect: none
+    scope: session
+    summary: Session-internal completion signal; not a client command.
+  - id: transcript.error
+    status: protocol_only
+    side_effect: none
+    scope: session
+    summary: Session-internal error signal; not a client command.

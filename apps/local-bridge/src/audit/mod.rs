@@ -36,3 +36,35 @@ pub fn log_tool_event(state: &AppStateHandle, session_id: &str, subsystem: &str,
         .audit
         .log(session_id, subsystem, AuditSeverity::Info, fields);
 }
+
+/// Slice 41: structured-log adapter on top of
+/// [`crate::observability::StructuredLogBuilder`].
+///
+/// Builds a schema-validated log payload from the fluent builder, then
+/// routes it to the audit facility with the matching severity. Returns
+/// the validation error verbatim so callers can surface it in their
+/// own diagnostics; the audit write is skipped on validation failure
+/// to avoid emitting malformed entries.
+///
+/// This is the safe, additive migration target for emit sites that
+/// today call `state.audit.log(…, AuditSeverity::Info, fields)` with a
+/// hand-rolled `serde_json::Value`. New emitters should prefer this
+/// helper; existing call sites can migrate one-by-one.
+pub fn log_structured(
+    state: &AppStateHandle,
+    subsystem: &str,
+    builder: crate::observability::StructuredLogBuilder,
+) -> Result<(), crate::observability::LogValidationError> {
+    use crate::observability::LogSeverity;
+    let severity = builder.severity_for_audit();
+    let session_id = builder.session_id_for_audit().to_string();
+    let value = builder.build()?;
+    let mapped = match severity {
+        LogSeverity::Info => AuditSeverity::Info,
+        LogSeverity::Warning => AuditSeverity::Warn,
+        LogSeverity::Error => AuditSeverity::Error,
+        LogSeverity::Critical => AuditSeverity::Error,
+    };
+    state.audit.log(&session_id, subsystem, mapped, value);
+    Ok(())
+}

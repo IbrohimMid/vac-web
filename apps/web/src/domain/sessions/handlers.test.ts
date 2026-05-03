@@ -88,16 +88,17 @@ describe('session handlers', () => {
       profile_id: 'executor.code@1.0.0',
       agent_id: 'gemini-acp',
       agent_kind: 'acp',
-      models: [{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 }],
-      modes: [{ id: 'gemini-2.5-pro' }],
+      models: [
+        { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 },
+        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_window: 500000 },
+      ],
+      modes: [{ id: 'gemini-2.5-pro', context_window: 1000000 }, { id: 'gemini-2.5-flash', context_window: 500000 }],
       config_options: [{ id: 'model', value: 'gemini-2.5-pro' }],
       model_id: 'gemini-2.5-pro',
     });
 
     expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-pro');
-    expect(useSession.getState().acpModel.models).toEqual([
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 },
-    ]);
+    expect(useSession.getState().acpModel.contextLimit).toBe(1000000);
 
     emit('session.available_commands.updated', {
       commands: [
@@ -112,13 +113,29 @@ describe('session handlers', () => {
     ]);
     expect(useSession.getState().acpCommands[0]?.title).toBe('Compact context');
 
+    // Slice 03 acceptance: contextUsed must be PRESERVED across a model switch.
+    // Seed a usage value first to make the preservation explicit (the plan's
+    // "587k/1m → 587k/218k" wording).
+    emit('session.context.updated', { context_used: 587000, context_limit: 1000000 });
+    expect(useSession.getState().acpModel.contextUsed).toBe(587000);
+
     emit('session.mode.updated', { mode_id: 'gemini-2.5-flash' });
     expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-flash');
+    // contextUsed survives the mode switch (no provider telemetry yet).
+    expect(useSession.getState().acpModel.contextUsed).toBe(587000);
+    // Denominator is taken from the newly selected model's metadata.
+    expect(useSession.getState().acpModel.contextLimit).toBe(500000);
+
+    emit('session.context.updated', { context_used: 157000, context_limit: 500000 });
+    expect(useSession.getState().acpModel.contextUsed).toBe(157000);
+    expect(useSession.getState().acpModel.contextLimit).toBe(500000);
 
     emit('session.config_options.updated', { options: [{ id: 'model', value: 'gemini-2.5-flash' }] });
     expect(useSession.getState().acpModel.configOptions).toEqual([
       { id: 'model', value: 'gemini-2.5-flash' },
     ]);
+    expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-flash');
+    expect(useSession.getState().acpModel.contextUsed).toBe(157000);
 
     off();
   });

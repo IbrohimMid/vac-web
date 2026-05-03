@@ -403,7 +403,7 @@ Deferred to Phase 6. Will scope `db.migrate.*`, `data.backfill.*`, with mandator
 
 ## 5. Tool taxonomy & side-effect tagging
 
-Every tool registered in the VAC engine MUST declare a `side_effect` tag. This is the upstream PR contract (see `docs/upstream-vac-prs.md` when drafted).
+Every tool registered in the VAC engine MUST declare a `side_effect` tag. Treat this as a current bridge/runtime contract, not a historical upstream-PR dependency; new UI command wiring must preserve the same policy boundary described in [`plans/backend-ui-wiring.md`](./plans/backend-ui-wiring.md).
 
 ```rust
 pub enum SideEffect {

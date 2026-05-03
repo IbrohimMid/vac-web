@@ -918,13 +918,16 @@ impl SessionHandle {
                                 stop_reason = ?resp.stop_reason,
                                 "ACP session/prompt completed"
                             );
+                            let stop_reason = resp.stop_reason;
+                            let usage = resp.usage;
+                            let context_payload = acp_context_payload_from_usage(&usage);
                             let event = ServerEvent {
                                 seq: 0,
                                 session_id: handle_id.clone(),
                                 event_type: "transcript.completed".into(),
                                 payload: serde_json::json!({
-                                    "stop_reason": resp.stop_reason,
-                                    "usage": resp.usage,
+                                    "stop_reason": stop_reason,
+                                    "usage": usage.clone(),
                                 }),
                                 v: 1,
                                 ts: chrono::Utc::now().to_rfc3339(),
@@ -933,6 +936,20 @@ impl SessionHandle {
                                 sink.record(&event);
                             }
                             emit_to(&ring, &bcast, event).await;
+                            if let Some(payload) = context_payload {
+                                let context_event = ServerEvent {
+                                    seq: 0,
+                                    session_id: handle_id.clone(),
+                                    event_type: "session.context.updated".into(),
+                                    payload,
+                                    v: 1,
+                                    ts: chrono::Utc::now().to_rfc3339(),
+                                };
+                                if let Some(sink) = persistence.as_ref() {
+                                    sink.record(&context_event);
+                                }
+                                emit_to(&ring, &bcast, context_event).await;
+                            }
                         }
                         Err(e) => {
                             warn!(session_id = %handle_id, error=%e, "ACP session/prompt failed");
@@ -2769,6 +2786,124 @@ async fn map_acp_update(handle: &SessionHandleRef, notif: SessionNotification) {
             );
         }
     }
+}
+
+/// Extract context telemetry from ACP `PromptResponse.usage` without binding
+/// VAC to one adapter's field names. Different ACP adapters expose token
+/// accounting as snake_case, camelCase, nested `context`, or OpenAI-style
+/// prompt/completion counters. We normalize the common shapes into the event
+/// the web cockpit understands and preserve the raw usage for debugging.
+fn acp_context_payload_from_usage(usage: &serde_json::Value) -> Option<serde_json::Value> {
+    let used = first_u64_at(
+        usage,
+        &[
+            &["contextUsed"],
+            &["context_used"],
+            &["used"],
+            &["tokensUsed"],
+            &["tokens_used"],
+            &["totalTokens"],
+            &["total_tokens"],
+            &["context", "used"],
+            &["context", "usedTokens"],
+            &["context", "used_tokens"],
+            &["context_window", "used"],
+            &["contextWindow", "used"],
+        ],
+    )
+    .or_else(|| {
+        let input = first_u64_at(
+            usage,
+            &[
+                &["inputTokens"],
+                &["input_tokens"],
+                &["promptTokens"],
+                &["prompt_tokens"],
+            ],
+        );
+        let output = first_u64_at(
+            usage,
+            &[
+                &["outputTokens"],
+                &["output_tokens"],
+                &["completionTokens"],
+                &["completion_tokens"],
+            ],
+        );
+        match (input, output) {
+            (Some(i), Some(o)) => Some(i.saturating_add(o)),
+            (Some(i), None) => Some(i),
+            (None, Some(o)) => Some(o),
+            (None, None) => None,
+        }
+    });
+
+    let limit = first_u64_at(
+        usage,
+        &[
+            &["contextLimit"],
+            &["context_limit"],
+            &["contextWindow"],
+            &["context_window"],
+            &["maxContextTokens"],
+            &["max_context_tokens"],
+            &["maxTokens"],
+            &["max_tokens"],
+            &["limit"],
+            &["context", "limit"],
+            &["context", "window"],
+            &["context", "contextWindow"],
+            &["context", "context_window"],
+            &["context_window", "limit"],
+            &["contextWindow", "limit"],
+        ],
+    );
+
+    if used.is_none() && limit.is_none() {
+        return None;
+    }
+
+    let mut payload = serde_json::json!({
+        "source": "prompt_response.usage",
+        "usage": usage,
+    });
+    if let Some(used) = used {
+        payload["context_used"] = serde_json::Value::Number(used.into());
+    }
+    if let Some(limit) = limit {
+        payload["context_limit"] = serde_json::Value::Number(limit.into());
+    }
+    Some(payload)
+}
+
+fn first_u64_at(value: &serde_json::Value, paths: &[&[&str]]) -> Option<u64> {
+    paths
+        .iter()
+        .find_map(|path| value_at_path(value, path).and_then(json_u64))
+}
+
+fn value_at_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
+    let mut cursor = value;
+    for key in path {
+        cursor = cursor.get(*key)?;
+    }
+    Some(cursor)
+}
+
+fn json_u64(value: &serde_json::Value) -> Option<u64> {
+    if let Some(n) = value.as_u64() {
+        return Some(n);
+    }
+    if let Some(n) = value.as_i64() {
+        return u64::try_from(n).ok();
+    }
+    if let Some(n) = value.as_f64() {
+        return (n.is_finite() && n >= 0.0).then_some(n.round() as u64);
+    }
+    if let Some(s) = value.as_str() {
+        return s.trim().parse::<u64>().ok();
+    }
+    None
 }
 
 /// Redaction-safe preview for ACP `session/update` tracing. This helper

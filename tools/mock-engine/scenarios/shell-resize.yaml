@@ -1,0 +1,17 @@
+scenario: shell_resize
+status: future_when_backend_lands
+runtime_dispatch: true
+input:
+  command: shell.resize
+  payload:
+    shell_id: "<shell-id>"
+    cols: 80
+    rows: 24
+timeline: []
+final_response:
+  ok: true
+assertions:
+  - mock-engine acknowledges shell.resize as a no-op response (PTY size changes
+    are out of scope for the in-process mock terminal)
+  - production bridges will resize the underlying PTY; the cockpit only needs
+    the ok=true ack to clear any pending state

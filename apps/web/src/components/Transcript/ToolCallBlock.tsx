@@ -5,7 +5,17 @@
 
 import { useState } from 'react';
 import type { ToolCall } from '../../stores/transcript';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import { Icon } from '../cockpit/primitives';
+
+// Slice 33: tool-call expand/collapse routes through the affordance
+// catalog so the wiring is auditable. The toggle is `frontend_owned`
+// and resolved once at module load (the decision is static).
+const TOGGLE_AFFORDANCE = affordanceFor('transcript.tool.toggle', {
+  commandStatus: 'frontend_owned',
+  hasTransport: false,
+  hasSessionId: false,
+});
 
 const STATUS_BADGE: Record<ToolCall['status'], { className: string; label: string }> = {
   ok: { className: 'badge ok', label: 'ok' },
@@ -30,6 +40,9 @@ export function ToolCallBlock({ tc, defaultOpen = true }: Props) {
         role="button"
         tabIndex={0}
         aria-expanded={open}
+        data-affordance-id={TOGGLE_AFFORDANCE.affordanceId}
+        aria-disabled={!TOGGLE_AFFORDANCE.enabled}
+        title={TOGGLE_AFFORDANCE.disabledReason ?? undefined}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();

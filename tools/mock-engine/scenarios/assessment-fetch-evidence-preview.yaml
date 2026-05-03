@@ -1,0 +1,21 @@
+scenario: assessment_fetch_evidence_preview
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  evidence_id: "$input.evidence_id"
+input:
+  command: assessment.fetch_evidence_preview
+  payload:
+    evidence_id: ev_mock_01
+timeline:
+  - event: assessment.evidence_preview
+    after_ms: 0
+    payload:
+      id: "${evidence_id}"
+      preview: "(mock preview for ${evidence_id})\n  line 1\n  line 2\n  line 3"
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits assessment.evidence_preview for the requested evidence id with a deterministic 3-line preview body
+  - the cockpit assessment surface uses the preview text to render the inline evidence drawer
+  - evidence id is echoed via state_seeds.$input.evidence_id so the preview header matches the inbound request

@@ -1,11 +1,19 @@
 //! Pairing + JWT minting + verification.
+//!
+//! Slice 41 (continuation #7): emit sites migrated from raw
+//! `state.audit.log(..)` to the structured `audit::log_structured`
+//! adapter. Event ids (`pairing.{mint,exchange,exchange_denied}`) live
+//! in `config/control-plane/event-catalog.yaml` and the namespaced
+//! prefixes (`pairing.*`) are declared in
+//! `schema/observability-events.yaml` + `observability::ALLOWED_NAMESPACE_PREFIXES`.
 
 mod jwt;
 mod pairing;
 
+use crate::audit;
+use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};
 use crate::server::AppStateHandle;
 use axum::{extract::State, http::StatusCode, Json};
-use bridge_core::AuditSeverity;
 pub use jwt::{AuthState, Claims, JwtError};
 pub use pairing::PairingStore;
 use serde::{Deserialize, Serialize};
@@ -35,11 +43,11 @@ pub async fn mint_pair(
 ) -> Result<Json<MintPairResponse>, (StatusCode, String)> {
     match state.pairing.mint() {
         Some(code) => {
-            state.audit.log(
-                "_pairing",
+            let _ = audit::log_structured(
+                &state,
                 "pairing",
-                AuditSeverity::Info,
-                json!({ "event": "mint" }),
+                StructuredLogBuilder::new("pairing.mint", LogActor::System, LogSeverity::Info)
+                    .code("ok"),
             );
             Ok(Json(MintPairResponse {
                 code,
@@ -58,24 +66,28 @@ pub async fn exchange_pair(
     Json(req): Json<ExchangePairRequest>,
 ) -> Result<Json<ExchangePairResponse>, (StatusCode, String)> {
     if !state.pairing.consume(&req.code) {
-        state.audit.log(
-            "_pairing",
-            "pairing",
-            AuditSeverity::Warn,
-            json!({ "event": "exchange_denied", "device": req.device_id }),
-        );
+        let builder = StructuredLogBuilder::new(
+            "pairing.exchange_denied",
+            LogActor::User,
+            LogSeverity::Warning,
+        )
+        .code("pairing.invalid_code")
+        .namespaced("pairing.device", json!(req.device_id))
+        .expect("pairing.device is an allowed namespaced key");
+        let _ = audit::log_structured(&state, "pairing", builder);
         return Err((StatusCode::UNAUTHORIZED, "invalid or expired code".into()));
     }
     let token = state
         .auth
         .mint_access(&req.device_id, &req.project_root)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    state.audit.log(
-        "_pairing",
-        "pairing",
-        AuditSeverity::Info,
-        json!({ "event": "exchange", "device": req.device_id, "project": req.project_root }),
-    );
+    let builder = StructuredLogBuilder::new("pairing.exchange", LogActor::User, LogSeverity::Info)
+        .code("ok")
+        .namespaced("pairing.device", json!(req.device_id))
+        .expect("pairing.device is an allowed namespaced key")
+        .namespaced("pairing.project", json!(req.project_root))
+        .expect("pairing.project is an allowed namespaced key");
+    let _ = audit::log_structured(&state, "pairing", builder);
     Ok(Json(ExchangePairResponse {
         access_token: token,
         expires_in: 900,

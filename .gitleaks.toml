@@ -1,0 +1,36 @@
+# gitleaks configuration (slice 43).
+#
+# Inherits the upstream default ruleset and adds project-specific
+# allowlists for fixtures and generated content. Tighten these rules as
+# secrets policy evolves; never disable a rule without a tracking ADR.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Repo-level allowlist for fixtures, generated catalogs, and mock data."
+paths = [
+    # Cargo lockfile contains crate hashes, not secrets.
+    "Cargo.lock",
+    # pnpm lockfile is hash-only and triggers high-entropy false positives.
+    "pnpm-lock.yaml",
+    # Mock fixtures shipped for tests/dev only — inert tokens by
+    # convention; never deployed.
+    "tools/mock-engine/scenarios/.*",
+    "fixtures/.*",
+    # Generated control-plane catalogs are produced from YAML schemas
+    # that live in the repo; they cannot contain real secrets.
+    "apps/local-bridge/src/generated/.*",
+    "apps/web/src/generated/.*",
+    "packages/protocol-rs/src/v1/generated/.*",
+    "packages/protocol-ts/src/v1/generated/.*",
+]
+regexes = [
+    # Documentation often references token-shaped strings as examples.
+    # Allow single-line literals that are obviously placeholders.
+    "(?i)(example|placeholder|fixture|sample|fake|test)[-_a-z0-9]*token",
+    "sk_test_[A-Za-z0-9]+",
+]
+
+# Project-specific rules can be added below. None today; bridge auth
+# tokens are minted at runtime and never written to the repo.

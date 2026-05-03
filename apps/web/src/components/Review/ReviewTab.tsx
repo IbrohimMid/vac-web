@@ -5,6 +5,7 @@ import { useOverlays } from '../../stores/overlays';
 import { useReview, type ReviewFile } from '../../stores/review';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useSession } from '../../stores/session';
+import { affordanceFor } from '../../domain/capabilities/affordanceCatalog';
 import type { TransportHandle } from '../../transport';
 
 interface Props {
@@ -72,9 +73,27 @@ export function ReviewTab({ transport }: Props) {
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <strong>{files.length} files</strong>
-            <button onClick={revertAll} disabled={!transport}>
-              Revert all
-            </button>
+            {(() => {
+              // Slice 33 follow-up: "Revert all" loops and dispatches
+              // `review.revert_file` per file (frontend-owned). Catalog gates
+              // visibility on transport+session so disabled-copy stays
+              // consistent across surfaces.
+              const decision = affordanceFor('review.revert_all', {
+                commandStatus: 'frontend_owned',
+                hasTransport: !!transport,
+                hasSessionId: !!sessionId,
+              });
+              return (
+                <button
+                  onClick={revertAll}
+                  disabled={!decision.enabled}
+                  data-affordance-id={decision.affordanceId}
+                  title={decision.disabledReason ?? undefined}
+                >
+                  Revert all
+                </button>
+              );
+            })()}
           </div>
           <ul className="soft-list panel-card">
             {files.map((f) => (

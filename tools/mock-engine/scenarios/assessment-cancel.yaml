@@ -1,0 +1,21 @@
+scenario: assessment_cancel
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  run_id: "$input.run_id"
+input:
+  command: assessment.cancel
+  payload:
+    run_id: run_mock_01
+timeline:
+  - event: assessment.completed
+    after_ms: 0
+    payload:
+      run_id: "${run_id}"
+      verdict: unknown
+final_response:
+  ok: true
+assertions:
+  - mock-engine collapses an in-flight assessment run to assessment.completed with verdict=unknown when cancelled
+  - the cockpit assessment surface treats verdict=unknown as a terminal-but-non-decisive state
+  - run_id echoes the inbound params so the cockpit can dedupe stale completions

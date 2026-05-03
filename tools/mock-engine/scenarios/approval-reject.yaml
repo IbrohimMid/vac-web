@@ -1,0 +1,20 @@
+scenario: approval_reject
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  tool_call_id: "$input.approval_id"
+input:
+  command: approval.reject
+  payload:
+    approval_id: "<approval-id>"
+timeline:
+  - event: tool_call.decided
+    after_ms: 0
+    payload:
+      tool_call_id: "${tool_call_id}"
+      decision: "rejected"
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits tool_call.decided with decision=rejected seeded from $input.approval_id
+  - mirror of approval_approve scenario; fallback to tool_call_id intentionally dropped

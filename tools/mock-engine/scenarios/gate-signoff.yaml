@@ -1,0 +1,15 @@
+scenario: gate_signoff
+status: production_parity
+runtime_dispatch: true
+input:
+  command: gate.signoff
+  payload:
+    gate_id: gate_mock_01
+    signer: mock_user
+timeline: []
+final_response:
+  ok: true
+assertions:
+  - mock-engine acknowledges gate.signoff with a JSON-RPC response { ok: true } and emits no notifications
+  - the cockpit gates surface relies solely on the response ack to flip the local sign-off state
+  - empty timeline + final_response confirms response-only contract is preserved post-runtime port

@@ -903,6 +903,13 @@ export function AgentThread({
   const turnsState = useAgentSession((s) => s.turns);
   const turnOrder = useAgentSession((s) => s.turnOrder);
   const telemetry = useAgentSession((s) => (sid ? s.telemetry.get(sid) : undefined));
+  // selectAgentTurns reads turnsState/turnOrder transitively via the
+  // zustand store; ESLint flags them as "unnecessary" because the
+  // memo body doesn't dereference them directly. They MUST stay in
+  // the dep array so the memo re-evaluates when turns are added/
+  // removed. Refactoring toward selector-inside-memo (reading via
+  // useAgentSession.getState() inside the body) is tracked separately.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const turns = useMemo(() => selectAgentTurns(sid), [sid, turnsState, turnOrder]);
   // X.5f.3 Patch D: dev-only sanity warning. If the raw debug stream
   // shows tool_call discriminators but the normalized tool count is

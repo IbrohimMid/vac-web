@@ -1,0 +1,26 @@
+scenario: shell_basic_output
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  shell_id: "@next_shell_id"
+input:
+  command: shell.start
+  payload:
+    cwd: project_root
+timeline:
+  - event: shell.started
+    after_ms: 0
+    payload:
+      shell_id: "${shell_id}"
+  - event: shell.output
+    after_ms: 0
+    payload:
+      shell_id: "${shell_id}"
+      data: "mock-shell $ "
+final_response:
+  ok: true
+  shell_id: "${shell_id}"
+assertions:
+  - mock-engine emits shell.started followed by an initial shell.output prompt and a final response carrying the same deterministic shell_id
+  - shell_id is generated once per scenario via state_seeds @next_shell_id; both notifications and the response share the same value
+  - shell.kill on the same shell_id terminates the stream (handled by legacy_scenarios::handle for now)

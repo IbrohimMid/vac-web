@@ -10,6 +10,8 @@ use super::envelope::{
     AuthFrame, ClientCommand, ErrorInfo, HelloFrame, ReplayRequest, ServerAck, ServerEvent,
     WelcomeFrame,
 };
+use crate::audit;
+use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};
 use crate::server::AppStateHandle;
 use crate::translator::dispatch_command;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -74,22 +76,22 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
     let device_id = match authenticate(&hello.auth, &state) {
         Ok(d) => d,
         Err(code) => {
-            state.audit.log(
-                "_ws",
-                "ws",
-                bridge_core::AuditSeverity::Warn,
-                serde_json::json!({ "event": "auth_failed", "code": code, "client": client_id }),
-            );
+            let builder =
+                StructuredLogBuilder::new("ws.auth_failed", LogActor::User, LogSeverity::Warning)
+                    .code(code)
+                    .correlation_id(client_id.clone());
+            let _ = audit::log_structured(&state, "ws", builder);
             send_raw_err(&mut tx, code, "auth failed").await;
             return;
         }
     };
-    state.audit.log(
-        "_ws",
-        "ws",
-        bridge_core::AuditSeverity::Info,
-        serde_json::json!({ "event": "connected", "device": device_id, "client": client_id }),
-    );
+    let connected_builder =
+        StructuredLogBuilder::new("ws.connected", LogActor::User, LogSeverity::Info)
+            .code("ok")
+            .correlation_id(client_id.clone())
+            .namespaced("ws.device", json!(device_id.clone()))
+            .expect("ws.device is an allowed namespaced key");
+    let _ = audit::log_structured(&state, "ws", connected_builder);
 
     // 3. Send welcome. Advertise the live agent runtime registry so the
     // cockpit can render a provider picker and route `session.create`
@@ -146,12 +148,11 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
 
     ping_task.abort();
     outgoing_task.abort();
-    state.audit.log(
-        "_ws",
-        "ws",
-        bridge_core::AuditSeverity::Info,
-        serde_json::json!({ "event": "disconnected", "client": client_id }),
-    );
+    let disconnected_builder =
+        StructuredLogBuilder::new("ws.disconnected", LogActor::System, LogSeverity::Info)
+            .code("ok")
+            .correlation_id(client_id.clone());
+    let _ = audit::log_structured(&state, "ws", disconnected_builder);
     info!(%client_id, "ws disconnected");
 }
 

@@ -1,0 +1,21 @@
+scenario: review_open_file
+status: future_when_backend_lands
+runtime_dispatch: true
+state_seeds:
+  path: "$input.path"
+input:
+  command: review.open_file
+  payload:
+    path: "<repo-relative-file-path>"
+timeline:
+  - event: review.file_diff_chunk
+    after_ms: 0
+    payload:
+      path: "${path}"
+      unified: "--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,3 @@\n-old line\n+new line\n unchanged\n"
+      truncated: false
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits a canonical review.file_diff_chunk for the requested path
+  - the unified diff body is a static fixture (mock only); production bridges send real diffs

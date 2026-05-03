@@ -1,0 +1,35 @@
+scenario: connector_list
+status: future_when_backend_lands
+runtime_dispatch: true
+input:
+  command: connector.list
+  payload: {}
+timeline:
+  - event: connector.list
+    after_ms: 0
+    payload:
+      connectors:
+        - { id: github_default, provider: github, label: Github, health: connected, account: github-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: notion_default, provider: notion, label: Notion, health: connected, account: notion-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: sentry_default, provider: sentry, label: Sentry, health: degraded, account: sentry-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: datadog_default, provider: datadog, label: Datadog, health: connected, account: datadog-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: grafana_default, provider: grafana, label: Grafana, health: connected, account: grafana-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: vercel_default, provider: vercel, label: Vercel, health: connected, account: vercel-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: cloudflare_default, provider: cloudflare, label: Cloudflare, health: connected, account: cloudflare-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: posthog_default, provider: posthog, label: Posthog, health: connected, account: posthog-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: ga4_default, provider: ga4, label: Ga4, health: connected, account: ga4-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: mixpanel_default, provider: mixpanel, label: Mixpanel, health: connected, account: mixpanel-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: snyk_default, provider: snyk, label: Snyk, health: connected, account: snyk-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: dependabot_default, provider: dependabot, label: Dependabot, health: connected, account: dependabot-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: lighthouse_ci_default, provider: lighthouse_ci, label: Lighthouse_ci, health: connected, account: lighthouse_ci-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+        - { id: pagerduty_default, provider: pagerduty, label: Pagerduty, health: connected, account: pagerduty-account, rate_limit: { remaining: 4800, limit: 5000, reset_at: "2026-04-24T11:00:00Z" } }
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits a connector.list notification carrying 14 hardcoded
+    connector entries (github through pagerduty); sentry is the only one
+    with health=degraded
+  - rate_limit and reset_at are static; cockpit chip rendering is exercised
+    by the static label/health combination, not by clock progression
+  - this scenario replaces legacy fn connector_catalog() in legacy_scenarios.rs
+    and the titlecase helper for these provider ids

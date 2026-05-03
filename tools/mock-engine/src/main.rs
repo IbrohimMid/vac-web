@@ -9,6 +9,8 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{info, warn};
 
+mod generated;
+mod legacy_scenarios;
 mod scenarios;
 
 #[derive(Debug, Default)]

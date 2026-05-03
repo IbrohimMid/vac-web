@@ -1,0 +1,59 @@
+# Slice 35 reference workflow: declarative spec FIRST, runtime SECOND.
+#
+# Authoring rule:
+#   1. This YAML describes intent only.
+#   2. Runtime authority lives in apps/local-bridge/src/workflows.
+#   3. UI affordance mapping lives in apps/web/src/domain/capabilities/assessmentIndex.ts.
+#   4. Tests cover schema validity, runtime behavior, AND UI rendering.
+workflow: assess.index.rebuild
+version: 1
+status: planned
+owners:
+  - bridge
+  - web
+states:
+  - idle
+  - rebuilding
+  - completed
+  - failed
+events:
+  - id: assessment.index.rebuild_started
+    transitions:
+      from: idle
+      to: rebuilding
+  - id: assessment.index.rebuild_progress
+    transitions:
+      from: rebuilding
+      to: rebuilding
+  - id: assessment.index.rebuilt
+    transitions:
+      from: rebuilding
+      to: completed
+  - id: assessment.index.rebuild_failed
+    transitions:
+      from: rebuilding
+      to: failed
+failure_reasons:
+  - storage
+  - schema
+  - project_root
+  - persistence_disabled
+ui:
+  surface: ReadinessHub
+  module: apps/web/src/domain/capabilities/assessmentIndex.ts
+  progress: visible
+  failure: inline_and_notify
+  preserve_findings_on_failure: true
+runtime_authority:
+  layer: rust
+  module: apps/local-bridge/src/workflows/assess_index_rebuild.rs # planned
+  responsibilities:
+    - Acquire on-disk index lock.
+    - Walk project root, enforce profile path policy.
+    - Persist index pages.
+    - Emit lifecycle events.
+acceptance:
+  - YAML schema validates against schema/workflow-control-plane.schema.json.
+  - Runtime executor enforces all state transitions.
+  - UI consumes assessmentIndex.ts copy and never invents states locally.
+  - Tests exist for YAML parse, runtime transitions, and UI rendering.

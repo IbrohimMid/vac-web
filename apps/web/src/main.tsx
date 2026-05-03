@@ -57,6 +57,7 @@ import { registerRuntimeHandlers } from './domain/runtime/handlers';
 import { registerSessionHandlers } from './domain/sessions/handlers';
 import { registerSessionHistoryHandlers } from './domain/sessions/history';
 import { registerTranscriptHandlers } from './domain/transcript/handlers';
+import { attachTranscriptModeBridge } from './transcript/sessionModeBridge';
 import { overlayRegistry } from './overlays/overlay-registry';
 import { useCockpit } from './stores/cockpit';
 import { useOverlays } from './stores/overlays';
@@ -141,6 +142,12 @@ function App() {
         }
         offs.push(registerTranscriptHandlers(t));
         offs.push(registerAgentSessionHandlers(t));
+        // Slice 50: forward session-lifecycle frames into the transcript
+        // store's pipeline-mode field. Decoupled from sessions/handlers.ts
+        // (which owns the session list / activation) so the bridge can
+        // evolve without touching that surface. The bridge is structural
+        // over `TransportHandle.on`, so no transport-layer dep leaks.
+        offs.push(attachTranscriptModeBridge(t));
         offs.push(registerCapabilitiesHandlers(t));
         offs.push(registerNotifyHandlers(t));
         offs.push(registerApprovalHandlers(t));

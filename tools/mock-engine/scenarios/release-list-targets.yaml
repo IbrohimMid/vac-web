@@ -1,0 +1,24 @@
+scenario: release_list_targets
+status: production_parity
+runtime_dispatch: true
+input:
+  command: release.list_targets
+timeline:
+  - event: release.targets
+    after_ms: 0
+    payload:
+      targets:
+        - id: staging
+          label: Staging
+          environment: staging
+          last_status: idle
+        - id: prod
+          label: Production
+          environment: production
+          last_status: idle
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits release.targets with two deterministic entries (staging + prod) when the release surface lists targets
+  - both targets start with last_status=idle so the cockpit release surface renders an idle deploy panel before any release.deploy command
+  - payload is fully static; no state_seeds required

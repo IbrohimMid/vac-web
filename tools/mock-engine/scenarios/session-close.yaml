@@ -1,0 +1,17 @@
+scenario: session_close
+status: future_when_backend_lands
+runtime_dispatch: true
+input:
+  command: session.close
+  payload: {}
+timeline:
+  - event: session.closed
+    after_ms: 0
+    payload:
+      reason: user
+final_response:
+  ok: true
+assertions:
+  - mock-engine emits a session.closed notification followed by an ok response
+  - the close reason is hardcoded to user; the bridge / cockpit will surface
+    operator-initiated session termination from this single notification

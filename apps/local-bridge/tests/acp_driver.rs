@@ -429,9 +429,13 @@ async fn x3_acp_browser_message_submit_routed_to_acp_prompt() {
 
 #[tokio::test]
 async fn x3_acp_unsupported_command_returns_protocol_unsupported() {
-    // Non-message.submit commands are not yet wired for ACP — bridge
-    // must surface a typed `agent.protocol_unsupported` rather than
-    // silently forwarding a JSON-RPC frame the ACP child can't parse.
+    // Non-message.submit commands are not yet wired for ACP. Catalog-
+    // declared-but-unwired commands (Slice 02 wiring.not_wired_fallback)
+    // are intercepted at the translator BEFORE reaching the ACP layer,
+    // so clients see the deterministic `feature.not_wired` ack instead
+    // of a JSON-RPC frame the ACP child can't parse. The ACP-specific
+    // `agent.protocol_unsupported` only fires for commands that pass
+    // the translator NotWired gate (see session/handle.rs::handle_acp_command).
     let (url, _state) = start_bridge_with(build_acp_registry(vec![])).await;
     let mut ws = connect_hello(&url).await;
     let session_id = create_session(&mut ws, "executor.code@1.0.0").await;
@@ -457,7 +461,7 @@ async fn x3_acp_unsupported_command_returns_protocol_unsupported() {
         let v: Value = serde_json::from_str(&txt).unwrap();
         if v.get("ackOf") == Some(&json!("cmd_runtime")) {
             assert_eq!(v["ok"], json!(false));
-            assert_eq!(v["error"]["code"], json!("agent.protocol_unsupported"));
+            assert_eq!(v["error"]["code"], json!("feature.not_wired"));
             return;
         }
     }

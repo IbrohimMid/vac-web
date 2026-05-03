@@ -54,3 +54,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: bash scripts/schema-validate.sh
       - run: bash scripts/manifest-verify.sh
+
+  # Slice 37: import-graph fitness test. Walks apps/web/src and rejects
+  # cross-layer imports that violate docs/module-boundaries.md.
+  architecture-boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
+      - run: node scripts/check-architecture-boundaries.mjs
