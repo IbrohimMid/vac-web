@@ -46,6 +46,10 @@ const ALLOWED_GENERATORS = new Set([
 	'release_deploy_commit',
 	'release_notes_id',
 	'mention_search_results',
+	'handoff_packet_id',
+	'repo_default_base_commit_sha',
+	'repo_default_repo_ref',
+	'repo_default_worktree_digest',
 ]);
 
 function loadScenarios() {
@@ -177,6 +181,9 @@ function render(scenarios) {
 	lines.push('    /// JSON-value bindings (e.g. array results from @mention_search_results)');
 	lines.push('    /// splice in as actual arrays/objects rather than string blobs.');
 	lines.push('    pub payload_template_json: Option<&\'static str>,');
+	lines.push('    /// Multi-event ledger (Pass #33): bindings to insert AFTER this step is rendered.');
+	lines.push('    /// Subsequent steps see these in their bindings map.');
+	lines.push('    pub state_seeds_after: &\'static [RuntimeStateSeed],');
 	lines.push('}');
 	lines.push('');
 	lines.push('#[derive(Debug, Clone, Copy)]');
@@ -208,7 +215,10 @@ function render(scenarios) {
 				const payloadTemplateField = payloadTemplate
 					? `Some("${rustEscape(payloadTemplate)}")`
 					: 'None';
-				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}", payload_template_json: ${payloadTemplateField} }`;
+				const seedsAfter = Object.entries(t.state_seeds_after ?? {})
+					.map(([k, v]) => `RuntimeStateSeed { var: "${rustEscape(k)}", value: "${rustEscape(v)}" }`)
+					.join(', ');
+				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}", payload_template_json: ${payloadTemplateField}, state_seeds_after: &[${seedsAfter}] }`;
 			})
 			.join(', ');
 		const finalResp = doc.final_response

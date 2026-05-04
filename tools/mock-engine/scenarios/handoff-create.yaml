@@ -1,0 +1,41 @@
+scenario: handoff_create
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  packet_id: "@handoff_packet_id"
+  title: "$input.title|Handoff"
+  summary: "$input.summary|Handoff"
+  author: "$input.created_by|author"
+  created_at: "$input.created_at|2026-04-24T10:00:00Z"
+  source_run_ids: "$input_json.source_run_ids|[]"
+  accepted_finding_ids: "$input_json.accepted_finding_ids|[]"
+  tasks: "$input_json.tasks|[]"
+  order_hint: "$input_json.order_hint|[]"
+  target: '$input_json.target|{"kind":"dispatch_to_local_vac","executor_profile_id":"executor.code@1.0.0","session_title":"Handoff"}'
+  approval: '$input_json.approval|{"required":true,"approvers":[],"two_party":false,"required_roles":[]}'
+  state_history: "$input_json.state_history|[]"
+  execution_session_id: "$input_json.execution_session_id"
+  repo_ref: "@repo_default_repo_ref"
+  base_commit_sha: "@repo_default_base_commit_sha"
+  worktree_digest: "@repo_default_worktree_digest"
+input:
+  command: handoff.create
+  payload:
+    title: "<handoff title>"
+    summary: "<handoff summary>"
+    created_by: "<author identifier>"
+    source_run_ids: []
+    accepted_finding_ids: []
+    tasks: []
+    order_hint: []
+timeline:
+  - event: handoff.upserted
+    after_ms: 0
+    payload_template: '{"packet_id":"${packet_id}","title":"${title}","summary":"${summary}","source_run_ids":${source_run_ids},"accepted_finding_ids":${accepted_finding_ids},"created_by":"${author}","created_at":"${created_at}","target":${target},"status":"pending_approval","tasks":${tasks},"order_hint":${order_hint},"pin":{"repo_ref":"${repo_ref}","base_commit_sha":"${base_commit_sha}","worktree_digest":"${worktree_digest}","assessment_snapshot_at":"${created_at}","connector_snapshots":[],"expires_at":"2026-05-01T10:30:00Z","invalidate_on_repo_change":true,"invalidation_policy":"strict","base_sha":"${base_commit_sha}","captured_at":"${created_at}","policy":"strict"},"approval":${approval},"signers":[{"role":"author","name":"${author}","signed_at":"2026-04-24T10:00:00Z"}],"required_signers":2,"state_history":${state_history},"execution_session_id":${execution_session_id},"convergence_count":0,"updated_at":"${created_at}"}'
+final_response:
+  ok: true
+  packet_id: "${packet_id}"
+assertions:
+  - "emits handoff.upserted with full canonical payload (packet_id, title, status=pending_approval, signers, required_signers=2, pin block, etc.); response carries ok=true and packet_id"
+  - "port of legacy handle_handoff_create via Pass #33 primitives: @handoff_packet_id (counter-bumping pid), @repo_default_* (seed-derived defaults), $input.X|default + $input_json.X|default, payload_template_json for typed JSON splice"
+  - "deviations from legacy: drops created_by alias 'author' (only reads created_by); summary default literal (not echo of title); state_history default empty array (not derived from created_at + author)"

@@ -1,0 +1,41 @@
+scenario: handoff_approve
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  packet_id: "$input.packet_id"
+  approver: "$input.approver"
+  reason: "$input.reason|approved"
+input:
+  command: handoff.approve
+  payload:
+    packet_id: "<packet id, e.g. pkt_01J...>"
+    approver: "<approver name>"
+    reason: "<optional reason; default \"approved\">"
+timeline:
+  - event: handoff.status
+    after_ms: 0
+    payload:
+      packet_id: "${packet_id}"
+      status: approved
+  - event: handoff.upserted
+    after_ms: 0
+    payload:
+      packet_id: "${packet_id}"
+      status: approved
+      approval:
+        required: true
+        approvers: ["${approver}"]
+        approver_notes: "${reason}"
+        approved_at: "2026-04-24T10:05:00Z"
+        two_party: false
+        required_roles: []
+      signers:
+        - role: approver
+          name: "${approver}"
+          signed_at: "2026-04-24T10:05:00Z"
+          reason: "${reason}"
+final_response:
+  ok: true
+assertions:
+  - "emits handoff.status (status=approved) followed by handoff.upserted carrying full approval block + signers; packet_id echoed from input across both events"
+  - "port of legacy handle_handoff_approve via Pass #33 binding extensions ($input.X|default for reason fallback); state_seeds_after primitive available but not exercised by this scenario (single set of bindings used by both events)"

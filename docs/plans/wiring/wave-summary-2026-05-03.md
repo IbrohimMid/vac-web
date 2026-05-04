@@ -2552,3 +2552,75 @@ Existing scenarios untouched; new render path is opt-in per timeline step.
 **Remaining Section A work** (5 of 8): `handoff.create`, `handoff.approve`, `handoff.dispatch_local`, `assessment.run`, `message.submit`. All 5 still need the multi-event ledger primitive (`state_seeds_after`); the latter 3 also need conditional branching. Next implementation pass — once explicit instruction — should land `state_seeds_after` codegen + dispatch extension and port `handoff.create` + `handoff.approve` together (Pass #33 estimate).
 
 **UX impact**: zero behaviour change. `context.mention_results` notification emits with identical shape — same `query` echo, same `results` array order (descending score by sample index), same per-result fields (`id`, `kind`, `label`, `score`, `payload`). Mention picker / `@` search in the cockpit composer renders identically.
+
+## Pass #33 — multi-event ledger primitive + handoff.create / handoff.approve ports (2026-05-04)
+
+**Scope**: implement second of the two design-doc primitives flagged in Pass #31 (multi-event ledger via `state_seeds_after`) plus the binding-extension and counter-bumping primitives needed to port the handoff lifecycle handlers. Ports two handlers in one pass. Section A progress: **5 / 8 ported**.
+
+### Primitives implemented
+
+1. **`state_seeds_after`** — multi-event ledger. New optional YAML field on each timeline step; codegen emits `state_seeds_after: &'static [RuntimeStateSeed]` on `RuntimeTimelineStep`. After rendering each step in `try_runtime_dispatch`, the dispatch loop evaluates `state_seeds_after` directives and extends the bindings map. Subsequent steps see the additions via `${var}`. Today neither handoff handler exercises this primitive (both can express their lifecycle via shared input bindings), but the infrastructure is now ready for `handoff.dispatch_local` and `assessment.run` which DO need event-to-event computed state.
+
+2. **`$input.X|<default>`** binding syntax — reads string param `X`, falls back to `<default>` if absent or non-string. Lets YAML port reproduce legacy `unwrap_or("...")` patterns without per-handler generators.
+
+3. **`$input_json.X|<default_json>`** binding syntax — reads param `X` and JSON-encodes it (handles arrays, objects, scalars uniformly). Falls back to `<default_json>` if absent (or `"null"` if no default given). Combined with `payload_template_json` from Pass #32, this lets typed JSON values from operator input splice into payloads without binding-type refactoring.
+
+4. **`@handoff_packet_id`** generator — counter-bumping pid format `pkt_01J{seed%10000:0>20}{counter:0>3}` matching legacy `handle_handoff_create`.
+
+5. **`@repo_default_repo_ref` / `@repo_default_base_commit_sha` / `@repo_default_worktree_digest`** — seed-derived defaults matching the no-project-path branch of `legacy_scenarios::repo_context`. Ported `deterministic_hex_for_seed` helper into `scenarios.rs` (~7 LOC). Used by `handoff.create` YAML for default `pin` block fields.
+
+### Refactor: `eval_seed_value` extracted
+
+Extracted single-seed evaluation into a free function `eval_seed_value(seed_value, state, params) -> String`. `build_bindings` now delegates to it. The `state_seeds_after` dispatch reuses the same evaluator. This unifies the binding-resolution code path and surfaces the supported syntax in one place via doc comments.
+
+### Ports
+
+#### handoff.approve
+
+- 2 timeline events: `handoff.status` (status=approved) followed by `handoff.upserted` carrying the full approval block + signers.
+- Both events share `${packet_id}`, `${approver}`, `${reason}` bindings from input. `reason` defaults to `"approved"` via `$input.reason|approved`.
+- Structured payload (no `payload_template_json` needed); standard render_value + render_string path.
+- Legacy fn `handle_handoff_approve` (45 lines) dropped.
+
+#### handoff.create
+
+- 1 timeline event: `handoff.upserted` with full canonical payload (packet_id, title, summary, source_run_ids, accepted_finding_ids, created_by, created_at, target, status, tasks, order_hint, pin block with 11 fields, approval, signers, required_signers=2, state_history, execution_session_id, convergence_count, updated_at).
+- Uses `payload_template_json` for typed JSON splice of operator-input arrays / objects (`source_run_ids`, `accepted_finding_ids`, `tasks`, `order_hint`, `target`, `approval`, `state_history`, `execution_session_id`).
+- Pin block uses `@repo_default_*` generators for repo_ref / base_commit_sha / worktree_digest defaults; literal values for expires_at / invalidate_on_repo_change / invalidation_policy.
+- Final response carries `ok: true` + `${packet_id}`.
+- Legacy fn `handle_handoff_create` (171 lines) dropped.
+- **Documented deviations from legacy**: drops `created_by` alias `author` (only reads `created_by` key); summary default literal `"Handoff"` (legacy echoes title); state_history default empty array (legacy synthesises 2-entry array from `created_at` + `author`). Test inputs pass valid fields; deviations only matter for malformed operator input.
+
+### Files touched
+
+- `tools/mock-engine/src/scenarios.rs`: extracted `eval_seed_value`; added `state_seeds_after` dispatch branch; added `$input.X|default` + `$input_json.X|default` parsing; added `@handoff_packet_id` + `@repo_default_*` generators + `deterministic_hex_for_seed` helper. Added 5 integration tests: `handoff_approve_runtime_dispatch_emits_status_then_upserted_with_approval_payload`, `handoff_approve_default_reason_is_approved_when_input_omits_reason`, `eval_seed_value_supports_input_default_and_input_json_pass_through`, `handoff_create_runtime_dispatch_emits_upserted_with_full_canonical_payload`, `handoff_create_default_target_and_approval_used_when_input_omits_them`.
+- `scripts/codegen-mock-scenarios.mjs`: extended `RuntimeTimelineStep` struct emit with `state_seeds_after` field; extended timeline step emission to read optional `state_seeds_after` YAML field; added 4 generators (`handoff_packet_id`, `repo_default_base_commit_sha`, `repo_default_repo_ref`, `repo_default_worktree_digest`) to `ALLOWED_GENERATORS`.
+- `tools/mock-engine/scenarios/handoff-approve.yaml`: new 36-line scenario.
+- `tools/mock-engine/scenarios/handoff-create.yaml`: new 49-line scenario with `payload_template_json`.
+- `tools/mock-engine/src/legacy_scenarios.rs`: dropped 2 dispatch arms + `fn handle_handoff_create` (171 lines) + `fn handle_handoff_approve` (45 lines). File now 1057 lines (was 1277, −220).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated — 26 scenarios, 25 runtime-dispatched (was 24 / 23).
+
+### Validation gate (all green)
+
+- `cargo build -p mock-engine`: clean (1 pre-existing dead_code warning on legacy `RepoContext` struct).
+- `cargo test -p mock-engine`: **28/0** (was 23/0; +5 new tests).
+- `cargo test -p local-bridge --lib`: 351/0.
+- `cargo test -p local-bridge --test event_catalog_parity`: 7/0.
+- `cargo fmt --all -- --check`: clean.
+- `node scripts/check-architecture-boundaries.mjs`: ok (264 / 817 / 211).
+
+### Architecture invariants preserved
+
+- 23 prior runtime-dispatched scenarios untouched (default `state_seeds_after: &[]` is a no-op).
+- Legacy fallback for unknown methods still works (`unknown_command_falls_through_to_legacy` test passes).
+- `state_seeds_after` evaluator only sees same `state` + original request `params`, NOT the prior step's payload. Future event-output access (e.g. `$step.payload.X`) is a separate primitive; deferred until a handler needs it.
+
+### Remaining Section A work (3 of 8)
+
+- `handoff.dispatch_local` (172 lines legacy) — needs `state_seeds_after` (now available) + conditional branching on dispatch result + counter/hash for run_id. Likely Pass #34.
+- `assessment.run` (~290 lines legacy) — longest evidence stream + per-rubric verdict computation. Needs `state_seeds_after` + conditional branching + possibly evidence-stream DSL. Likely Pass #35-36.
+- `message.submit` (~175 lines legacy + 106 lines helper) — largest tree, branches on packet detection. Likely Pass #37+.
+
+### UX impact
+
+Zero behaviour change for canonical fields. `handoff.upserted` (from both create & approve) and `handoff.status` events emit with shapes byte-identical to legacy for the typical operator-supplied input. Documented deviations only manifest for malformed input (empty / missing keys); cockpit operator surfaces stay byte-identical.

@@ -23,7 +23,7 @@ pub struct ScenarioEntry {
     pub assertions: &'static [&'static str],
 }
 
-pub const SCENARIO_CATALOG: [ScenarioEntry; 24] = [
+pub const SCENARIO_CATALOG: [ScenarioEntry; 26] = [
     ScenarioEntry {
         id: "approval_approve",
         status: ScenarioStatus::FutureWhenBackendLands,
@@ -111,6 +111,22 @@ pub const SCENARIO_CATALOG: [ScenarioEntry; 24] = [
         input_command: "gate.signoff",
         timeline_events: &[],
         assertions: &["[object Object]", "the cockpit gates surface relies solely on the response ack to flip the local sign-off state", "empty timeline + final_response confirms response-only contract is preserved post-runtime port"],
+    },
+    ScenarioEntry {
+        id: "handoff_approve",
+        status: ScenarioStatus::ProductionParity,
+        replacement: None,
+        input_command: "handoff.approve",
+        timeline_events: &["handoff.status", "handoff.upserted"],
+        assertions: &["emits handoff.status (status=approved) followed by handoff.upserted carrying full approval block + signers; packet_id echoed from input across both events", "port of legacy handle_handoff_approve via Pass #33 binding extensions ($input.X|default for reason fallback); state_seeds_after primitive available but not exercised by this scenario (single set of bindings used by both events)"],
+    },
+    ScenarioEntry {
+        id: "handoff_create",
+        status: ScenarioStatus::ProductionParity,
+        replacement: None,
+        input_command: "handoff.create",
+        timeline_events: &["handoff.upserted"],
+        assertions: &["emits handoff.upserted with full canonical payload (packet_id, title, status=pending_approval, signers, required_signers=2, pin block, etc.); response carries ok=true and packet_id", "port of legacy handle_handoff_create via Pass #33 primitives: @handoff_packet_id (counter-bumping pid), @repo_default_* (seed-derived defaults), $input.X|default + $input_json.X|default, payload_template_json for typed JSON splice", "deviations from legacy: drops created_by alias 'author' (only reads created_by); summary default literal (not echo of title); state_history default empty array (not derived from created_at + author)"],
     },
     ScenarioEntry {
         id: "handoff_reject",
@@ -229,6 +245,9 @@ pub struct RuntimeTimelineStep {
     /// JSON-value bindings (e.g. array results from @mention_search_results)
     /// splice in as actual arrays/objects rather than string blobs.
     pub payload_template_json: Option<&'static str>,
+    /// Multi-event ledger (Pass #33): bindings to insert AFTER this step is rendered.
+    /// Subsequent steps see these in their bindings map.
+    pub state_seeds_after: &'static [RuntimeStateSeed],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -248,61 +267,61 @@ pub struct RuntimeScenarioEntry {
     pub final_response_json: Option<&'static str>,
 }
 
-pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 23] = [
+pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 25] = [
     RuntimeScenarioEntry {
         id: "approval_approve",
         input_command: "approval.approve",
         state_seeds: &[RuntimeStateSeed { var: "tool_call_id", value: "$input.approval_id" }],
-        timeline: &[RuntimeTimelineStep { event: "tool_call.decided", after_ms: 0, payload_json: "{\"tool_call_id\":\"${tool_call_id}\",\"decision\":\"approved\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "tool_call.decided", after_ms: 0, payload_json: "{\"tool_call_id\":\"${tool_call_id}\",\"decision\":\"approved\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "approval_reject",
         input_command: "approval.reject",
         state_seeds: &[RuntimeStateSeed { var: "tool_call_id", value: "$input.approval_id" }],
-        timeline: &[RuntimeTimelineStep { event: "tool_call.decided", after_ms: 0, payload_json: "{\"tool_call_id\":\"${tool_call_id}\",\"decision\":\"rejected\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "tool_call.decided", after_ms: 0, payload_json: "{\"tool_call_id\":\"${tool_call_id}\",\"decision\":\"rejected\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "assessment_cancel",
         input_command: "assessment.cancel",
         state_seeds: &[RuntimeStateSeed { var: "run_id", value: "$input.run_id" }],
-        timeline: &[RuntimeTimelineStep { event: "assessment.completed", after_ms: 0, payload_json: "{\"run_id\":\"${run_id}\",\"verdict\":\"unknown\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "assessment.completed", after_ms: 0, payload_json: "{\"run_id\":\"${run_id}\",\"verdict\":\"unknown\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "assessment_fetch_evidence_preview",
         input_command: "assessment.fetch_evidence_preview",
         state_seeds: &[RuntimeStateSeed { var: "evidence_id", value: "$input.evidence_id" }],
-        timeline: &[RuntimeTimelineStep { event: "assessment.evidence_preview", after_ms: 0, payload_json: "{\"id\":\"${evidence_id}\",\"preview\":\"(mock preview for ${evidence_id})\\n  line 1\\n  line 2\\n  line 3\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "assessment.evidence_preview", after_ms: 0, payload_json: "{\"id\":\"${evidence_id}\",\"preview\":\"(mock preview for ${evidence_id})\\n  line 1\\n  line 2\\n  line 3\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "connector_connect",
         input_command: "connector.connect",
         state_seeds: &[RuntimeStateSeed { var: "provider", value: "$input.provider" }],
-        timeline: &[RuntimeTimelineStep { event: "connector.oauth_url", after_ms: 0, payload_json: "{\"provider\":\"${provider}\",\"url\":\"{https://example.invalid/oauth/${provider}}?state=mock\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "connector.oauth_url", after_ms: 0, payload_json: "{\"provider\":\"${provider}\",\"url\":\"{https://example.invalid/oauth/${provider}}?state=mock\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "connector_disconnect",
         input_command: "connector.disconnect",
         state_seeds: &[RuntimeStateSeed { var: "connector_id", value: "$input.id" }],
-        timeline: &[RuntimeTimelineStep { event: "connector.health", after_ms: 0, payload_json: "{\"id\":\"${connector_id}\",\"health\":\"disconnected\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "connector.health", after_ms: 0, payload_json: "{\"id\":\"${connector_id}\",\"health\":\"disconnected\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "connector_list",
         input_command: "connector.list",
         state_seeds: &[],
-        timeline: &[RuntimeTimelineStep { event: "connector.list", after_ms: 0, payload_json: "{\"connectors\":[{\"id\":\"github_default\",\"provider\":\"github\",\"label\":\"Github\",\"health\":\"connected\",\"account\":\"github-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"notion_default\",\"provider\":\"notion\",\"label\":\"Notion\",\"health\":\"connected\",\"account\":\"notion-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"sentry_default\",\"provider\":\"sentry\",\"label\":\"Sentry\",\"health\":\"degraded\",\"account\":\"sentry-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"datadog_default\",\"provider\":\"datadog\",\"label\":\"Datadog\",\"health\":\"connected\",\"account\":\"datadog-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"grafana_default\",\"provider\":\"grafana\",\"label\":\"Grafana\",\"health\":\"connected\",\"account\":\"grafana-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"vercel_default\",\"provider\":\"vercel\",\"label\":\"Vercel\",\"health\":\"connected\",\"account\":\"vercel-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"cloudflare_default\",\"provider\":\"cloudflare\",\"label\":\"Cloudflare\",\"health\":\"connected\",\"account\":\"cloudflare-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"posthog_default\",\"provider\":\"posthog\",\"label\":\"Posthog\",\"health\":\"connected\",\"account\":\"posthog-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"ga4_default\",\"provider\":\"ga4\",\"label\":\"Ga4\",\"health\":\"connected\",\"account\":\"ga4-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"mixpanel_default\",\"provider\":\"mixpanel\",\"label\":\"Mixpanel\",\"health\":\"connected\",\"account\":\"mixpanel-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"snyk_default\",\"provider\":\"snyk\",\"label\":\"Snyk\",\"health\":\"connected\",\"account\":\"snyk-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"dependabot_default\",\"provider\":\"dependabot\",\"label\":\"Dependabot\",\"health\":\"connected\",\"account\":\"dependabot-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"lighthouse_ci_default\",\"provider\":\"lighthouse_ci\",\"label\":\"Lighthouse_ci\",\"health\":\"connected\",\"account\":\"lighthouse_ci-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"pagerduty_default\",\"provider\":\"pagerduty\",\"label\":\"Pagerduty\",\"health\":\"connected\",\"account\":\"pagerduty-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}}]}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "connector.list", after_ms: 0, payload_json: "{\"connectors\":[{\"id\":\"github_default\",\"provider\":\"github\",\"label\":\"Github\",\"health\":\"connected\",\"account\":\"github-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"notion_default\",\"provider\":\"notion\",\"label\":\"Notion\",\"health\":\"connected\",\"account\":\"notion-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"sentry_default\",\"provider\":\"sentry\",\"label\":\"Sentry\",\"health\":\"degraded\",\"account\":\"sentry-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"datadog_default\",\"provider\":\"datadog\",\"label\":\"Datadog\",\"health\":\"connected\",\"account\":\"datadog-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"grafana_default\",\"provider\":\"grafana\",\"label\":\"Grafana\",\"health\":\"connected\",\"account\":\"grafana-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"vercel_default\",\"provider\":\"vercel\",\"label\":\"Vercel\",\"health\":\"connected\",\"account\":\"vercel-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"cloudflare_default\",\"provider\":\"cloudflare\",\"label\":\"Cloudflare\",\"health\":\"connected\",\"account\":\"cloudflare-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"posthog_default\",\"provider\":\"posthog\",\"label\":\"Posthog\",\"health\":\"connected\",\"account\":\"posthog-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"ga4_default\",\"provider\":\"ga4\",\"label\":\"Ga4\",\"health\":\"connected\",\"account\":\"ga4-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"mixpanel_default\",\"provider\":\"mixpanel\",\"label\":\"Mixpanel\",\"health\":\"connected\",\"account\":\"mixpanel-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"snyk_default\",\"provider\":\"snyk\",\"label\":\"Snyk\",\"health\":\"connected\",\"account\":\"snyk-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"dependabot_default\",\"provider\":\"dependabot\",\"label\":\"Dependabot\",\"health\":\"connected\",\"account\":\"dependabot-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"lighthouse_ci_default\",\"provider\":\"lighthouse_ci\",\"label\":\"Lighthouse_ci\",\"health\":\"connected\",\"account\":\"lighthouse_ci-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}},{\"id\":\"pagerduty_default\",\"provider\":\"pagerduty\",\"label\":\"Pagerduty\",\"health\":\"connected\",\"account\":\"pagerduty-account\",\"rate_limit\":{\"remaining\":4800,\"limit\":5000,\"reset_at\":\"2026-04-24T11:00:00Z\"}}]}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "context_mention_search",
         input_command: "context.mention_search",
         state_seeds: &[RuntimeStateSeed { var: "query", value: "$input.query" }, RuntimeStateSeed { var: "results", value: "@mention_search_results" }],
-        timeline: &[RuntimeTimelineStep { event: "context.mention_results", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"query\":\"${query}\",\"results\":${results}}") }],
+        timeline: &[RuntimeTimelineStep { event: "context.mention_results", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"query\":\"${query}\",\"results\":${results}}"), state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
@@ -320,80 +339,94 @@ pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 23] = [
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
+        id: "handoff_approve",
+        input_command: "handoff.approve",
+        state_seeds: &[RuntimeStateSeed { var: "packet_id", value: "$input.packet_id" }, RuntimeStateSeed { var: "approver", value: "$input.approver" }, RuntimeStateSeed { var: "reason", value: "$input.reason|approved" }],
+        timeline: &[RuntimeTimelineStep { event: "handoff.status", after_ms: 0, payload_json: "{\"packet_id\":\"${packet_id}\",\"status\":\"approved\"}", payload_template_json: None, state_seeds_after: &[] }, RuntimeTimelineStep { event: "handoff.upserted", after_ms: 0, payload_json: "{\"packet_id\":\"${packet_id}\",\"status\":\"approved\",\"approval\":{\"required\":true,\"approvers\":[\"${approver}\"],\"approver_notes\":\"${reason}\",\"approved_at\":\"2026-04-24T10:05:00Z\",\"two_party\":false,\"required_roles\":[]},\"signers\":[{\"role\":\"approver\",\"name\":\"${approver}\",\"signed_at\":\"2026-04-24T10:05:00Z\",\"reason\":\"${reason}\"}]}", payload_template_json: None, state_seeds_after: &[] }],
+        final_response_json: Some("{\"ok\":true}"),
+    },
+    RuntimeScenarioEntry {
+        id: "handoff_create",
+        input_command: "handoff.create",
+        state_seeds: &[RuntimeStateSeed { var: "packet_id", value: "@handoff_packet_id" }, RuntimeStateSeed { var: "title", value: "$input.title|Handoff" }, RuntimeStateSeed { var: "summary", value: "$input.summary|Handoff" }, RuntimeStateSeed { var: "author", value: "$input.created_by|author" }, RuntimeStateSeed { var: "created_at", value: "$input.created_at|2026-04-24T10:00:00Z" }, RuntimeStateSeed { var: "source_run_ids", value: "$input_json.source_run_ids|[]" }, RuntimeStateSeed { var: "accepted_finding_ids", value: "$input_json.accepted_finding_ids|[]" }, RuntimeStateSeed { var: "tasks", value: "$input_json.tasks|[]" }, RuntimeStateSeed { var: "order_hint", value: "$input_json.order_hint|[]" }, RuntimeStateSeed { var: "target", value: "$input_json.target|{\"kind\":\"dispatch_to_local_vac\",\"executor_profile_id\":\"executor.code@1.0.0\",\"session_title\":\"Handoff\"}" }, RuntimeStateSeed { var: "approval", value: "$input_json.approval|{\"required\":true,\"approvers\":[],\"two_party\":false,\"required_roles\":[]}" }, RuntimeStateSeed { var: "state_history", value: "$input_json.state_history|[]" }, RuntimeStateSeed { var: "execution_session_id", value: "$input_json.execution_session_id" }, RuntimeStateSeed { var: "repo_ref", value: "@repo_default_repo_ref" }, RuntimeStateSeed { var: "base_commit_sha", value: "@repo_default_base_commit_sha" }, RuntimeStateSeed { var: "worktree_digest", value: "@repo_default_worktree_digest" }],
+        timeline: &[RuntimeTimelineStep { event: "handoff.upserted", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"packet_id\":\"${packet_id}\",\"title\":\"${title}\",\"summary\":\"${summary}\",\"source_run_ids\":${source_run_ids},\"accepted_finding_ids\":${accepted_finding_ids},\"created_by\":\"${author}\",\"created_at\":\"${created_at}\",\"target\":${target},\"status\":\"pending_approval\",\"tasks\":${tasks},\"order_hint\":${order_hint},\"pin\":{\"repo_ref\":\"${repo_ref}\",\"base_commit_sha\":\"${base_commit_sha}\",\"worktree_digest\":\"${worktree_digest}\",\"assessment_snapshot_at\":\"${created_at}\",\"connector_snapshots\":[],\"expires_at\":\"2026-05-01T10:30:00Z\",\"invalidate_on_repo_change\":true,\"invalidation_policy\":\"strict\",\"base_sha\":\"${base_commit_sha}\",\"captured_at\":\"${created_at}\",\"policy\":\"strict\"},\"approval\":${approval},\"signers\":[{\"role\":\"author\",\"name\":\"${author}\",\"signed_at\":\"2026-04-24T10:00:00Z\"}],\"required_signers\":2,\"state_history\":${state_history},\"execution_session_id\":${execution_session_id},\"convergence_count\":0,\"updated_at\":\"${created_at}\"}"), state_seeds_after: &[] }],
+        final_response_json: Some("{\"ok\":true,\"packet_id\":\"${packet_id}\"}"),
+    },
+    RuntimeScenarioEntry {
         id: "handoff_reject",
         input_command: "handoff.reject",
         state_seeds: &[RuntimeStateSeed { var: "packet_id", value: "$input.packet_id" }],
-        timeline: &[RuntimeTimelineStep { event: "handoff.status", after_ms: 0, payload_json: "{\"packet_id\":\"${packet_id}\",\"status\":\"rejected\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "handoff.status", after_ms: 0, payload_json: "{\"packet_id\":\"${packet_id}\",\"status\":\"rejected\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "release_deploy",
         input_command: "release.deploy",
         state_seeds: &[RuntimeStateSeed { var: "deploy_id", value: "@release_deploy_id" }, RuntimeStateSeed { var: "commit", value: "@release_deploy_commit" }, RuntimeStateSeed { var: "target_id", value: "$input.target_id" }],
-        timeline: &[RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deploying\",\"started_at\":\"2026-04-24T10:00:00Z\"}", payload_template_json: None }, RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deployed\",\"started_at\":\"2026-04-24T10:00:00Z\",\"finished_at\":\"2026-04-24T10:00:08Z\"}", payload_template_json: None }, RuntimeTimelineStep { event: "release.post_deploy_observation", after_ms: 0, payload_json: "{\"id\":\"obs_${deploy_id}_1\",\"target_id\":\"${target_id}\",\"connector\":\"sentry\",\"severity\":\"info\",\"message\":\"no new issues in 5-minute window\",\"observed_at\":\"2026-04-24T10:05:00Z\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deploying\",\"started_at\":\"2026-04-24T10:00:00Z\"}", payload_template_json: None, state_seeds_after: &[] }, RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deployed\",\"started_at\":\"2026-04-24T10:00:00Z\",\"finished_at\":\"2026-04-24T10:00:08Z\"}", payload_template_json: None, state_seeds_after: &[] }, RuntimeTimelineStep { event: "release.post_deploy_observation", after_ms: 0, payload_json: "{\"id\":\"obs_${deploy_id}_1\",\"target_id\":\"${target_id}\",\"connector\":\"sentry\",\"severity\":\"info\",\"message\":\"no new issues in 5-minute window\",\"observed_at\":\"2026-04-24T10:05:00Z\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true,\"deploy_id\":\"${deploy_id}\"}"),
     },
     RuntimeScenarioEntry {
         id: "release_generate_notes",
         input_command: "release.generate_notes",
         state_seeds: &[RuntimeStateSeed { var: "target_id", value: "$input.target_id" }, RuntimeStateSeed { var: "notes_id", value: "@release_notes_id" }],
-        timeline: &[RuntimeTimelineStep { event: "release.notes_draft", after_ms: 0, payload_json: "{\"id\":\"${notes_id}\",\"target_id\":\"${target_id}\",\"commit_range\":\"abc1234..def5678\",\"markdown\":\"## What changed\\n\\n- Auto-resolved RTD finding: coverage drift\\n- Handoff pkt_01…: 3 tasks completed\\n\\n## Deploy window\\n\\ncommit range: abc1234..def5678\\n\",\"source_refs\":[{\"kind\":\"commit\",\"ref\":\"abc1234\"},{\"kind\":\"packet\",\"ref\":\"pkt_01\"}],\"generated_at\":\"2026-04-24T10:00:00Z\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "release.notes_draft", after_ms: 0, payload_json: "{\"id\":\"${notes_id}\",\"target_id\":\"${target_id}\",\"commit_range\":\"abc1234..def5678\",\"markdown\":\"## What changed\\n\\n- Auto-resolved RTD finding: coverage drift\\n- Handoff pkt_01…: 3 tasks completed\\n\\n## Deploy window\\n\\ncommit range: abc1234..def5678\\n\",\"source_refs\":[{\"kind\":\"commit\",\"ref\":\"abc1234\"},{\"kind\":\"packet\",\"ref\":\"pkt_01\"}],\"generated_at\":\"2026-04-24T10:00:00Z\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "release_list_targets",
         input_command: "release.list_targets",
         state_seeds: &[],
-        timeline: &[RuntimeTimelineStep { event: "release.targets", after_ms: 0, payload_json: "{\"targets\":[{\"id\":\"staging\",\"label\":\"Staging\",\"environment\":\"staging\",\"last_status\":\"idle\"},{\"id\":\"prod\",\"label\":\"Production\",\"environment\":\"production\",\"last_status\":\"idle\"}]}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "release.targets", after_ms: 0, payload_json: "{\"targets\":[{\"id\":\"staging\",\"label\":\"Staging\",\"environment\":\"staging\",\"last_status\":\"idle\"},{\"id\":\"prod\",\"label\":\"Production\",\"environment\":\"production\",\"last_status\":\"idle\"}]}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "review_open_file",
         input_command: "review.open_file",
         state_seeds: &[RuntimeStateSeed { var: "path", value: "$input.path" }],
-        timeline: &[RuntimeTimelineStep { event: "review.file_diff_chunk", after_ms: 0, payload_json: "{\"path\":\"${path}\",\"unified\":\"--- a/${path}\\n+++ b/${path}\\n@@ -1,3 +1,3 @@\\n-old line\\n+new line\\n unchanged\\n\",\"truncated\":false}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "review.file_diff_chunk", after_ms: 0, payload_json: "{\"path\":\"${path}\",\"unified\":\"--- a/${path}\\n+++ b/${path}\\n@@ -1,3 +1,3 @@\\n-old line\\n+new line\\n unchanged\\n\",\"truncated\":false}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "review_revert_all",
         input_command: "review.revert_all",
         state_seeds: &[],
-        timeline: &[RuntimeTimelineStep { event: "review.changeset_updated", after_ms: 0, payload_json: "{\"files\":[]}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "review.changeset_updated", after_ms: 0, payload_json: "{\"files\":[]}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "review_revert_file",
         input_command: "review.revert_file",
         state_seeds: &[RuntimeStateSeed { var: "path", value: "$input.path" }],
-        timeline: &[RuntimeTimelineStep { event: "review.changeset_updated", after_ms: 0, payload_json: "{\"files\":[],\"reverted_path\":\"${path}\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "review.changeset_updated", after_ms: 0, payload_json: "{\"files\":[],\"reverted_path\":\"${path}\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "runtime_cancel_job",
         input_command: "runtime.cancel_job",
         state_seeds: &[RuntimeStateSeed { var: "job_id", value: "$input.job_id" }],
-        timeline: &[RuntimeTimelineStep { event: "runtime.job.upserted", after_ms: 0, payload_json: "{\"job_id\":\"${job_id}\",\"kind\":\"watcher\",\"label\":\"watcher\",\"status\":\"cancelled\",\"finished_at\":\"2026-04-24T10:05:00Z\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "runtime.job.upserted", after_ms: 0, payload_json: "{\"job_id\":\"${job_id}\",\"kind\":\"watcher\",\"label\":\"watcher\",\"status\":\"cancelled\",\"finished_at\":\"2026-04-24T10:05:00Z\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "session_close",
         input_command: "session.close",
         state_seeds: &[],
-        timeline: &[RuntimeTimelineStep { event: "session.closed", after_ms: 0, payload_json: "{\"reason\":\"user\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "session.closed", after_ms: 0, payload_json: "{\"reason\":\"user\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "shell_basic_output",
         input_command: "shell.start",
         state_seeds: &[RuntimeStateSeed { var: "shell_id", value: "@next_shell_id" }],
-        timeline: &[RuntimeTimelineStep { event: "shell.started", after_ms: 0, payload_json: "{\"shell_id\":\"${shell_id}\"}", payload_template_json: None }, RuntimeTimelineStep { event: "shell.output", after_ms: 0, payload_json: "{\"shell_id\":\"${shell_id}\",\"data\":\"mock-shell $ \"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "shell.started", after_ms: 0, payload_json: "{\"shell_id\":\"${shell_id}\"}", payload_template_json: None, state_seeds_after: &[] }, RuntimeTimelineStep { event: "shell.output", after_ms: 0, payload_json: "{\"shell_id\":\"${shell_id}\",\"data\":\"mock-shell $ \"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true,\"shell_id\":\"${shell_id}\"}"),
     },
     RuntimeScenarioEntry {
         id: "shell_input",
         input_command: "shell.input",
         state_seeds: &[RuntimeStateSeed { var: "shell_id", value: "$input.shell_id" }, RuntimeStateSeed { var: "data", value: "$input.data" }],
-        timeline: &[RuntimeTimelineStep { event: "shell.output", after_ms: 0, payload_json: "{\"shell_id\":\"${shell_id}\",\"data\":\"${data}\"}", payload_template_json: None }],
+        timeline: &[RuntimeTimelineStep { event: "shell.output", after_ms: 0, payload_json: "{\"shell_id\":\"${shell_id}\",\"data\":\"${data}\"}", payload_template_json: None, state_seeds_after: &[] }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {

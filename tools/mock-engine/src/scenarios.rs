@@ -47,6 +47,7 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
     let params = v.get("params").cloned().unwrap_or(Value::Null);
     let bindings = build_bindings(entry, state, &params);
 
+    let mut bindings = bindings;
     let mut out = Vec::with_capacity(entry.timeline.len() + 1);
     for step in entry.timeline {
         // Two render paths:
@@ -65,6 +66,15 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
             render_value(&raw, &bindings)
         };
         out.push(emit_notification(step.event, rendered));
+        // Section A primitive (Pass #33): multi-event ledger.
+        // After rendering this step, evaluate any state_seeds_after directives
+        // and extend the bindings map. Subsequent steps in the same scenario
+        // can reference these additions via ${var}. Useful for counter bumps
+        // mid-timeline or computed derivations from prior payload metadata.
+        for seed in step.state_seeds_after {
+            let val = eval_seed_value(seed.value, state, &params);
+            bindings.insert(seed.var.to_string(), val);
+        }
     }
     let result = if let Some(json_str) = entry.final_response_json {
         let raw: Value = serde_json::from_str(json_str).ok()?;
@@ -76,6 +86,18 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// Mirror of legacy `legacy_scenarios::deterministic_hex` for seed-derived
+/// repo defaults. Used by `@repo_default_*` generators in eval_seed_value.
+fn deterministic_hex_for_seed(seed: u64) -> String {
+    format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        seed,
+        seed ^ 0xaaaa,
+        seed ^ 0x5555,
+        seed ^ 0xffff
+    )
+}
+
 fn build_bindings(
     entry: &RuntimeScenarioEntry,
     state: &mut State,
@@ -83,86 +105,108 @@ fn build_bindings(
 ) -> HashMap<String, String> {
     let mut bindings = HashMap::new();
     for seed in entry.state_seeds {
-        let val = if let Some(generator) = seed.value.strip_prefix('@') {
-            match generator {
-                "next_shell_id" => state.next_shell_id(),
-                "next_msg_id" => state.next_msg_id(),
-                "next_tool_call_id" => state.next_tool_call_id(),
-                "next_job_id" => state.next_job_id(),
-                "session_id" => state.session_id.clone(),
-                // Section A primitive: counter-bumping generator for release.deploy ids.
-                // `@release_deploy_id` mutates state.counter and renders a deterministic
-                // `dep_{seed%10000:0>12}{counter:0>3}` shape (matches legacy contract).
-                "release_deploy_id" => {
-                    state.counter += 1;
-                    format!("dep_{:0>12}{:0>3}", state.seed % 10000, state.counter)
-                }
-                // Read-only counter projection: returns 40-char hex of
-                // `state.counter * 0xDEAD_BEEF` without bumping. Pair with
-                // `@release_deploy_id` placed first in state_seeds so both
-                // bindings derive from the same counter snapshot.
-                "release_deploy_commit" => {
-                    format!("{:040x}", state.counter.wrapping_mul(0xDEAD_BEEF_u64))
-                }
-                // Section A primitive (Pass #30): bumps counter and renders
-                // `notes_{target_id}_{counter}` shape used by release.generate_notes.
-                // Reads target_id from input params (empty if absent, matches legacy).
-                "release_notes_id" => {
-                    state.counter += 1;
-                    let target = params
-                        .get("target_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    format!("notes_{target}_{}", state.counter)
-                }
-                // Section A primitive (Pass #32): query-driven filter generator.
-                // Reads $input.query, applies legacy filter logic over a fixed sample
-                // path set, returns a JSON-array string for embedding via
-                // payload_template_json substitution. Mirrors handle_mention_search
-                // semantics: lowercased substring match on path, descending score by
-                // result index. Empty query matches all samples.
-                "mention_search_results" => {
-                    let query = params
-                        .get("query")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    let samples = [
-                        "src/foo.ts",
-                        "src/main.tsx",
-                        "docs/README.md",
-                        "package.json",
-                    ];
-                    let results: Vec<Value> = samples
-                        .iter()
-                        .filter(|p| query.is_empty() || p.to_lowercase().contains(&query))
-                        .enumerate()
-                        .map(|(i, p)| {
-                            json!({
-                                "id": format!("file:{p}"),
-                                "kind": "file",
-                                "label": p,
-                                "score": 1.0 - (i as f64) * 0.1,
-                                "payload": p
-                            })
-                        })
-                        .collect();
-                    Value::Array(results).to_string()
-                }
-                _ => seed.value.to_string(),
-            }
-        } else if let Some(key) = seed.value.strip_prefix("$input.") {
-            params
-                .get(key)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        } else {
-            seed.value.to_string()
-        };
-        bindings.insert(seed.var.to_string(), val);
+        bindings.insert(
+            seed.var.to_string(),
+            eval_seed_value(seed.value, state, params),
+        );
     }
     bindings
+}
+
+/// Evaluate a single state_seed binding value. Supported syntaxes:
+/// - `@<generator>` — named generator (counter-bumping ids, query-driven results).
+/// - `$input.<key>[|<default>]` — read string param `<key>`; fall back to `<default>` (or empty string).
+/// - `$input_json.<key>[|<default_json>]` — read param `<key>` and JSON-encode it; fall back to `<default_json>` (or `"null"`).
+/// - any other string — used verbatim.
+fn eval_seed_value(seed_value: &str, state: &mut State, params: &Value) -> String {
+    if let Some(generator) = seed_value.strip_prefix('@') {
+        match generator {
+            "next_shell_id" => state.next_shell_id(),
+            "next_msg_id" => state.next_msg_id(),
+            "next_tool_call_id" => state.next_tool_call_id(),
+            "next_job_id" => state.next_job_id(),
+            "session_id" => state.session_id.clone(),
+            "release_deploy_id" => {
+                state.counter += 1;
+                format!("dep_{:0>12}{:0>3}", state.seed % 10000, state.counter)
+            }
+            "release_deploy_commit" => {
+                format!("{:040x}", state.counter.wrapping_mul(0xDEAD_BEEF_u64))
+            }
+            "release_notes_id" => {
+                state.counter += 1;
+                let target = params
+                    .get("target_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                format!("notes_{target}_{}", state.counter)
+            }
+            "mention_search_results" => {
+                let query = params
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let samples = [
+                    "src/foo.ts",
+                    "src/main.tsx",
+                    "docs/README.md",
+                    "package.json",
+                ];
+                let results: Vec<Value> = samples
+                    .iter()
+                    .filter(|p| query.is_empty() || p.to_lowercase().contains(&query))
+                    .enumerate()
+                    .map(|(i, p)| {
+                        json!({
+                            "id": format!("file:{p}"),
+                            "kind": "file",
+                            "label": p,
+                            "score": 1.0 - (i as f64) * 0.1,
+                            "payload": p
+                        })
+                    })
+                    .collect();
+                Value::Array(results).to_string()
+            }
+            // Section A (Pass #33): counter-bumping handoff packet id matching legacy
+            // handle_handoff_create format `pkt_01J{seed%10000:0>20}{counter:0>3}`.
+            "handoff_packet_id" => {
+                state.counter += 1;
+                format!("pkt_01J{:0>20}{:0>3}", state.seed % 10000, state.counter)
+            }
+            // Section A (Pass #33): seed-derived repo defaults matching the
+            // no-project-path branch of legacy_scenarios::repo_context. Used by
+            // handoff.create YAML for default pin fields when operator did not
+            // pass an explicit `pin` param.
+            "repo_default_base_commit_sha" => {
+                deterministic_hex_for_seed(state.seed)[..40].to_string()
+            }
+            "repo_default_repo_ref" => {
+                let sha = deterministic_hex_for_seed(state.seed);
+                format!("sha:{}", &sha[..40])
+            }
+            "repo_default_worktree_digest" => {
+                deterministic_hex_for_seed(state.seed.wrapping_add(1))
+            }
+            _ => seed_value.to_string(),
+        }
+    } else if let Some(rest) = seed_value.strip_prefix("$input_json.") {
+        let (key, default_json) = rest.split_once('|').unwrap_or((rest, "null"));
+        params
+            .get(key)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| default_json.to_string())
+    } else if let Some(rest) = seed_value.strip_prefix("$input.") {
+        let (key, default_str) = rest.split_once('|').unwrap_or((rest, ""));
+        params
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| default_str.to_string())
+    } else {
+        seed_value.to_string()
+    }
 }
 
 fn render_value(v: &Value, bindings: &HashMap<String, String>) -> Value {
@@ -522,6 +566,160 @@ mod tests {
             .iter()
             .all(|r| r["label"].as_str().unwrap().contains("src/")));
         assert_eq!(n2["params"]["query"], "src");
+    }
+
+    #[test]
+    fn handoff_approve_runtime_dispatch_emits_status_then_upserted_with_approval_payload() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":95,"method":"handoff.approve","params":{"packet_id":"pkt_01J_test","approver":"alice","reason":"lgtm"}}"#,
+            &mut state,
+        );
+        // 2 notifications + 1 response.
+        assert_eq!(out.len(), 3);
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "handoff.status");
+        assert_eq!(n0["params"]["packet_id"], "pkt_01J_test");
+        assert_eq!(n0["params"]["status"], "approved");
+        let n1: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(n1["method"], "handoff.upserted");
+        assert_eq!(n1["params"]["packet_id"], "pkt_01J_test");
+        assert_eq!(n1["params"]["status"], "approved");
+        assert_eq!(n1["params"]["approval"]["approvers"][0], "alice");
+        assert_eq!(n1["params"]["approval"]["approver_notes"], "lgtm");
+        assert_eq!(
+            n1["params"]["approval"]["approved_at"],
+            "2026-04-24T10:05:00Z"
+        );
+        assert_eq!(n1["params"]["signers"][0]["role"], "approver");
+        assert_eq!(n1["params"]["signers"][0]["name"], "alice");
+        assert_eq!(n1["params"]["signers"][0]["reason"], "lgtm");
+        let r: Value = serde_json::from_str(&out[2]).unwrap();
+        assert_eq!(r["id"], 95);
+        assert_eq!(r["result"]["ok"], true);
+    }
+
+    #[test]
+    fn handoff_approve_default_reason_is_approved_when_input_omits_reason() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":96,"method":"handoff.approve","params":{"packet_id":"pkt_X","approver":"bob"}}"#,
+            &mut state,
+        );
+        let n1: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(n1["params"]["approval"]["approver_notes"], "approved");
+        assert_eq!(n1["params"]["signers"][0]["reason"], "approved");
+    }
+
+    #[test]
+    fn eval_seed_value_supports_input_default_and_input_json_pass_through() {
+        let mut state = mk_state();
+        let params = serde_json::json!({
+            "name": "alice",
+            "items": [1, 2, 3],
+            "meta": { "k": "v" }
+        });
+        // $input.X with present key returns string.
+        assert_eq!(eval_seed_value("$input.name", &mut state, &params), "alice");
+        // $input.X missing falls back to default.
+        assert_eq!(
+            eval_seed_value("$input.absent|fallback", &mut state, &params),
+            "fallback"
+        );
+        // $input_json.X serialises array as JSON string.
+        assert_eq!(
+            eval_seed_value("$input_json.items", &mut state, &params),
+            "[1,2,3]"
+        );
+        // $input_json.X serialises object.
+        assert_eq!(
+            eval_seed_value("$input_json.meta", &mut state, &params),
+            r#"{"k":"v"}"#
+        );
+        // $input_json.X missing returns "null" by default.
+        assert_eq!(
+            eval_seed_value("$input_json.absent", &mut state, &params),
+            "null"
+        );
+        // $input_json.X with explicit default JSON.
+        assert_eq!(
+            eval_seed_value("$input_json.absent|[]", &mut state, &params),
+            "[]"
+        );
+        // @handoff_packet_id bumps counter and formats deterministically.
+        let pid = eval_seed_value("@handoff_packet_id", &mut state, &params);
+        assert!(pid.starts_with("pkt_01J"), "unexpected pid {pid}");
+        assert_eq!(state.counter, 1);
+        let pid2 = eval_seed_value("@handoff_packet_id", &mut state, &params);
+        assert_ne!(pid, pid2, "counter bumps should produce distinct ids");
+        assert_eq!(state.counter, 2);
+    }
+
+    #[test]
+    fn handoff_create_runtime_dispatch_emits_upserted_with_full_canonical_payload() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":97,"method":"handoff.create","params":{"title":"Test Handoff","created_by":"alice","summary":"Test summary","source_run_ids":["run_1","run_2"],"accepted_finding_ids":["f_1"],"tasks":[{"id":"t1"}],"order_hint":["t1"]}}"#,
+            &mut state,
+        );
+        assert_eq!(
+            out.len(),
+            2,
+            "expected 1 notification + 1 response, got {out:?}"
+        );
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "handoff.upserted");
+        let pid = n0["params"]["packet_id"].as_str().unwrap().to_string();
+        assert!(pid.starts_with("pkt_01J"), "unexpected pid {pid}");
+        assert_eq!(n0["params"]["title"], "Test Handoff");
+        assert_eq!(n0["params"]["summary"], "Test summary");
+        assert_eq!(n0["params"]["created_by"], "alice");
+        assert_eq!(n0["params"]["status"], "pending_approval");
+        assert_eq!(n0["params"]["required_signers"], 2);
+        assert_eq!(n0["params"]["convergence_count"], 0);
+        let signers = n0["params"]["signers"].as_array().unwrap();
+        assert_eq!(signers.len(), 1);
+        assert_eq!(signers[0]["role"], "author");
+        assert_eq!(signers[0]["name"], "alice");
+        let source_run_ids = n0["params"]["source_run_ids"].as_array().unwrap();
+        assert_eq!(
+            source_run_ids.len(),
+            2,
+            "typed JSON-array splice from $input_json"
+        );
+        assert_eq!(source_run_ids[0], "run_1");
+        assert_eq!(source_run_ids[1], "run_2");
+        // Pin block uses seed-derived defaults via @repo_default_* generators.
+        let pin = &n0["params"]["pin"];
+        assert!(pin["repo_ref"].as_str().unwrap().starts_with("sha:"));
+        assert_eq!(pin["invalidation_policy"], "strict");
+        assert_eq!(pin["invalidate_on_repo_change"], true);
+        // Response carries ok + packet_id.
+        let r: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(r["id"], 97);
+        assert_eq!(r["result"]["ok"], true);
+        assert_eq!(r["result"]["packet_id"], pid);
+    }
+
+    #[test]
+    fn handoff_create_default_target_and_approval_used_when_input_omits_them() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":98,"method":"handoff.create","params":{"title":"X","created_by":"bob"}}"#,
+            &mut state,
+        );
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        let target = &n0["params"]["target"];
+        assert_eq!(target["kind"], "dispatch_to_local_vac");
+        assert_eq!(target["executor_profile_id"], "executor.code@1.0.0");
+        let approval = &n0["params"]["approval"];
+        assert_eq!(approval["required"], true);
+        assert_eq!(approval["two_party"], false);
+        // Empty arrays default for omitted fields.
+        assert_eq!(n0["params"]["source_run_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(n0["params"]["tasks"].as_array().unwrap().len(), 0);
+        // execution_session_id null when omitted.
+        assert!(n0["params"]["execution_session_id"].is_null());
     }
 
     #[test]
