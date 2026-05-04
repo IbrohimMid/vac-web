@@ -50,6 +50,9 @@ const ALLOWED_GENERATORS = new Set([
 	'repo_default_base_commit_sha',
 	'repo_default_repo_ref',
 	'repo_default_worktree_digest',
+	// Pass #34: handoff.dispatch_local conditional branching primitives.
+	'executor_session_id',
+	'handoff_dispatch_outcome',
 ]);
 
 function loadScenarios() {
@@ -104,6 +107,29 @@ function validate({ file, doc }) {
 	}
 	if (doc.final_response !== undefined && (typeof doc.final_response !== 'object' || Array.isArray(doc.final_response))) {
 		errs.push(`${file}: 'final_response' must be an object`);
+	}
+	// Pass #34: validate optional `condition` block on each timeline step.
+	// Single-equality only — { binding: string, equals: string }. No operators.
+	if (Array.isArray(doc.timeline)) {
+		for (let i = 0; i < doc.timeline.length; i++) {
+			const step = doc.timeline[i];
+			if (!step || step.condition === undefined) continue;
+			if (typeof step.condition !== 'object' || Array.isArray(step.condition)) {
+				errs.push(`${file}: timeline[${i}].condition must be an object`);
+				continue;
+			}
+			if (typeof step.condition.binding !== 'string') {
+				errs.push(`${file}: timeline[${i}].condition.binding must be a string`);
+			}
+			if (typeof step.condition.equals !== 'string') {
+				errs.push(`${file}: timeline[${i}].condition.equals must be a string`);
+			}
+			for (const k of Object.keys(step.condition)) {
+				if (k !== 'binding' && k !== 'equals') {
+					errs.push(`${file}: timeline[${i}].condition unknown key '${k}'; allowed: binding, equals`);
+				}
+			}
+		}
 	}
 	return errs;
 }
@@ -184,6 +210,10 @@ function render(scenarios) {
 	lines.push('    /// Multi-event ledger (Pass #33): bindings to insert AFTER this step is rendered.');
 	lines.push('    /// Subsequent steps see these in their bindings map.');
 	lines.push('    pub state_seeds_after: &\'static [RuntimeStateSeed],');
+	lines.push('    /// Pass #34: optional single-equality skip primitive. When Some, the step is emitted');
+	lines.push('    /// only if `bindings[condition.binding] == condition.equals` at dispatch time.');
+	lines.push('    /// Missing bindings compare against the empty string. No operators, no nesting.');
+	lines.push('    pub condition: Option<RuntimeStepCondition>,');
 	lines.push('}');
 	lines.push('');
 	lines.push('#[derive(Debug, Clone, Copy)]');
@@ -191,6 +221,12 @@ function render(scenarios) {
 	lines.push('    pub var: &\'static str,');
 	lines.push('    /// Either a literal string (used verbatim) or `@generator` (e.g. `@next_shell_id`).');
 	lines.push('    pub value: &\'static str,');
+	lines.push('}');
+	lines.push('');
+	lines.push('#[derive(Debug, Clone, Copy)]');
+	lines.push('pub struct RuntimeStepCondition {');
+	lines.push('    pub binding: &\'static str,');
+	lines.push('    pub equals: &\'static str,');
 	lines.push('}');
 	lines.push('');
 	lines.push('#[derive(Debug, Clone, Copy)]');
@@ -218,7 +254,10 @@ function render(scenarios) {
 				const seedsAfter = Object.entries(t.state_seeds_after ?? {})
 					.map(([k, v]) => `RuntimeStateSeed { var: "${rustEscape(k)}", value: "${rustEscape(v)}" }`)
 					.join(', ');
-				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}", payload_template_json: ${payloadTemplateField}, state_seeds_after: &[${seedsAfter}] }`;
+				const conditionField = t.condition
+					? `Some(RuntimeStepCondition { binding: "${rustEscape(t.condition.binding)}", equals: "${rustEscape(t.condition.equals)}" })`
+					: 'None';
+				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}", payload_template_json: ${payloadTemplateField}, state_seeds_after: &[${seedsAfter}], condition: ${conditionField} }`;
 			})
 			.join(', ');
 		const finalResp = doc.final_response

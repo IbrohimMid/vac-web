@@ -1,0 +1,54 @@
+scenario: handoff_dispatch_local
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  pid: "$input.packet_id"
+  exec_sid: "@executor_session_id"
+  branch: "@handoff_dispatch_outcome"
+input:
+  command: handoff.dispatch_local
+  payload:
+    packet_id: "<packet id, e.g. pkt_01J...>"
+    force_failure: "<optional bool; true triggers failure branch>"
+    mode: "<optional 'fail' alias for force_failure>"
+timeline:
+  - event: handoff.execution_progress
+    after_ms: 0
+    payload_template: '{"packet_id":"${pid}","executor_session_id":"${exec_sid}","task_id":"t1","current_task":"t1","status":"started","completed":0,"total":1}'
+  - event: handoff.execution_progress
+    after_ms: 0
+    condition:
+      binding: branch
+      equals: success
+    payload_template: '{"packet_id":"${pid}","executor_session_id":"${exec_sid}","task_id":"t1","current_task":"t1","status":"completed","completed":1,"total":1}'
+  - event: handoff.completed
+    after_ms: 0
+    condition:
+      binding: branch
+      equals: success
+    payload_template: '{"packet_id":"${pid}","executor_session_id":"${exec_sid}","status":"completed","outcome":{"status":"success","tasks_completed":["t1"],"tasks_failed":[],"changeset_summary":"mock execution complete"}}'
+  - event: handoff.upserted
+    after_ms: 0
+    condition:
+      binding: branch
+      equals: success
+    payload_template: '{"packet_id":"${pid}","status":"completed","execution_session_id":"${exec_sid}","execution_outcome":{"status":"success","tasks_completed":["t1"],"tasks_failed":[],"changeset_summary":"mock execution complete"}}'
+  - event: handoff.failed
+    after_ms: 0
+    condition:
+      binding: branch
+      equals: failure
+    payload_template: '{"packet_id":"${pid}","executor_session_id":"${exec_sid}","status":"failed","outcome":{"status":"failed","tasks_completed":[],"tasks_failed":["t1"],"changeset_summary":"mock execution failed"}}'
+  - event: handoff.upserted
+    after_ms: 0
+    condition:
+      binding: branch
+      equals: failure
+    payload_template: '{"packet_id":"${pid}","status":"failed","execution_session_id":"${exec_sid}","execution_outcome":{"status":"failed","tasks_completed":[],"tasks_failed":["t1"],"changeset_summary":"mock execution failed"}}'
+final_response:
+  ok: true
+  executor_session_id: "${exec_sid}"
+assertions:
+  - "emits handoff.execution_progress (status=started) followed by branch-specific events: success branch yields a second execution_progress (status=completed) + handoff.completed + handoff.upserted (status=completed); failure branch yields handoff.failed + handoff.upserted (status=failed)"
+  - "branch resolved by @handoff_dispatch_outcome generator inspecting params: returns 'failure' when force_failure==true OR mode=='fail', else 'success'; YAML steps select via condition.equals binding match"
+  - "port of legacy handle_handoff_dispatch via Pass #34 single-equality condition primitive plus @executor_session_id counter generator (mirrors legacy exec_sid format)"

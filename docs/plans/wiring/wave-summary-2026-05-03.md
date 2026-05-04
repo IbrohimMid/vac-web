@@ -2624,3 +2624,79 @@ Extracted single-seed evaluation into a free function `eval_seed_value(seed_valu
 ### UX impact
 
 Zero behaviour change for canonical fields. `handoff.upserted` (from both create & approve) and `handoff.status` events emit with shapes byte-identical to legacy for the typical operator-supplied input. Documented deviations only manifest for malformed input (empty / missing keys); cockpit operator surfaces stay byte-identical.
+
+## Pass #34 — Conditional skip primitive + handoff.dispatch_local ported (2026-05-04)
+
+**Scope**: implement single-equality conditional branching (Primitive 4; Pass #28 had deferred this as Non-goal) and complete the sixth Section A handler port. Section A progress: **6 / 8 ported**.
+
+### Primitives implemented
+
+**Primitive 4 — Conditional skip on timeline step**: optional `condition: { binding, equals }` on each timeline step. Codegen emits `condition: Option<RuntimeStepCondition>` on `RuntimeTimelineStep`. At dispatch, before rendering each step:
+
+```rust
+if let Some(cond) = step.condition {
+    let actual = bindings.get(cond.binding).map(String::as_str).unwrap_or("");
+    if actual != cond.equals { continue; }
+}
+```
+
+Skipped steps emit no event. Bindings unchanged. Single-equality only — no `not_equals`, `equals_any`, `&&`, `||`, function calls, or nested expressions. Codegen validates condition shape (exactly two keys; both string-typed).
+
+### Domain-specific generators
+
+- `@executor_session_id` — counter-bumping format `exec_{seed%10000:0>12}{counter:0>3}` matching legacy `handle_handoff_dispatch`.
+- `@handoff_dispatch_outcome` — reads `params.force_failure: bool` and `params.mode == "fail"` alias; returns `failure` if either truthy, else `success`. Domain-specific (not generic `@dispatch_outcome`); future per-handler outcome generators follow the same pattern.
+
+### Port: handoff.dispatch_local
+
+- 6 timeline steps:
+  1. `handoff.execution_progress` (started, completed=0/total=1) — common, no condition.
+  2. `handoff.execution_progress` (completed, completed=1/total=1) — `condition: branch=success`.
+  3. `handoff.completed` (status=completed) — `condition: branch=success`.
+  4. `handoff.upserted` (full canonical payload, status=completed) — `condition: branch=success`.
+  5. `handoff.failed` (reason=executor_failed) — `condition: branch=failure`.
+  6. `handoff.upserted` (status=failed, no executor_session_id) — `condition: branch=failure`.
+- All payloads use `payload_template_json` for typed `${pid}` / `${exec_sid}` substitution.
+- Final response: `{ ok: true, executor_session_id: "${exec_sid}" }`.
+- Legacy fn `handle_handoff_dispatch` (106 lines) dropped; dispatch arm replaced with comment marker.
+
+### Files touched
+
+- `tools/mock-engine/src/scenarios.rs`: 2 generator branches (`@executor_session_id`, `@handoff_dispatch_outcome`); condition skip in `try_runtime_dispatch`; 3 integration tests.
+- `scripts/codegen-mock-scenarios.mjs`: extended `RuntimeTimelineStep` + new `RuntimeStepCondition` struct emit; 2 new generators in `ALLOWED_GENERATORS`; condition shape validation.
+- `tools/mock-engine/scenarios/handoff-dispatch-local.yaml`: new scenario, 6 conditional timeline steps.
+- `tools/mock-engine/src/legacy_scenarios.rs`: dropped dispatch arm + `fn handle_handoff_dispatch` (106 lines). File 951 lines (was 1057, −106).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated — 27 scenarios, 26 runtime-dispatched (was 26 / 25).
+- `docs/plans/wiring/section-a-resolver-extensions-design.md`: Primitive 4 section added; Non-goals item updated to reference Pass #34 single-equality landing.
+
+### Validation gate (all green)
+
+- `cargo build -p mock-engine`: clean (1 pre-existing dead_code warning on legacy `RepoContext` struct).
+- `cargo test -p mock-engine`: **31 / 0** (was 28/0; +3 tests).
+- `cargo test -p local-bridge --lib`: 351 / 0.
+- `cargo test -p local-bridge --test event_catalog_parity`: 7 / 0.
+- `cargo fmt --all -- --check`: clean.
+- `bash scripts/verify-codegen.sh`: OK.
+- `node scripts/check-architecture-boundaries.mjs`: ok (264 / 817 / 211).
+- `git diff --check`: clean.
+
+### Architecture invariants preserved
+
+- YAML stays declarative: event order, names, payload template, condition skip — nothing more.
+- Rust runtime stays source of truth: reads params, evaluates outcome via generator, generates `executor_session_id`, evaluates condition, emits events.
+- 25 prior runtime-dispatched scenarios untouched (default `condition: None` is a no-op).
+- Single-equality only — no expression engine. Codegen rejects extra keys, non-string values.
+- Legacy fallback path still works (`unknown_command_falls_through_to_legacy` test passes).
+
+### Remaining Section A work (2 of 8)
+
+- `assessment.run` (~290 lines legacy) — needs ledger + condition + possibly evidence-stream DSL. Likely Pass #35-36.
+- `message.submit` (~175 lines legacy + 106 lines helper) — largest tree, branches on packet detection + tool_call lifecycle. Likely Pass #37+.
+
+### UX impact
+
+Zero behaviour regression. `handoff.dispatch_local` mock flow emits the same observable success/failure lifecycle as legacy:
+- success: `started` → `completed_progress` → `handoff.completed` → `handoff.upserted(completed)` → response.
+- failure (`force_failure: true` or `mode: "fail"`): `started` → `handoff.failed` → `handoff.upserted(failed)` → response.
+
+Now sourced from YAML/runtime-dispatched scenario via condition primitive. Reduced imperative mock surface; tighter audit trail. Cockpit handoff dispatch interaction byte-identical.

@@ -176,6 +176,88 @@ The DSL must be auditable in CI. A general-purpose evaluator (Lua, Rhai, etc.) w
 - `filter_emits_full_haystack_on_empty_query`
 - `filter_substring_matches_are_case_sensitive`
 
+## Primitive 4 — Conditional skip primitive (Pass #34, single-equality)
+
+### Why
+
+`handoff.dispatch_local` branches on operator input into success/failure event sequences sharing only the initial `started` emit. Without a conditional primitive, branching ports stay imperative or duplicate common-prefix steps across two YAML files — neither acceptable.
+
+Pass #28 originally listed conditional branching as a Non-goal pending a dedicated design pass. Pass #34 promotes it with a deliberately minimal contract: single-equality only, no expression engine.
+
+### Spec
+
+Optional `condition: { binding, equals }` field on each timeline step. Both keys required, both string-typed. Codegen rejects extra keys or non-string values.
+
+### Dispatch semantics
+
+In `try_runtime_dispatch`, before rendering each step:
+
+```rust
+if let Some(cond) = step.condition {
+    let actual = bindings.get(cond.binding).map(String::as_str).unwrap_or("");
+    if actual != cond.equals { continue; }
+}
+```
+
+Skipped steps emit no event and do not run their `state_seeds_after`. Bindings remain unchanged across a skip. Unset (or non-string) bindings compare against the empty string — an unset binding never satisfies a non-empty `equals` clause.
+
+### Codegen impact
+
+`scenario_catalog.rs` `RuntimeTimelineStep` gains an optional field:
+
+```rust
+pub condition: Option<RuntimeStepCondition>,
+
+pub struct RuntimeStepCondition {
+    pub binding: &'static str,
+    pub equals: &'static str,
+}
+```
+
+Default `None` for the 25 prior runtime-dispatched scenarios — no behaviour change.
+
+`scripts/codegen-mock-scenarios.mjs` validates the YAML `condition` block: must be an object with exactly the keys `binding` and `equals`, both string-typed. Any other shape errors out at codegen time.
+
+### YAML example (handoff.dispatch_local)
+
+```yaml
+state_seeds:
+  pid: '$input.packet_id'
+  exec_sid: '@executor_session_id'
+  branch: '@handoff_dispatch_outcome'
+timeline:
+  - event: handoff.execution_progress       # common prefix, no condition
+    payload_template: '{"packet_id":"${pid}","executor_session_id":"${exec_sid}","status":"started"}'
+  - event: handoff.completed
+    condition: { binding: branch, equals: success }
+    payload_template: '{"packet_id":"${pid}","executor_session_id":"${exec_sid}","status":"completed"}'
+  - event: handoff.failed
+    condition: { binding: branch, equals: failure }
+    payload_template: '{"packet_id":"${pid}","reason":"executor_failed"}'
+```
+
+`@handoff_dispatch_outcome` reads `params.force_failure: bool` and the `params.mode == "fail"` alias; returns `success` or `failure`. Branch decided once at scenario start and captured in the `branch` binding.
+
+### Why so restricted
+
+1. **Audit boundary** — single-equality is grep-decidable. A general-purpose grammar (boolean operators, nested expressions, function calls) makes the YAML control plane Turing-equivalent in practice.
+2. **Source-of-truth invariant** — the Rust runtime decides the *outcome* (via `@handoff_dispatch_outcome` generator); YAML only decides the *order and skip-set* of pre-declared events given that outcome. Adding `&&` or function calls would let YAML compute its own outcomes, which inverts the boundary.
+3. **Force a design pass for richer needs** — the next handler that genuinely needs `not_equals` or boolean composition triggers a fresh design pass and a separate primitive (not an ad-hoc extension to this one). Same anti-creep policy Pass #28 applies to the filter DSL grammar.
+
+### Generator naming for branch outcomes
+
+Pass #34 introduces `@handoff_dispatch_outcome` (domain-specific) rather than a generic `@dispatch_outcome` or `@branch`. Rationale:
+
+- Domain-specific names make the audit trail clearer: `grep handoff_dispatch_outcome` finds exactly the handlers that branch on dispatch outcome.
+- Generic primitives drift toward mini expression engines as soon as a second handler reuses them with slightly different semantics.
+- Future per-handler outcome generators follow the same pattern: `@assessment_run_outcome` (verdict computation in `assessment.run`), `@message_submit_packet_kind` (packet-detection branching in `message.submit`), etc.
+
+### Tests
+
+- `handoff_dispatch_local_runtime_dispatch_success_branch_emits_full_progress_completed_upserted` — default params; expects 4 events + final response.
+- `handoff_dispatch_local_runtime_dispatch_failure_branch_via_force_failure_param` — `force_failure: true`; expects 3 events + final response.
+- `handoff_dispatch_local_failure_branch_via_mode_fail_alias` — `mode: "fail"`; verifies first non-progress event is `handoff.failed`.
+
 ## Migration plan (per-handler order)
 
 Once primitives land, port handlers from simplest to heaviest:
@@ -206,7 +288,7 @@ Once primitives land, port handlers from simplest to heaviest:
 
 ## Non-goals
 
-- General-purpose conditional branching (`if/else`) in YAML. If a handler needs it, port stays in `legacy_scenarios.rs` until a dedicated conditional primitive design pass.
+- Rich conditional grammar (`if/else`, `not_equals`, `equals_any`, `&&`, `||`, function calls, nested expressions) in YAML. Pass #34 introduced **Primitive 4** (above) as a deliberately minimal single-equality skip primitive (`condition: { binding, equals }`) — sufficient for `handoff.dispatch_local`. Anything richer triggers a fresh design pass and a separate primitive, never an ad-hoc grammar extension.
 - Macros / template inheritance. Each scenario is self-contained.
 - Cross-scenario state. Each scenario gets a fresh `State` via `mk_state` per dispatch.
 

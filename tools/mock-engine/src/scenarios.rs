@@ -50,6 +50,18 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
     let mut bindings = bindings;
     let mut out = Vec::with_capacity(entry.timeline.len() + 1);
     for step in entry.timeline {
+        // Pass #34: single-equality skip primitive (conditional branching).
+        // When `condition` is set, the step is emitted only if
+        // `bindings[condition.binding] == condition.equals`. Missing binding compares
+        // against the empty string. No operators, no nesting — entire authority for
+        // branch resolution lives in generators (e.g. @handoff_dispatch_outcome) which
+        // produce the binding value; YAML only declares which literal triggers the step.
+        if let Some(cond) = step.condition {
+            let actual = bindings.get(cond.binding).map(String::as_str).unwrap_or("");
+            if actual != cond.equals {
+                continue;
+            }
+        }
         // Two render paths:
         //  (a) payload_template_json is Some: substitute ${var} placeholders
         //      directly in the raw JSON template string, then parse. Lets typed
@@ -188,6 +200,34 @@ fn eval_seed_value(seed_value: &str, state: &mut State, params: &Value) -> Strin
             }
             "repo_default_worktree_digest" => {
                 deterministic_hex_for_seed(state.seed.wrapping_add(1))
+            }
+            // Section A (Pass #34): conditional branching primitives for handoff.dispatch_local.
+            // `executor_session_id` mirrors the legacy format
+            // `format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter)` and bumps the counter
+            // once per scenario dispatch.
+            "executor_session_id" => {
+                state.counter += 1;
+                format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter)
+            }
+            // `handoff_dispatch_outcome` inspects request params and returns the literal string
+            // "failure" when params.force_failure==true OR params.mode=="fail"; otherwise "success".
+            // YAML timeline steps then key off this binding via `condition: { binding, equals }`.
+            // Branch authority lives in this generator (Rust runtime), NOT in YAML.
+            "handoff_dispatch_outcome" => {
+                let force = params
+                    .get("force_failure")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    || params
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .map(|m| m == "fail")
+                        .unwrap_or(false);
+                if force {
+                    "failure".to_string()
+                } else {
+                    "success".to_string()
+                }
             }
             _ => seed_value.to_string(),
         }
@@ -737,5 +777,114 @@ mod tests {
         assert_eq!(out["chunks"][0], "sh_01-a");
         assert_eq!(out["meta"]["key"], "sh_01");
         assert_eq!(out["count"], 3);
+    }
+
+    #[test]
+    fn handoff_dispatch_local_runtime_dispatch_success_branch_emits_full_progress_completed_upserted(
+    ) {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":99,"method":"handoff.dispatch_local","params":{"packet_id":"pkt_dispatch_test"}}"#,
+            &mut state,
+        );
+        // Success branch: started + completed_progress + completed + upserted + response = 5.
+        assert_eq!(
+            out.len(),
+            5,
+            "expected 4 notifications + 1 response on success, got {out:?}"
+        );
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "handoff.execution_progress");
+        assert_eq!(n0["params"]["packet_id"], "pkt_dispatch_test");
+        assert_eq!(n0["params"]["status"], "started");
+        assert_eq!(n0["params"]["completed"], 0);
+        assert_eq!(n0["params"]["total"], 1);
+        let exec_sid = n0["params"]["executor_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            exec_sid.starts_with("exec_"),
+            "unexpected exec_sid {exec_sid}"
+        );
+        let n1: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(n1["method"], "handoff.execution_progress");
+        assert_eq!(n1["params"]["status"], "completed");
+        assert_eq!(n1["params"]["executor_session_id"], exec_sid);
+        assert_eq!(n1["params"]["completed"], 1);
+        let n2: Value = serde_json::from_str(&out[2]).unwrap();
+        assert_eq!(n2["method"], "handoff.completed");
+        assert_eq!(n2["params"]["status"], "completed");
+        assert_eq!(n2["params"]["outcome"]["status"], "success");
+        assert_eq!(n2["params"]["outcome"]["tasks_completed"][0], "t1");
+        assert!(n2["params"]["outcome"]["tasks_failed"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let n3: Value = serde_json::from_str(&out[3]).unwrap();
+        assert_eq!(n3["method"], "handoff.upserted");
+        assert_eq!(n3["params"]["status"], "completed");
+        assert_eq!(n3["params"]["execution_session_id"], exec_sid);
+        assert_eq!(n3["params"]["execution_outcome"]["status"], "success");
+        let r: Value = serde_json::from_str(&out[4]).unwrap();
+        assert_eq!(r["id"], 99);
+        assert_eq!(r["result"]["ok"], true);
+        assert_eq!(r["result"]["executor_session_id"], exec_sid);
+    }
+
+    #[test]
+    fn handoff_dispatch_local_runtime_dispatch_failure_branch_via_force_failure_param() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":100,"method":"handoff.dispatch_local","params":{"packet_id":"pkt_fail","force_failure":true}}"#,
+            &mut state,
+        );
+        // Failure branch: started + failed + upserted + response = 4.
+        assert_eq!(
+            out.len(),
+            4,
+            "expected 3 notifications + 1 response on failure, got {out:?}"
+        );
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "handoff.execution_progress");
+        assert_eq!(n0["params"]["status"], "started");
+        let exec_sid = n0["params"]["executor_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let n1: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(n1["method"], "handoff.failed");
+        assert_eq!(n1["params"]["packet_id"], "pkt_fail");
+        assert_eq!(n1["params"]["status"], "failed");
+        assert_eq!(n1["params"]["outcome"]["status"], "failed");
+        assert_eq!(n1["params"]["outcome"]["tasks_failed"][0], "t1");
+        assert!(n1["params"]["outcome"]["tasks_completed"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(n1["params"]["executor_session_id"], exec_sid);
+        let n2: Value = serde_json::from_str(&out[2]).unwrap();
+        assert_eq!(n2["method"], "handoff.upserted");
+        assert_eq!(n2["params"]["status"], "failed");
+        assert_eq!(n2["params"]["execution_outcome"]["status"], "failed");
+        assert_eq!(n2["params"]["execution_session_id"], exec_sid);
+        let r: Value = serde_json::from_str(&out[3]).unwrap();
+        assert_eq!(r["id"], 100);
+        assert_eq!(r["result"]["ok"], true);
+        assert_eq!(r["result"]["executor_session_id"], exec_sid);
+    }
+
+    #[test]
+    fn handoff_dispatch_local_failure_branch_via_mode_fail_alias() {
+        // Confirms `mode: "fail"` aliases to force_failure=true (legacy parity).
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":101,"method":"handoff.dispatch_local","params":{"packet_id":"pkt_fail2","mode":"fail"}}"#,
+            &mut state,
+        );
+        assert_eq!(out.len(), 4, "mode=fail should trigger failure branch");
+        let n1: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(n1["method"], "handoff.failed");
+        assert_eq!(n1["params"]["status"], "failed");
     }
 }
