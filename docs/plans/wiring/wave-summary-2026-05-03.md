@@ -2442,3 +2442,72 @@ Non-goals: general-purpose conditionals, macros, cross-scenario state. Deliberat
 **Remaining Section A work** (handlers still in `legacy_scenarios.rs`): 7 of 8 — `message.submit`, `context.mention_search`, `assessment.run`, `handoff.create`, `handoff.approve`, `handoff.dispatch_local`, `release.generate_notes`. Next likely port: `release.generate_notes` (reuses same hash primitive, simplest of remaining). Multi-event ledger + filtering DSL impl deferred to follow-on passes.
 
 **UX impact**: zero user-facing behaviour change — emitted events for `release.deploy` are byte-identical in shape to legacy (same method names, payload keys, ordering). What changes: deploy_id format derives from counter snapshot (slightly different commit hex due to read-after-bump rather than read-once-shared, both 40-char lowercase hex; collision probability remains negligible for mock-only). Operator-facing release cockpit will see no regression.
+
+## Pass #30 — release.generate_notes ported to YAML (2026-05-04)
+
+**Scope**: second handler ported from `tools/mock-engine/src/legacy_scenarios.rs` to runtime-dispatched YAML, reusing the counter-based hash pattern from Pass #29. Section A progress: **2 / 8 ported**.
+
+**Files touched** (4 modified, 1 added):
+
+- `tools/mock-engine/src/scenarios.rs`: added `@release_notes_id` generator branch in `build_bindings` — bumps `state.counter`, reads `target_id` from input params (matches legacy's empty-default behaviour), formats `notes_{target_id}_{counter}`. Added integration test `release_generate_notes_runtime_dispatch_emits_notes_draft_then_response` verifying 1 notification + 1 response with deterministic notes_id, canonical markdown body, and 2 source_refs.
+- `scripts/codegen-mock-scenarios.mjs`: extended `ALLOWED_GENERATORS` set with `release_notes_id`.
+- `tools/mock-engine/scenarios/release-generate-notes.yaml`: new 28-line scenario. State_seeds: `target_id: $input.target_id`, `notes_id: @release_notes_id`. Single `release.notes_draft` event with markdown literal byte-identical to legacy fixture. Final response `{ ok: true }`.
+- `tools/mock-engine/src/legacy_scenarios.rs`: dropped `release.generate_notes` dispatch arm and `fn handle_release_notes` (36 lines). File now 1313 lines (was 1351, −38).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated — 23 scenarios, 22 runtime-dispatched (was 22 / 21).
+
+**Validation gate** (all green):
+
+- `cargo test -p mock-engine`: 22/0 (was 21/0; +1 from new test).
+- `cargo test -p local-bridge --lib`: 351/0.
+- `cargo test -p local-bridge --test event_catalog_parity`: 7/0.
+- `cargo fmt --all -- --check`: clean.
+- `node scripts/check-architecture-boundaries.mjs`: ok (264 / 817 / 211).
+- `bash scripts/verify-codegen.sh`: OK — generated code matches committed.
+
+**Lessons learned for follow-on ports**:
+
+1. **YAML reserved indicators**: line continuations starting with `@` inside block sequences are parsed as YAML alias indicators. Always quote assertion strings that might wrap onto a continuation line beginning with `@`, `&`, `*`, `?`, `:`, `-`. (Hit during Pass #30 codegen.)
+2. **state_seeds binding order**: js-yaml preserves insertion order; codegen iterates `Object.entries`. Generators that bump counter must be ordered consistently with downstream readers (e.g., `@release_notes_id` first, then `${notes_id}` references).
+3. **Generator `params` access**: generators can read scenario input params directly, no need to thread bindings.
+
+**UX impact**: zero behaviour change. `release.notes_draft` event emitted with identical shape (markdown body, 2 source_refs, generated_at timestamp). Operator-facing release tab "Generate notes" interaction stays byte-identical.
+
+## Pass #31 — Section A backlog refinement + remaining work scope (docs-only, 2026-05-04)
+
+Cumulative Section A progress after Pass #29 + #30:
+
+```
+ported    : 2 / 8 ✅ (release.deploy, release.generate_notes)
+remaining : 6 / 8 (context.mention_search, handoff.create, handoff.approve,
+                   handoff.dispatch_local, assessment.run, message.submit)
+```
+
+Refinements to `docs/plans/wiring/section-a-resolver-extensions-design.md`:
+
+**Filter DSL gap surfaced during Pass #31 scoping**: `context.mention_search` requires emitting a JSON array of computed objects (filtered samples with per-result scoring). The current `render_value` path parses payload JSON first, then walks the parsed `Value` substituting string-typed bindings via `render_string`. A binding holding a JSON-encoded array string cannot be embedded as a real array — it becomes a string-encoded blob.
+
+Two viable design options for follow-on Pass #32+:
+
+1. **Pre-parse substitution** — Add an alternate `RuntimeTimelineStep` variant carrying `payload_template_json: &'static str`, where `${var}` is substituted in the raw JSON string *before* `serde_json::from_str`. This lets typed JSON-array bindings splice in cleanly. Cost: extension to `scenario_catalog.rs` codegen + a new scenarios.rs render path. Preserves existing payload-parse semantics for current 22 scenarios.
+2. **Typed bindings** — Change `bindings: HashMap<String, String>` to `HashMap<String, serde_json::Value>`. `render_value` walks parsed Value and replaces `${var}` matches with the binding's typed Value (string → splice-into-string, object/array → replace-whole-Value). More invasive but more general. Cost: rewrite `render_string` + `render_value` to handle typed merges.
+
+Recommend option 1 for `context.mention_search` since it requires only a parser-level diff; option 2 stays as a longer-term refactor if more handlers need typed binding support.
+
+**Multi-event ledger gap surfaced**: `handoff.create` emits 3-5 events where each event payload depends on state computed from the prior event (signers list, required_signers count, dispatch_eligible flag, etc.). Design doc spec for `state_seeds_after` (Pass #28) is sound but not yet implemented. Concrete next step is to add `state_seeds_after: &'static [SeedDirective]` to `RuntimeTimelineStep` and re-run `eval_seeds_after(step, &mut bindings, state)` in `try_runtime_dispatch` between steps. Estimated impl effort: ~80 LOC in scenarios.rs + ~30 LOC in codegen + ~120 LOC across 3 handoff YAML scenarios.
+
+**Branching gap surfaced**: `handoff.dispatch_local` and `assessment.run` both branch on operator inputs (success/fail/skip paths; per-rubric verdict computation). Pass #28 design doc explicitly defers conditional branching as a non-goal; decision held. Both handlers stay in `legacy_scenarios.rs` until a dedicated conditional primitive design pass.
+
+**Scope honesty for `message.submit`**: legacy handler is 69 lines + 106-line `handle_handoff_message_submit` helper (totals 175 lines), emits a tree of `tool_call.*`, `handoff.execution_progress`, `handoff.completed` events, branches on packet detection. Honest estimate: needs all 3 primitives (filter DSL not strictly required, but typed bindings yes; multi-event ledger yes; conditional branching yes) + a transcript/tool-call DSL design pass. Estimated minimum 4-5 follow-on passes before viable port.
+
+**Final remaining-work table**:
+
+| Handler | Primitives Required | Estimated Effort | Order |
+|---------|--------------------|--------------------|-------|
+| `context.mention_search` | filter DSL (option 1 or 2) | 1 pass | next |
+| `handoff.create` | multi-event ledger | 1-2 passes | after filter |
+| `handoff.approve` | multi-event ledger | 1 pass | after create |
+| `handoff.dispatch_local` | ledger + counter + conditional | 2 passes | after approve |
+| `assessment.run` | ledger + counter + evidence stream + conditional | 3 passes | after dispatch |
+| `message.submit` | all of the above + transcript tree DSL | 4-5 passes | last |
+
+**UX impact**: design refinement makes the remaining ports implementation-ready; no operator-facing behaviour change today.
