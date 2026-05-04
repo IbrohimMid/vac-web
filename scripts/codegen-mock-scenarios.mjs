@@ -45,6 +45,7 @@ const ALLOWED_GENERATORS = new Set([
 	'release_deploy_id',
 	'release_deploy_commit',
 	'release_notes_id',
+	'mention_search_results',
 ]);
 
 function loadScenarios() {
@@ -171,6 +172,11 @@ function render(scenarios) {
 	lines.push('    pub after_ms: u64,');
 	lines.push('    /// JSON object string with ${var} placeholders rendered at dispatch.');
 	lines.push('    pub payload_json: &\'static str,');
+	lines.push('    /// Raw JSON template; when Some, ${var} placeholders are substituted');
+	lines.push('    /// directly in the template string BEFORE serde_json::from_str. Lets typed');
+	lines.push('    /// JSON-value bindings (e.g. array results from @mention_search_results)');
+	lines.push('    /// splice in as actual arrays/objects rather than string blobs.');
+	lines.push('    pub payload_template_json: Option<&\'static str>,');
 	lines.push('}');
 	lines.push('');
 	lines.push('#[derive(Debug, Clone, Copy)]');
@@ -198,7 +204,11 @@ function render(scenarios) {
 		const steps = (doc.timeline ?? [])
 			.map((t) => {
 				const payloadJson = JSON.stringify(t.payload ?? {});
-				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}" }`;
+				const payloadTemplate = t.payload_template;
+				const payloadTemplateField = payloadTemplate
+					? `Some("${rustEscape(payloadTemplate)}")`
+					: 'None';
+				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}", payload_template_json: ${payloadTemplateField} }`;
 			})
 			.join(', ');
 		const finalResp = doc.final_response

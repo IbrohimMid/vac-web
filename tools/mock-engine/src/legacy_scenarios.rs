@@ -214,7 +214,6 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
         // ported to YAML runtime catalog (connector-list.yaml, connector-connect.yaml,
         // connector-disconnect.yaml). scenarios::handle short-circuits before reaching
         // this dispatcher for all of the above.
-        "context.mention_search" => handle_mention_search(id, params),
         "assessment.run" => handle_assessment_run(id, params, state),
         // assessment.cancel + assessment.fetch_evidence_preview + gate.signoff +
         // gate.override: ported to YAML runtime catalog. scenarios::handle
@@ -1139,41 +1138,6 @@ fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) ->
         json!({ "ok": true, "run_id": run_id }),
     ));
     out
-}
-
-fn handle_mention_search(id: Option<Value>, params: Value) -> Vec<String> {
-    let query = params
-        .get("query")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let samples = [
-        "src/foo.ts",
-        "src/main.tsx",
-        "docs/README.md",
-        "package.json",
-    ];
-    let results: Vec<Value> = samples
-        .iter()
-        .filter(|p| query.is_empty() || p.to_lowercase().contains(&query.to_lowercase()))
-        .enumerate()
-        .map(|(i, p)| {
-            json!({
-                "id": format!("file:{p}"),
-                "kind": "file",
-                "label": p,
-                "score": 1.0 - (i as f64) * 0.1,
-                "payload": p
-            })
-        })
-        .collect();
-    vec![
-        emit_notification(
-            "context.mention_results",
-            json!({ "query": query, "results": results }),
-        ),
-        emit_response(id.unwrap_or(Value::Null), json!({ "ok": true })),
-    ]
 }
 
 /// Catalog of notification methods this mock-engine is allowed to emit.

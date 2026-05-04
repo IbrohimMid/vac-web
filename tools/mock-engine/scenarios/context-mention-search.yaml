@@ -1,0 +1,20 @@
+scenario: context_mention_search
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  query: "$input.query"
+  results: "@mention_search_results"
+input:
+  command: context.mention_search
+  payload:
+    query: "<search query string; empty matches all samples>"
+timeline:
+  - event: context.mention_results
+    after_ms: 0
+    payload_template: '{"query":"${query}","results":${results}}'
+final_response:
+  ok: true
+assertions:
+  - "emits 1 context.mention_results notification carrying query echoed back plus results array; results filtered via @mention_search_results generator using lowercased substring match against fixed sample paths"
+  - "port of legacy handle_mention_search via Pass #32 payload_template_json render path; results binding holds JSON-array string and splices in as a real array, not a string blob"
+  - "empty query returns all 4 sample paths with descending score 1.0, 0.9, 0.8, 0.7 indexed by position"

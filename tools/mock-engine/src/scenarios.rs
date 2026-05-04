@@ -49,8 +49,21 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
 
     let mut out = Vec::with_capacity(entry.timeline.len() + 1);
     for step in entry.timeline {
-        let raw: Value = serde_json::from_str(step.payload_json).ok()?;
-        let rendered = render_value(&raw, &bindings);
+        // Two render paths:
+        //  (a) payload_template_json is Some: substitute ${var} placeholders
+        //      directly in the raw JSON template string, then parse. Lets typed
+        //      JSON-value bindings (e.g. array from @mention_search_results)
+        //      splice in as real arrays/objects rather than string blobs.
+        //  (b) payload_template_json is None (default): parse payload_json into
+        //      a Value first, then walk the Value substituting string-typed
+        //      bindings via render_value. Used for the 22 existing scenarios.
+        let rendered = if let Some(template) = step.payload_template_json {
+            let substituted = render_string(template, &bindings);
+            serde_json::from_str(&substituted).ok()?
+        } else {
+            let raw: Value = serde_json::from_str(step.payload_json).ok()?;
+            render_value(&raw, &bindings)
+        };
         out.push(emit_notification(step.event, rendered));
     }
     let result = if let Some(json_str) = entry.final_response_json {
@@ -101,6 +114,40 @@ fn build_bindings(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     format!("notes_{target}_{}", state.counter)
+                }
+                // Section A primitive (Pass #32): query-driven filter generator.
+                // Reads $input.query, applies legacy filter logic over a fixed sample
+                // path set, returns a JSON-array string for embedding via
+                // payload_template_json substitution. Mirrors handle_mention_search
+                // semantics: lowercased substring match on path, descending score by
+                // result index. Empty query matches all samples.
+                "mention_search_results" => {
+                    let query = params
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let samples = [
+                        "src/foo.ts",
+                        "src/main.tsx",
+                        "docs/README.md",
+                        "package.json",
+                    ];
+                    let results: Vec<Value> = samples
+                        .iter()
+                        .filter(|p| query.is_empty() || p.to_lowercase().contains(&query))
+                        .enumerate()
+                        .map(|(i, p)| {
+                            json!({
+                                "id": format!("file:{p}"),
+                                "kind": "file",
+                                "label": p,
+                                "score": 1.0 - (i as f64) * 0.1,
+                                "payload": p
+                            })
+                        })
+                        .collect();
+                    Value::Array(results).to_string()
                 }
                 _ => seed.value.to_string(),
             }
@@ -443,6 +490,38 @@ mod tests {
         let r: Value = serde_json::from_str(&out[1]).unwrap();
         assert_eq!(r["id"], 92);
         assert_eq!(r["result"]["ok"], true);
+    }
+
+    #[test]
+    fn context_mention_search_runtime_dispatch_filters_samples_via_payload_template() {
+        let mut state = mk_state();
+        // Empty query — all 4 samples returned with descending score.
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":93,"method":"context.mention_search","params":{"query":""}}"#,
+            &mut state,
+        );
+        assert_eq!(out.len(), 2);
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "context.mention_results");
+        assert_eq!(n0["params"]["query"], "");
+        let results = n0["params"]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 4, "empty query should match all samples");
+        assert_eq!(results[0]["id"], "file:src/foo.ts");
+        assert_eq!(results[0]["score"], 1.0);
+        assert_eq!(results[3]["id"], "file:package.json");
+        // Filtered query.
+        let mut state2 = mk_state();
+        let out2 = handle(
+            r#"{"jsonrpc":"2.0","id":94,"method":"context.mention_search","params":{"query":"src"}}"#,
+            &mut state2,
+        );
+        let n2: Value = serde_json::from_str(&out2[0]).unwrap();
+        let results2 = n2["params"]["results"].as_array().unwrap();
+        assert_eq!(results2.len(), 2, "`src` should match 2 samples");
+        assert!(results2
+            .iter()
+            .all(|r| r["label"].as_str().unwrap().contains("src/")));
+        assert_eq!(n2["params"]["query"], "src");
     }
 
     #[test]

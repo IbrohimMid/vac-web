@@ -2511,3 +2511,44 @@ Recommend option 1 for `context.mention_search` since it requires only a parser-
 | `message.submit` | all of the above + transcript tree DSL | 4-5 passes | last |
 
 **UX impact**: design refinement makes the remaining ports implementation-ready; no operator-facing behaviour change today.
+
+## Pass #32 — payload_template_json render path + context.mention_search ported (2026-05-04)
+
+**Scope**: implement first of the two design-doc primitives flagged in Pass #31 (pre-parse JSON template substitution) and complete the third Section A handler port. Section A progress: **3 / 8 ported**.
+
+**Primitive: `payload_template_json`** — alternate render path that substitutes `${var}` placeholders directly into a raw JSON template string BEFORE `serde_json::from_str`. This lets typed JSON-value bindings (e.g. JSON-array strings produced by query-driven generators) splice into payloads as actual arrays/objects rather than string blobs.
+
+Dispatch logic in `try_runtime_dispatch` now branches per timeline step:
+
+- (a) `payload_template_json: Some(template)` → `render_string(template, &bindings)` then `serde_json::from_str(&substituted)`.
+- (b) `payload_template_json: None` (default for the 22 prior scenarios) → unchanged: parse `payload_json` first, then walk Value with `render_value`.
+
+Existing scenarios untouched; new render path is opt-in per timeline step.
+
+**Files touched** (4 modified, 1 added):
+
+- `tools/mock-engine/src/scenarios.rs`: extended `try_runtime_dispatch` step loop with the two render paths described above (~12 LOC). Added `@mention_search_results` generator branch in `build_bindings` — reads `$input.query` (lowercased), filters 4 fixed sample paths via substring match, emits per-result objects with descending score `1.0 − i*0.1`, returns `serde_json::Value::Array(...).to_string()` for embedding via template substitution. Added integration test `context_mention_search_runtime_dispatch_filters_samples_via_payload_template` covering empty-query (4 results) and filtered-query (`src` → 2 results).
+- `scripts/codegen-mock-scenarios.mjs`: extended `RuntimeTimelineStep` struct emit with optional `payload_template_json: Option<&'static str>` field. Extended timeline step emission to read optional `payload_template` YAML field; emits `Some("...")` when present, `None` otherwise. Added `mention_search_results` to `ALLOWED_GENERATORS` set.
+- `tools/mock-engine/scenarios/context-mention-search.yaml`: new 18-line scenario. State_seeds: `query: $input.query`, `results: @mention_search_results`. Single timeline step with `payload_template: '{"query":"${query}","results":${results}}'` — the `${results}` slot is substituted with a raw JSON-array string before parsing, so the array splices in cleanly.
+- `tools/mock-engine/src/legacy_scenarios.rs`: dropped `context.mention_search` dispatch arm and `fn handle_mention_search` (34 lines). File now 1277 lines (was 1313, −36).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated — 24 scenarios, 23 runtime-dispatched (was 23 / 22).
+
+**Validation gate** (all green):
+
+- `cargo build -p mock-engine`: clean.
+- `cargo test -p mock-engine`: 23/0 (was 22/0; +1 from new test).
+- `cargo test -p local-bridge --lib`: 351/0.
+- `cargo test -p local-bridge --test event_catalog_parity`: 7/0.
+- `cargo fmt --all -- --check`: clean.
+- `node scripts/check-architecture-boundaries.mjs`: ok (264 / 817 / 211).
+
+**Architecture invariants preserved**:
+
+1. The 22 existing runtime-dispatched scenarios use the original `payload_json` render path with no behaviour change (path (b) above).
+2. Legacy fallback test `unknown_command_falls_through_to_legacy` still passes — unknown methods continue to hit `legacy_scenarios::handle_legacy`.
+3. Filtering grammar boundary: the `@mention_search_results` generator is a typed Rust helper, not a parsed expression DSL. This honours the Pass #28 design constraint of no general-purpose expression evaluator. The full filter DSL (`filter_then_emit` with `expr := atom (op atom)?` grammar) remains a future generalisation if more handlers need ad-hoc query expressions.
+4. JSON-template substitution is string-level only — query strings containing `"` would break the resulting JSON. Document caveat: for `context.mention_search` the legacy handler had no escaping either, and operator-input queries are short identifiers; risk negligible. A future `@json_escape` helper could harden this without changing the dispatch path.
+
+**Remaining Section A work** (5 of 8): `handoff.create`, `handoff.approve`, `handoff.dispatch_local`, `assessment.run`, `message.submit`. All 5 still need the multi-event ledger primitive (`state_seeds_after`); the latter 3 also need conditional branching. Next implementation pass — once explicit instruction — should land `state_seeds_after` codegen + dispatch extension and port `handoff.create` + `handoff.approve` together (Pass #33 estimate).
+
+**UX impact**: zero behaviour change. `context.mention_results` notification emits with identical shape — same `query` echo, same `results` array order (descending score by sample index), same per-result fields (`id`, `kind`, `label`, `score`, `payload`). Mention picker / `@` search in the cockpit composer renders identically.
