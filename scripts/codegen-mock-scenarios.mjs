@@ -55,6 +55,21 @@ const ALLOWED_GENERATORS = new Set([
 	'handoff_dispatch_outcome',
 	// Pass #35: foreach primitive smoke (returns fixed 3-item JSON array of objects).
 	'debug_smoke_items',
+	// Pass #36: assessment.run port via foreach over @assessment_family_catalog + condition primitive on is_failure.
+	'assessment_run_id',
+	'assessment_is_failure',
+	'assessment_family_catalog',
+	'assessment_family_size',
+	'assessment_scope_json',
+	'assessment_connector_snapshots_json',
+	'assessment_failure_rejected_inner_json',
+	'assessment_failure_failed_inner_json',
+	'assessment_verdict',
+	'assessment_release_score',
+	'assessment_rtd_state',
+	'assessment_rtd_summary',
+	'assessment_rtd_satisfied',
+	'assessment_rtd_blockers_json',
 ]);
 
 function loadScenarios() {

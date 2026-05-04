@@ -23,7 +23,7 @@ pub struct ScenarioEntry {
     pub assertions: &'static [&'static str],
 }
 
-pub const SCENARIO_CATALOG: [ScenarioEntry; 28] = [
+pub const SCENARIO_CATALOG: [ScenarioEntry; 29] = [
     ScenarioEntry {
         id: "approval_approve",
         status: ScenarioStatus::FutureWhenBackendLands,
@@ -55,6 +55,14 @@ pub const SCENARIO_CATALOG: [ScenarioEntry; 28] = [
         input_command: "assessment.fetch_evidence_preview",
         timeline_events: &["assessment.evidence_preview"],
         assertions: &["mock-engine emits assessment.evidence_preview for the requested evidence id with a deterministic 3-line preview body", "the cockpit assessment surface uses the preview text to render the inline evidence drawer", "evidence id is echoed via state_seeds.$input.evidence_id so the preview header matches the inbound request"],
+    },
+    ScenarioEntry {
+        id: "assessment_run",
+        status: ScenarioStatus::ProductionParity,
+        replacement: None,
+        input_command: "assessment.run",
+        timeline_events: &["assessment.started", "assessment.worker_output_rejected", "assessment.failed", "assessment.progress", "assessment.candidate_received", "assessment.candidate_received", "assessment.progress", "assessment.completed", "gate.changed", "gate.changed"],
+        assertions: &["default RTD swarm (5 agents incl. release_gate skip): 1 started + foreach[ 5 progress + 4 candidate_received (one per non-skip agent) + 1 bad-candidate at idx 0 ] + 1 synth progress + 1 completed + 2 gate.changed + 1 response = 16 lines", "frontend swarm (5 agents incl. trailing synthesizer skip): same 16 lines, verdict=warn (4 findings >= 3 threshold), RTD state=fail, blockers=[\"verdict not pass\"]", "failure swarms (schema_version_unsupported, candidate_schema_invalid, redaction_applied): family_size=0 makes the foreach a graceful no-op; emits 1 started + 1 worker_output_rejected + 1 failed + 1 response = 4 lines. Wire-byte deviation #1: response is terminal (legacy emitted response right after started, before rejected/failed)", "@assessment_run_id MUST be the first state_seed so the counter bump precedes @assessment_connector_snapshots_json reading state.counter (mirrors legacy ordering: state.counter += 1, then snapshot id format!(\"01J{:0>23}\", state.counter))", "inner-JSON pattern (Pass #36 wire constraint): @assessment_failure_rejected_inner_json + @assessment_failure_failed_inner_json return JSON object bodies without outer braces; YAML wraps via {\"run_id\":\"${run_id}\",${...inner_json}} because render_string is single-pass", "wire-byte deviation #2 (repo_context coupling): @assessment_scope_json calls crate::legacy_scenarios::repo_context the same way legacy did; keep family_catalog + repo_context + RepoContext pub(crate) for Pass #36 zero-deviation"],
     },
     ScenarioEntry {
         id: "changeset_legacy_compat",
@@ -309,7 +317,7 @@ pub struct RuntimeScenarioEntry {
     pub final_response_json: Option<&'static str>,
 }
 
-pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 27] = [
+pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 28] = [
     RuntimeScenarioEntry {
         id: "approval_approve",
         input_command: "approval.approve",
@@ -337,6 +345,13 @@ pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 27] = [
         state_seeds: &[RuntimeStateSeed { var: "evidence_id", value: "$input.evidence_id" }],
         timeline: &[RuntimeTimelineStep { event: "assessment.evidence_preview", after_ms: 0, payload_json: "{\"id\":\"${evidence_id}\",\"preview\":\"(mock preview for ${evidence_id})\\n  line 1\\n  line 2\\n  line 3\"}", payload_template_json: None, state_seeds_after: &[], condition: None, foreach: None }],
         final_response_json: Some("{\"ok\":true}"),
+    },
+    RuntimeScenarioEntry {
+        id: "assessment_run",
+        input_command: "assessment.run",
+        state_seeds: &[RuntimeStateSeed { var: "run_id", value: "@assessment_run_id" }, RuntimeStateSeed { var: "swarm", value: "$input.swarm|rtd" }, RuntimeStateSeed { var: "is_failure", value: "@assessment_is_failure" }, RuntimeStateSeed { var: "family", value: "@assessment_family_catalog" }, RuntimeStateSeed { var: "family_size", value: "@assessment_family_size" }, RuntimeStateSeed { var: "scope_json", value: "@assessment_scope_json" }, RuntimeStateSeed { var: "connector_snapshots_json", value: "@assessment_connector_snapshots_json" }, RuntimeStateSeed { var: "rejected_inner_json", value: "@assessment_failure_rejected_inner_json" }, RuntimeStateSeed { var: "failed_inner_json", value: "@assessment_failure_failed_inner_json" }, RuntimeStateSeed { var: "verdict", value: "@assessment_verdict" }, RuntimeStateSeed { var: "release_score", value: "@assessment_release_score" }, RuntimeStateSeed { var: "rtd_state", value: "@assessment_rtd_state" }, RuntimeStateSeed { var: "rtd_summary", value: "@assessment_rtd_summary" }, RuntimeStateSeed { var: "rtd_satisfied", value: "@assessment_rtd_satisfied" }, RuntimeStateSeed { var: "rtd_blockers_json", value: "@assessment_rtd_blockers_json" }],
+        timeline: &[RuntimeTimelineStep { event: "assessment.started", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",\"swarm\":\"${swarm}\",\"total_checks\":${family_size},\"started_at\":\"2026-04-24T10:00:00Z\",\"scope\":${scope_json},\"connector_snapshots\":${connector_snapshots_json}}"), state_seeds_after: &[], condition: None, foreach: None }, RuntimeTimelineStep { event: "assessment.worker_output_rejected", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",${rejected_inner_json}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "is_failure", equals: "true" }), foreach: None }, RuntimeTimelineStep { event: "assessment.failed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",${failed_inner_json}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "is_failure", equals: "true" }), foreach: None }, RuntimeTimelineStep { event: "", after_ms: 0, payload_json: "{}", payload_template_json: None, state_seeds_after: &[], condition: None, foreach: Some(RuntimeForeach { binding: "family", as_prefix: "agent", index_var: "idx", body: &[RuntimeTimelineStep { event: "assessment.progress", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",\"completed\":${idx},\"total\":${family_size},\"current\":\"${agent.name}\"}"), state_seeds_after: &[], condition: None, foreach: None }, RuntimeTimelineStep { event: "assessment.candidate_received", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",\"candidate_count\":1,\"agent_id\":\"${agent.name}\",\"candidate\":${agent.candidate_json}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "agent.is_skip", equals: "false" }), foreach: None }, RuntimeTimelineStep { event: "assessment.candidate_received", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",\"candidate_count\":1,\"agent_id\":\"${agent.name}\",\"candidate\":${agent.bad_candidate_json}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "agent.is_first_finding", equals: "true" }), foreach: None }] }) }, RuntimeTimelineStep { event: "assessment.progress", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",\"completed\":${family_size},\"total\":${family_size},\"current\":\"synthesizer\"}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "is_failure", equals: "false" }), foreach: None }, RuntimeTimelineStep { event: "assessment.completed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"run_id\":\"${run_id}\",\"verdict\":\"${verdict}\",\"score\":{\"technical\":0.78,\"product\":0.72,\"ux\":0.65,\"release\":${release_score},\"ops\":0.81}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "is_failure", equals: "false" }), foreach: None }, RuntimeTimelineStep { event: "gate.changed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"id\":\"DevComplete\",\"state\":\"pass\",\"summary\":\"RTD run completed\",\"criteria\":[{\"id\":\"ci_green\",\"label\":\"CI green\",\"satisfied\":true},{\"id\":\"tests_pass\",\"label\":\"Tests pass\",\"satisfied\":true}],\"blockers\":[],\"required_signers\":1,\"signers\":[]}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "is_failure", equals: "false" }), foreach: None }, RuntimeTimelineStep { event: "gate.changed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"id\":\"ReadyToDeploy\",\"state\":\"${rtd_state}\",\"summary\":\"${rtd_summary}\",\"criteria\":[{\"id\":\"verdict_pass\",\"label\":\"Assessment verdict pass\",\"satisfied\":${rtd_satisfied}}],\"blockers\":${rtd_blockers_json},\"required_signers\":2,\"signers\":[]}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "is_failure", equals: "false" }), foreach: None }],
+        final_response_json: Some("{\"ok\":true,\"run_id\":\"${run_id}\"}"),
     },
     RuntimeScenarioEntry {
         id: "connector_connect",

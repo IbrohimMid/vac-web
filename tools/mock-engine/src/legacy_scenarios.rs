@@ -76,10 +76,11 @@ pub fn emit_error(id: Option<Value>, code: i32, message: &str) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct RepoContext {
-    repo_ref: String,
-    base_commit_sha: String,
-    worktree_digest: String,
+pub(crate) struct RepoContext {
+    pub(crate) repo_ref: String,
+    pub(crate) base_commit_sha: String,
+    #[allow(dead_code)]
+    pub(crate) worktree_digest: String,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -140,7 +141,7 @@ fn compute_worktree_digest(project: &Path) -> Option<String> {
     Some(sha256_hex(parts.join("\n").as_bytes()))
 }
 
-fn repo_context(project: Option<&str>, seed: u64) -> RepoContext {
+pub(crate) fn repo_context(project: Option<&str>, seed: u64) -> RepoContext {
     let project_path = project.map(Path::new);
     let base_commit_sha = project_path
         .and_then(|path| git_output(path, &["rev-parse", "HEAD"]))
@@ -214,7 +215,9 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
         // ported to YAML runtime catalog (connector-list.yaml, connector-connect.yaml,
         // connector-disconnect.yaml). scenarios::handle short-circuits before reaching
         // this dispatcher for all of the above.
-        "assessment.run" => handle_assessment_run(id, params, state),
+        // assessment.run: ported to YAML runtime catalog (assessment-run.yaml) via
+        // Pass #36 foreach over @assessment_family_catalog + condition primitive on
+        // is_failure binding. scenarios::handle short-circuits before reaching this dispatcher.
         // assessment.cancel + assessment.fetch_evidence_preview + gate.signoff +
         // gate.override: ported to YAML runtime catalog. scenarios::handle
         // short-circuits before reaching this dispatcher.
@@ -434,7 +437,7 @@ fn handle_handoff_message_submit(
 
 /// Canonical agent catalog per assessor family. Phase 6 ships the full 12.
 /// (agent, category, check).
-fn family_catalog(family: &str) -> Vec<(&'static str, &'static str, &'static str)> {
+pub(crate) fn family_catalog(family: &str) -> Vec<(&'static str, &'static str, &'static str)> {
     match family {
         "pm" => vec![
             ("discovery", "product", "user_interviews"),
@@ -519,300 +522,6 @@ fn family_catalog(family: &str) -> Vec<(&'static str, &'static str, &'static str
             ("release_gate", "release", "verdict"),
         ],
     }
-}
-
-fn handle_assessment_run(id: Option<Value>, params: Value, state: &mut State) -> Vec<String> {
-    let swarm = params
-        .get("swarm")
-        .and_then(|v| v.as_str())
-        .unwrap_or("rtd")
-        .to_string();
-    state.counter += 1;
-    let run_id = format!("run_01J{:0>20}{:0>3}", state.seed % 10000, state.counter);
-    let agents: Vec<(&str, &str, &str)> = family_catalog(&swarm);
-    let repo = repo_context(state.project.as_deref(), state.seed);
-    let project_root = state.project.clone().unwrap_or_default();
-    let connector_snapshots = vec![json!({
-        "connector_id": "github_default",
-        "kind": "github",
-        "snapshot_id": format!("01J{:0>23}", state.counter),
-        "captured_at": "2026-04-24T10:00:00Z"
-    })];
-
-    let mut out: Vec<String> = Vec::with_capacity(agents.len() * 3 + 4);
-    out.push(emit_notification(
-        "assessment.started",
-        json!({
-            "run_id": run_id,
-            "swarm": swarm,
-            "total_checks": agents.len(),
-            "started_at": "2026-04-24T10:00:00Z",
-            "scope": {
-                "project_root": project_root,
-                "repo_ref": repo.repo_ref,
-                "base_commit_sha": repo.base_commit_sha,
-                "diff_range": "HEAD~1..HEAD",
-                "path_globs": ["apps/web/src/**"],
-                "depth": "standard"
-            },
-            "connector_snapshots": connector_snapshots
-        }),
-    ));
-
-    match swarm.as_str() {
-        "schema_version_unsupported" => {
-            out.push(emit_response(
-                id.unwrap_or(Value::Null),
-                json!({ "ok": true, "run_id": run_id }),
-            ));
-            out.push(emit_notification(
-                "assessment.worker_output_rejected",
-                json!({
-                    "run_id": run_id,
-                    "reason": "schema_version_unsupported",
-                    "code": "schema_version_unsupported",
-                    "detail": "unsupported worker output schema_version 99",
-                    "path": "schema_version",
-                    "sample": r#"{"schema_version":99,"candidates":[]}"#,
-                    "sample_truncated": false,
-                    "pass": 1,
-                    "max_passes": 1,
-                }),
-            ));
-            out.push(emit_notification(
-                "assessment.failed",
-                json!({
-                    "run_id": run_id,
-                    "status": "failed",
-                    "reason": "invalid_worker_output",
-                    "detail": "unsupported worker output schema_version 99",
-                }),
-            ));
-            return out;
-        }
-        "candidate_schema_invalid" => {
-            out.push(emit_response(
-                id.unwrap_or(Value::Null),
-                json!({ "ok": true, "run_id": run_id }),
-            ));
-            out.push(emit_notification(
-                "assessment.worker_output_rejected",
-                json!({
-                    "run_id": run_id,
-                    "reason": "candidate_schema_invalid",
-                    "code": "candidate_missing_title",
-                    "detail": "each candidate must have a non-empty `title`",
-                    "path": "candidates[0].title",
-                    "sample": r#"{"schema_version":1,"candidates":[{"category":"technical","severity":"high"}]}"#,
-                    "sample_truncated": false,
-                    "pass": 1,
-                    "max_passes": 1,
-                }),
-            ));
-            out.push(emit_notification(
-                "assessment.failed",
-                json!({
-                    "run_id": run_id,
-                    "status": "failed",
-                    "reason": "invalid_worker_output",
-                    "detail": "each candidate must have a non-empty `title`",
-                }),
-            ));
-            return out;
-        }
-        "redaction_applied" => {
-            out.push(emit_response(
-                id.unwrap_or(Value::Null),
-                json!({ "ok": true, "run_id": run_id }),
-            ));
-            out.push(emit_notification(
-                "assessment.worker_output_rejected",
-                json!({
-                    "run_id": run_id,
-                    "reason": "redaction_applied",
-                    "code": "redaction_applied",
-                    "detail": "diagnostic sample redacted for safety",
-                    "path": "sample",
-                    "sample": r#"{"schema_version":1,"candidates":[{"title":"<redacted>","category":"technical","severity":"high"}]}"#,
-                    "sample_reason": "redaction_applied",
-                    "sample_truncated": false,
-                    "pass": 1,
-                    "max_passes": 1,
-                }),
-            ));
-            out.push(emit_notification(
-                "assessment.failed",
-                json!({
-                    "run_id": run_id,
-                    "status": "failed",
-                    "reason": "invalid_worker_output",
-                    "detail": "diagnostic sample redacted for safety",
-                }),
-            ));
-            return out;
-        }
-        _ => {}
-    }
-
-    let mut total_findings = 0u64;
-    for (i, (agent, category, check)) in agents.iter().enumerate() {
-        out.push(emit_notification(
-            "assessment.progress",
-            json!({
-                "run_id": run_id,
-                "completed": i,
-                "total": agents.len(),
-                "current": agent
-            }),
-        ));
-        // Skip finding emission for the synthesizer agent.
-        if *agent == "synthesizer" || *agent == "release_gate" {
-            continue;
-        }
-        total_findings += 1;
-        // 64-hex-char deterministic stand-in for sha256(category|subject|check).
-        // Real identity hash lands when upstream PR #7 ships; the field shape
-        // (64 hex chars) is what matters for web-side dedup today.
-        let seed = format!("{}|{}|{}", category, agent, check)
-            .bytes()
-            .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
-        let identity = format!(
-            "{:016x}{:016x}{:016x}{:016x}",
-            seed,
-            seed ^ 0xa5,
-            seed ^ 0x5a,
-            seed ^ 0xff
-        );
-        let evidence_path = match i % 4 {
-            0 => "apps/web/src/stores/assessment.ts",
-            1 => "apps/web/src/components/Readiness/AssessmentReportDetail.tsx",
-            2 => "apps/local-bridge/src/session/handle.rs",
-            _ => "tools/mock-engine/src/scenarios.rs",
-        };
-        out.push(emit_notification(
-            "assessment.candidate_received",
-            json!({
-                "run_id": run_id,
-                "candidate_count": 1,
-                "agent_id": agent,
-                "candidate": {
-                    "title": format!("{agent}: {check}"),
-                    "category": category,
-                    "severity": if i == 0 { "high" } else if i == 1 { "medium" } else { "low" },
-                    "confidence": 0.8,
-                    "description": format!("Automated {check} surfaced a {category} concern in {agent}."),
-                    "rationale": format!("{agent} flagged {check} during the assessment sweep."),
-                    "recommendation": format!("Resolve {check} before the next pass."),
-                    "evidence": [
-                        { "kind": "file", "path": evidence_path, "line": 1 }
-                    ],
-                    "fixability": "assisted",
-                    "handoffCandidate": true,
-                    "identityHash": format!("sha256:{identity}"),
-                    "createdAt": "2026-04-24T10:00:01Z",
-                    "emittedBy": agent
-                }
-            }),
-        ));
-        if i == 0 {
-            let bad_seed = format!("{}|{}|{}|bad", category, agent, check)
-                .bytes()
-                .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
-            let bad_identity = format!(
-                "{:016x}{:016x}{:016x}{:016x}",
-                bad_seed,
-                bad_seed ^ 0xaa,
-                bad_seed ^ 0x55,
-                bad_seed ^ 0xff
-            );
-            out.push(emit_notification(
-                "assessment.candidate_received",
-                json!({
-                    "run_id": run_id,
-                    "candidate_count": 1,
-                    "agent_id": agent,
-                    "candidate": {
-                        "title": format!("{agent}: {check} without evidence"),
-                        "category": category,
-                        "severity": "medium",
-                        "confidence": 0.6,
-                        "description": format!("Mock candidate for {check} intentionally omits evidence."),
-                        "rationale": "Exercise bridge rejection path.",
-                        "recommendation": "Attach evidence before emitting.",
-                        "evidence": [],
-                        "fixability": "manual",
-                        "handoffCandidate": false,
-                        "identityHash": format!("sha256:{bad_identity}"),
-                        "createdAt": "2026-04-24T10:00:02Z",
-                        "emittedBy": agent
-                    }
-                }),
-            ));
-        }
-    }
-
-    out.push(emit_notification(
-        "assessment.progress",
-        json!({
-            "run_id": run_id,
-            "completed": agents.len(),
-            "total": agents.len(),
-            "current": "synthesizer"
-        }),
-    ));
-
-    let verdict = if total_findings >= 3 { "warn" } else { "pass" };
-    out.push(emit_notification(
-        "assessment.completed",
-        json!({
-            "run_id": run_id,
-            "verdict": verdict,
-            "score": {
-                "technical": 0.78,
-                "product": 0.72,
-                "ux": 0.65,
-                "release": if verdict == "pass" { 0.9 } else { 0.7 },
-                "ops": 0.81
-            }
-        }),
-    ));
-
-    // DevComplete pass on any completion, ReadyToDeploy depends on verdict.
-    out.push(emit_notification(
-        "gate.changed",
-        json!({
-            "id": "DevComplete",
-            "state": "pass",
-            "summary": "RTD run completed",
-            "criteria": [
-                { "id": "ci_green", "label": "CI green", "satisfied": true },
-                { "id": "tests_pass", "label": "Tests pass", "satisfied": true }
-            ],
-            "blockers": [],
-            "required_signers": 1,
-            "signers": []
-        }),
-    ));
-    out.push(emit_notification(
-        "gate.changed",
-        json!({
-            "id": "ReadyToDeploy",
-            "state": if verdict == "pass" { "open" } else { "fail" },
-            "summary": if verdict == "pass" { "Awaiting signoff" } else { "Verdict warns" },
-            "criteria": [
-                { "id": "verdict_pass", "label": "Assessment verdict pass", "satisfied": verdict == "pass" }
-            ],
-            "blockers": if verdict == "pass" { vec![] } else { vec!["verdict not pass".to_string()] },
-            "required_signers": 2,
-            "signers": []
-        }),
-    ));
-
-    out.push(emit_response(
-        id.unwrap_or(Value::Null),
-        json!({ "ok": true, "run_id": run_id }),
-    ));
-    out
 }
 
 /// Catalog of notification methods this mock-engine is allowed to emit.

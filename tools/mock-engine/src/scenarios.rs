@@ -144,6 +144,38 @@ fn deterministic_hex_for_seed(seed: u64) -> String {
     )
 }
 
+/// Pass #36: identifies the three failure swarms that short-circuit assessment.run
+/// to worker_output_rejected + failed (no foreach iterations). Drives both the
+/// @assessment_is_failure binding and the @assessment_family_catalog / _family_size
+/// short-circuits to empty.
+fn assessment_swarm_is_failure(swarm: &str) -> bool {
+    matches!(
+        swarm,
+        "schema_version_unsupported" | "candidate_schema_invalid" | "redaction_applied"
+    )
+}
+
+/// Pass #36: derive the assessment verdict for a swarm by counting non-skip agents in
+/// family_catalog. Mirrors legacy: total_findings = len(agents) excluding any agent
+/// named "synthesizer" or "release_gate"; verdict = "warn" when >= 3 findings, else
+/// "pass". Failure swarms return "pass" but the success-only events are condition-skipped
+/// via the is_failure binding so the value is unused on the failure path.
+fn assessment_verdict_for_swarm(swarm: &str) -> &'static str {
+    if assessment_swarm_is_failure(swarm) {
+        return "pass";
+    }
+    let agents = crate::legacy_scenarios::family_catalog(swarm);
+    let total_findings = agents
+        .iter()
+        .filter(|(a, _, _)| *a != "synthesizer" && *a != "release_gate")
+        .count();
+    if total_findings >= 3 {
+        "warn"
+    } else {
+        "pass"
+    }
+}
+
 fn build_bindings(
     entry: &RuntimeScenarioEntry,
     state: &mut State,
@@ -275,6 +307,315 @@ fn eval_seed_value(seed_value: &str, state: &mut State, params: &Value) -> Strin
                 { "label": "gamma", "kind": "primary", "skip": "false" }
             ])
             .to_string(),
+            // Section A (Pass #36): assessment.run port. Counter-bumping run id matching
+            // legacy `run_01J{seed%10000:0>20}{counter:0>3}`. MUST be the FIRST state_seed
+            // in the YAML so the counter bump precedes @assessment_connector_snapshots_json
+            // reading state.counter (mirrors legacy ordering: state.counter += 1, then snapshot).
+            "assessment_run_id" => {
+                state.counter += 1;
+                format!("run_01J{:0>20}{:0>3}", state.seed % 10000, state.counter)
+            }
+            // Returns "true" for the three failure swarms (schema_version_unsupported,
+            // candidate_schema_invalid, redaction_applied), else "false". Drives the YAML
+            // condition primitive that selects the worker_output_rejected/failed path vs.
+            // the success-path foreach + completed + gate.changed events.
+            "assessment_is_failure" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_swarm_is_failure(swarm) {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            // Build the per-swarm family catalog as a JSON-array string of objects suitable
+            // for the foreach primitive. Each item bakes (a) per-iter binding fields
+            // (`name`, `is_skip`, `is_first_finding`) consumed by condition primitives in
+            // the YAML body, plus (b) pre-rendered candidate JSON strings (`candidate_json`,
+            // `bad_candidate_json`) spliced into payload templates via `${agent.candidate_json}`.
+            // Failure swarms return an empty array so the foreach is a graceful no-op.
+            "assessment_family_catalog" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_swarm_is_failure(swarm) {
+                    return "[]".to_string();
+                }
+                let agents = crate::legacy_scenarios::family_catalog(swarm);
+                let items: Vec<Value> = agents
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (agent, category, check))| {
+                        let is_skip = *agent == "synthesizer" || *agent == "release_gate";
+                        // Mirror legacy: bad-candidate emits at i==0 INSIDE the non-skip
+                        // branch. Encode as a conjunction so a future family with a skip
+                        // agent at index 0 still passes through correctly.
+                        let is_first_finding = i == 0 && !is_skip;
+                        let seed_h = format!("{}|{}|{}", category, agent, check)
+                            .bytes()
+                            .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+                        let identity = format!(
+                            "{:016x}{:016x}{:016x}{:016x}",
+                            seed_h,
+                            seed_h ^ 0xa5,
+                            seed_h ^ 0x5a,
+                            seed_h ^ 0xff
+                        );
+                        let evidence_path = match i % 4 {
+                            0 => "apps/web/src/stores/assessment.ts",
+                            1 => "apps/web/src/components/Readiness/AssessmentReportDetail.tsx",
+                            2 => "apps/local-bridge/src/session/handle.rs",
+                            _ => "tools/mock-engine/src/scenarios.rs",
+                        };
+                        let severity = if i == 0 {
+                            "high"
+                        } else if i == 1 {
+                            "medium"
+                        } else {
+                            "low"
+                        };
+                        let candidate_json = json!({
+                            "title": format!("{agent}: {check}"),
+                            "category": category,
+                            "severity": severity,
+                            "confidence": 0.8,
+                            "description": format!("Automated {check} surfaced a {category} concern in {agent}."),
+                            "rationale": format!("{agent} flagged {check} during the assessment sweep."),
+                            "recommendation": format!("Resolve {check} before the next pass."),
+                            "evidence": [
+                                { "kind": "file", "path": evidence_path, "line": 1 }
+                            ],
+                            "fixability": "assisted",
+                            "handoffCandidate": true,
+                            "identityHash": format!("sha256:{identity}"),
+                            "createdAt": "2026-04-24T10:00:01Z",
+                            "emittedBy": agent
+                        })
+                        .to_string();
+                        let bad_candidate_json = if is_first_finding {
+                            let bad_seed = format!("{}|{}|{}|bad", category, agent, check)
+                                .bytes()
+                                .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+                            let bad_identity = format!(
+                                "{:016x}{:016x}{:016x}{:016x}",
+                                bad_seed,
+                                bad_seed ^ 0xaa,
+                                bad_seed ^ 0x55,
+                                bad_seed ^ 0xff
+                            );
+                            json!({
+                                "title": format!("{agent}: {check} without evidence"),
+                                "category": category,
+                                "severity": "medium",
+                                "confidence": 0.6,
+                                "description": format!("Mock candidate for {check} intentionally omits evidence."),
+                                "rationale": "Exercise bridge rejection path.",
+                                "recommendation": "Attach evidence before emitting.",
+                                "evidence": [],
+                                "fixability": "manual",
+                                "handoffCandidate": false,
+                                "identityHash": format!("sha256:{bad_identity}"),
+                                "createdAt": "2026-04-24T10:00:02Z",
+                                "emittedBy": agent
+                            })
+                            .to_string()
+                        } else {
+                            "{}".to_string()
+                        };
+                        json!({
+                            "name": agent,
+                            "category": category,
+                            "check": check,
+                            "is_skip": if is_skip { "true" } else { "false" },
+                            "is_first_finding": if is_first_finding { "true" } else { "false" },
+                            "candidate_json": candidate_json,
+                            "bad_candidate_json": bad_candidate_json
+                        })
+                    })
+                    .collect();
+                Value::Array(items).to_string()
+            }
+            // Number of agents in the family (or 0 for failure swarms). Used as the
+            // `total_checks` in assessment.started + the synthesizer-progress total.
+            "assessment_family_size" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_swarm_is_failure(swarm) {
+                    return "0".to_string();
+                }
+                crate::legacy_scenarios::family_catalog(swarm)
+                    .len()
+                    .to_string()
+            }
+            // Scope object spliced into assessment.started.scope. Calls the now-pub(crate)
+            // repo_context helper so git introspection still flows when state.project is
+            // set. Wire-byte deviation #2 (acknowledged): repo_context coupling kept for
+            // Pass #36 zero-deviation; if dropped in a future pass, repo_ref + base_commit_sha
+            // lose git introspection.
+            "assessment_scope_json" => {
+                let repo =
+                    crate::legacy_scenarios::repo_context(state.project.as_deref(), state.seed);
+                let project_root = state.project.clone().unwrap_or_default();
+                json!({
+                    "project_root": project_root,
+                    "repo_ref": repo.repo_ref,
+                    "base_commit_sha": repo.base_commit_sha,
+                    "diff_range": "HEAD~1..HEAD",
+                    "path_globs": ["apps/web/src/**"],
+                    "depth": "standard"
+                })
+                .to_string()
+            }
+            // Connector snapshot list spliced into assessment.started.connector_snapshots.
+            // Reads state.counter POST-bump (after @assessment_run_id has run) so snapshot_id
+            // matches legacy formatting `01J{counter:0>23}`.
+            "assessment_connector_snapshots_json" => json!([{
+                "connector_id": "github_default",
+                "kind": "github",
+                "snapshot_id": format!("01J{:0>23}", state.counter),
+                "captured_at": "2026-04-24T10:00:00Z"
+            }])
+            .to_string(),
+            // Inner-JSON pattern (no outer braces) for the failure-path worker_output_rejected
+            // payload. YAML wraps with `{"run_id":"${run_id}",${rejected_inner_json}}` because
+            // render_string is single-pass — embedding ${run_id} literal in the generator
+            // output would not be re-substituted on render.
+            "assessment_failure_rejected_inner_json" => {
+                let swarm = params.get("swarm").and_then(|v| v.as_str()).unwrap_or("");
+                let v = match swarm {
+                    "schema_version_unsupported" => json!({
+                        "reason": "schema_version_unsupported",
+                        "code": "schema_version_unsupported",
+                        "detail": "unsupported worker output schema_version 99",
+                        "path": "schema_version",
+                        "sample": r#"{"schema_version":99,"candidates":[]}"#,
+                        "sample_truncated": false,
+                        "pass": 1,
+                        "max_passes": 1
+                    }),
+                    "candidate_schema_invalid" => json!({
+                        "reason": "candidate_schema_invalid",
+                        "code": "candidate_missing_title",
+                        "detail": "each candidate must have a non-empty `title`",
+                        "path": "candidates[0].title",
+                        "sample": r#"{"schema_version":1,"candidates":[{"category":"technical","severity":"high"}]}"#,
+                        "sample_truncated": false,
+                        "pass": 1,
+                        "max_passes": 1
+                    }),
+                    "redaction_applied" => json!({
+                        "reason": "redaction_applied",
+                        "code": "redaction_applied",
+                        "detail": "diagnostic sample redacted for safety",
+                        "path": "sample",
+                        "sample": r#"{"schema_version":1,"candidates":[{"title":"<redacted>","category":"technical","severity":"high"}]}"#,
+                        "sample_reason": "redaction_applied",
+                        "sample_truncated": false,
+                        "pass": 1,
+                        "max_passes": 1
+                    }),
+                    _ => json!({}),
+                };
+                let s = v.to_string();
+                if s.len() >= 2 && s.starts_with('{') && s.ends_with('}') {
+                    s[1..s.len() - 1].to_string()
+                } else {
+                    s
+                }
+            }
+            // Inner-JSON pattern for the failure-path assessment.failed payload. Same
+            // wrapping rationale as assessment_failure_rejected_inner_json.
+            "assessment_failure_failed_inner_json" => {
+                let swarm = params.get("swarm").and_then(|v| v.as_str()).unwrap_or("");
+                let detail = match swarm {
+                    "schema_version_unsupported" => "unsupported worker output schema_version 99",
+                    "candidate_schema_invalid" => "each candidate must have a non-empty `title`",
+                    "redaction_applied" => "diagnostic sample redacted for safety",
+                    _ => "",
+                };
+                let v = json!({
+                    "status": "failed",
+                    "reason": "invalid_worker_output",
+                    "detail": detail
+                });
+                let s = v.to_string();
+                if s.len() >= 2 && s.starts_with('{') && s.ends_with('}') {
+                    s[1..s.len() - 1].to_string()
+                } else {
+                    s
+                }
+            }
+            // Derived verdict / score / RTD-state generators. All read swarm from params
+            // and delegate to assessment_verdict_for_swarm. Failure swarms return "pass"
+            // but the success-only events are condition-skipped, so the values are unused
+            // on the failure path.
+            "assessment_verdict" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                assessment_verdict_for_swarm(swarm).to_string()
+            }
+            "assessment_release_score" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_verdict_for_swarm(swarm) == "pass" {
+                    "0.9".to_string()
+                } else {
+                    "0.7".to_string()
+                }
+            }
+            "assessment_rtd_state" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_verdict_for_swarm(swarm) == "pass" {
+                    "open".to_string()
+                } else {
+                    "fail".to_string()
+                }
+            }
+            "assessment_rtd_summary" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_verdict_for_swarm(swarm) == "pass" {
+                    "Awaiting signoff".to_string()
+                } else {
+                    "Verdict warns".to_string()
+                }
+            }
+            "assessment_rtd_satisfied" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_verdict_for_swarm(swarm) == "pass" {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            "assessment_rtd_blockers_json" => {
+                let swarm = params
+                    .get("swarm")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rtd");
+                if assessment_verdict_for_swarm(swarm) == "pass" {
+                    "[]".to_string()
+                } else {
+                    r#"["verdict not pass"]"#.to_string()
+                }
+            }
             _ => seed_value.to_string(),
         }
     } else if let Some(rest) = seed_value.strip_prefix("$input_json.") {
@@ -1018,5 +1359,200 @@ mod tests {
         // Final response on the JSON-RPC id (42) with ok=true.
         assert_eq!(parsed[4]["id"], 42);
         assert_eq!(parsed[4]["result"]["ok"], true);
+    }
+
+    // ---- Pass #36: assessment.run port via foreach over @assessment_family_catalog. ----
+
+    #[test]
+    fn assessment_run_default_rtd_swarm_emits_full_pipeline() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":110,"method":"assessment.run","params":{}}"#,
+            &mut state,
+        );
+        // Default RTD family has 5 agents (code_health, test_coverage, security,
+        // observability, release_gate). release_gate is skip; first finding (idx 0,
+        // code_health) gets a bad-candidate stub. Total findings = 4, so verdict =
+        // "warn", RTD state = "fail", blockers = ["verdict not pass"].
+        // Layout: 1 started
+        //   + iter 0 (code_health, non-skip, first): progress + good + bad = 3
+        //   + iter 1 (test_coverage, non-skip):       progress + good = 2
+        //   + iter 2 (security, non-skip):            progress + good = 2
+        //   + iter 3 (observability, non-skip):       progress + good = 2
+        //   + iter 4 (release_gate, SKIP):            progress = 1
+        //   + 1 synth progress + 1 completed + 2 gate.changed + 1 response = 16.
+        assert_eq!(out.len(), 16, "default RTD pipeline length, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        // started
+        assert_eq!(parsed[0]["method"], "assessment.started");
+        let run_id = parsed[0]["params"]["run_id"].as_str().unwrap().to_string();
+        assert!(run_id.starts_with("run_01J"), "unexpected run_id {run_id}");
+        assert_eq!(parsed[0]["params"]["swarm"], "rtd");
+        assert_eq!(parsed[0]["params"]["total_checks"], 5);
+        assert_eq!(
+            parsed[0]["params"]["connector_snapshots"][0]["connector_id"],
+            "github_default"
+        );
+        // iter 0: code_health progress + good + bad.
+        assert_eq!(parsed[1]["method"], "assessment.progress");
+        assert_eq!(parsed[1]["params"]["completed"], 0);
+        assert_eq!(parsed[1]["params"]["current"], "code_health");
+        assert_eq!(parsed[2]["method"], "assessment.candidate_received");
+        assert_eq!(parsed[2]["params"]["agent_id"], "code_health");
+        assert_eq!(parsed[2]["params"]["candidate"]["severity"], "high");
+        assert_eq!(parsed[3]["method"], "assessment.candidate_received");
+        assert_eq!(
+            parsed[3]["params"]["candidate"]["title"],
+            "code_health: coverage_drift without evidence"
+        );
+        assert!(parsed[3]["params"]["candidate"]["evidence"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        // iter 4 (release_gate skip): progress only.
+        assert_eq!(parsed[10]["method"], "assessment.progress");
+        assert_eq!(parsed[10]["params"]["current"], "release_gate");
+        // Final synth progress + completed.
+        assert_eq!(parsed[11]["method"], "assessment.progress");
+        assert_eq!(parsed[11]["params"]["current"], "synthesizer");
+        assert_eq!(parsed[11]["params"]["completed"], 5);
+        assert_eq!(parsed[12]["method"], "assessment.completed");
+        assert_eq!(parsed[12]["params"]["verdict"], "warn");
+        assert_eq!(parsed[12]["params"]["score"]["release"], 0.7);
+        // gate.changed pair: DevComplete pass, ReadyToDeploy fail.
+        assert_eq!(parsed[13]["method"], "gate.changed");
+        assert_eq!(parsed[13]["params"]["id"], "DevComplete");
+        assert_eq!(parsed[13]["params"]["state"], "pass");
+        assert_eq!(parsed[14]["method"], "gate.changed");
+        assert_eq!(parsed[14]["params"]["id"], "ReadyToDeploy");
+        assert_eq!(parsed[14]["params"]["state"], "fail");
+        assert_eq!(parsed[14]["params"]["blockers"][0], "verdict not pass");
+        // Response is terminal with run_id echoed.
+        assert_eq!(parsed[15]["id"], 110);
+        assert_eq!(parsed[15]["result"]["ok"], true);
+        assert_eq!(parsed[15]["result"]["run_id"], run_id);
+    }
+
+    #[test]
+    fn assessment_run_frontend_swarm_emits_per_iter_findings() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":111,"method":"assessment.run","params":{"swarm":"frontend"}}"#,
+            &mut state,
+        );
+        // Frontend family: bundle_size, a11y_axe, perf_lh, hydration, synthesizer (skip).
+        // Same 16-line layout as default RTD: 4 findings >= 3 -> verdict warn.
+        assert_eq!(out.len(), 16, "frontend pipeline length, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[0]["params"]["swarm"], "frontend");
+        assert_eq!(parsed[0]["params"]["total_checks"], 5);
+        // iter 0 (bundle_size): progress + good + bad.
+        assert_eq!(parsed[1]["params"]["current"], "bundle_size");
+        assert_eq!(parsed[2]["params"]["agent_id"], "bundle_size");
+        assert_eq!(parsed[2]["params"]["candidate"]["severity"], "high");
+        assert_eq!(parsed[2]["params"]["candidate"]["category"], "technical");
+        assert_eq!(
+            parsed[3]["params"]["candidate"]["title"],
+            "bundle_size: budget without evidence"
+        );
+        // iter 4 (synthesizer SKIP): progress only.
+        assert_eq!(parsed[10]["method"], "assessment.progress");
+        assert_eq!(parsed[10]["params"]["current"], "synthesizer");
+        assert_eq!(parsed[10]["params"]["completed"], 4);
+        // Verdict: 4 findings -> warn.
+        assert_eq!(parsed[12]["method"], "assessment.completed");
+        assert_eq!(parsed[12]["params"]["verdict"], "warn");
+    }
+
+    #[test]
+    fn assessment_run_schema_version_unsupported_emits_failure_pipeline() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":112,"method":"assessment.run","params":{"swarm":"schema_version_unsupported"}}"#,
+            &mut state,
+        );
+        // Failure path: started + worker_output_rejected + failed + response = 4 lines.
+        // Wire-byte deviation #1: response is TERMINAL (legacy emitted response
+        // immediately after started, before rejected/failed).
+        assert_eq!(out.len(), 4, "failure pipeline length, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[0]["method"], "assessment.started");
+        assert_eq!(parsed[0]["params"]["total_checks"], 0);
+        assert_eq!(parsed[1]["method"], "assessment.worker_output_rejected");
+        assert_eq!(parsed[1]["params"]["reason"], "schema_version_unsupported");
+        assert_eq!(parsed[1]["params"]["code"], "schema_version_unsupported");
+        assert_eq!(parsed[1]["params"]["path"], "schema_version");
+        assert_eq!(parsed[2]["method"], "assessment.failed");
+        assert_eq!(parsed[2]["params"]["reason"], "invalid_worker_output");
+        assert_eq!(
+            parsed[2]["params"]["detail"],
+            "unsupported worker output schema_version 99"
+        );
+        // Response terminal with run_id (wire-byte deviation #1).
+        assert_eq!(parsed[3]["id"], 112);
+        assert_eq!(parsed[3]["result"]["ok"], true);
+        assert!(parsed[3]["result"]["run_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("run_01J"));
+    }
+
+    #[test]
+    fn assessment_run_candidate_schema_invalid_emits_failure_pipeline() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":113,"method":"assessment.run","params":{"swarm":"candidate_schema_invalid"}}"#,
+            &mut state,
+        );
+        assert_eq!(out.len(), 4);
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[1]["method"], "assessment.worker_output_rejected");
+        assert_eq!(parsed[1]["params"]["reason"], "candidate_schema_invalid");
+        assert_eq!(parsed[1]["params"]["code"], "candidate_missing_title");
+        assert_eq!(parsed[1]["params"]["path"], "candidates[0].title");
+        assert_eq!(parsed[2]["method"], "assessment.failed");
+        assert_eq!(
+            parsed[2]["params"]["detail"],
+            "each candidate must have a non-empty `title`"
+        );
+        // Response terminal.
+        assert_eq!(parsed[3]["id"], 113);
+        assert_eq!(parsed[3]["result"]["ok"], true);
+    }
+
+    #[test]
+    fn assessment_run_redaction_applied_emits_failure_pipeline() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":114,"method":"assessment.run","params":{"swarm":"redaction_applied"}}"#,
+            &mut state,
+        );
+        assert_eq!(out.len(), 4);
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[1]["method"], "assessment.worker_output_rejected");
+        assert_eq!(parsed[1]["params"]["reason"], "redaction_applied");
+        assert_eq!(parsed[1]["params"]["sample_reason"], "redaction_applied");
+        assert_eq!(parsed[2]["method"], "assessment.failed");
+        assert_eq!(
+            parsed[2]["params"]["detail"],
+            "diagnostic sample redacted for safety"
+        );
+        // Response terminal.
+        assert_eq!(parsed[3]["id"], 114);
     }
 }

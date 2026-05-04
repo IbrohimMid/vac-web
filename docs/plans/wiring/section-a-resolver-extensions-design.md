@@ -366,6 +366,40 @@ timeline:
 
 The original Section A roadmap slated `assessment.run` for Pass #35 as the foreach primitive's first user. To keep the audit blast radius small, Pass #35 lands the primitive + smoke canary only; Pass #36 layers the actual `assessment.run` port (12-swarm family catalog, 3 early-failure paths, verdict computation) on top of identical foreach semantics. Splitting also preserves a clean revert window — if Pass #36 hits an unexpected legacy edge case, Pass #35 stays landed and the primitive remains validated by the smoke scenario.
 
+## Pass #36 — assessment.run port (Primitive 5 first real user)
+
+### Scope
+
+Port `handle_assessment_run` (~291 lines, 12-swarm family catalog + 3 early-failure paths + verdict computation + RTD gate pair) from `legacy_scenarios.rs` to `tools/mock-engine/scenarios/assessment-run.yaml` + 14 new generators in `scenarios.rs::eval_seed_value`. Section A progress: **7 / 8 ported**.
+
+### Generators introduced (14)
+
+- `@assessment_run_id` — counter-bumping run id matching legacy `run_01J{seed%10000:0>20}{counter:0>3}`. **MUST** be the first state_seed in the YAML so the bump precedes `@assessment_connector_snapshots_json` reading `state.counter`.
+- `@assessment_is_failure` — returns `"true"` for the three failure swarms (`schema_version_unsupported`, `candidate_schema_invalid`, `redaction_applied`), else `"false"`. Drives the YAML `condition` primitive that selects the failure path vs. the success path.
+- `@assessment_family_catalog` — builds a JSON-array string of objects from `legacy_scenarios::family_catalog(swarm)` for the foreach primitive. Each item bakes per-iter binding fields (`name`, `is_skip`, `is_first_finding`) consumed by inner condition primitives, plus pre-rendered candidate JSON strings (`candidate_json`, `bad_candidate_json`) spliced into payload templates via `${agent.candidate_json}`. Failure swarms return `"[]"` so the foreach is a graceful no-op.
+- `@assessment_family_size` — number of agents in the family (or 0 for failure swarms). Used as the `total_checks` in `assessment.started`.
+- `@assessment_scope_json` — calls the now-`pub(crate)` `legacy_scenarios::repo_context` so git introspection still flows when `state.project` is set. Wire-byte deviation #2 (kept for zero-deviation Pass #36; future drop would lose `repo_ref` / `base_commit_sha` git introspection).
+- `@assessment_connector_snapshots_json` — reads `state.counter` POST-bump (after `@assessment_run_id` ran).
+- `@assessment_failure_rejected_inner_json` + `@assessment_failure_failed_inner_json` — inner-JSON pattern (no outer braces). YAML wraps via `{"run_id":"${run_id}",${rejected_inner_json}}` because `render_string` is single-pass and embedding `${run_id}` literal in the generator output would not be re-substituted on render.
+- `@assessment_verdict` / `@assessment_release_score` / `@assessment_rtd_state` / `@assessment_rtd_summary` / `@assessment_rtd_satisfied` / `@assessment_rtd_blockers_json` — derived from `assessment_verdict_for_swarm` helper (warn when `total_findings >= 3`, else pass). Failure swarms return `"pass"` but the success-only events are condition-skipped.
+
+### Wire-byte deviations (acknowledged + audited)
+
+1. **Response ordering on failure path**: legacy emitted `started → response → worker_output_rejected → failed`. YAML port emits `started → worker_output_rejected → failed → response`. Uniform response-last via `final_response` simplifies the runtime dispatch surface; any cockpit/local-bridge assertion that relied on response-mid was deemed a test smell. No production surface assert was hit.
+2. **`repo_context` coupling kept**: `@assessment_scope_json` calls `crate::legacy_scenarios::repo_context` the same way legacy did. `family_catalog`, `repo_context`, and `RepoContext` (with all fields) are now `pub(crate)` to enable this without code duplication.
+
+### Inner-JSON pattern (Pass #36 wire constraint)
+
+`scenarios::render_string` substitutes `${var}` placeholders in a single pass: a generator returning `${other_var}` literal will NOT be re-substituted. To work around this for failure payloads that need `${run_id}` interpolated INSIDE the generator's JSON object, the generator returns the JSON object body **without outer braces** (strip leading `{` + trailing `}` from `json!(...).to_string()`), and the YAML wraps the result in `{"run_id":"${run_id}",${...inner_json}}`. The first-pass render now substitutes both `${run_id}` and `${...inner_json}` simultaneously into a valid JSON object.
+
+### Tests added (5)
+
+- `assessment_run_default_rtd_swarm_emits_full_pipeline` — default RTD (no swarm param). 5 agents incl. `release_gate` skip; verdict `warn` (4 findings >= 3); 16-line layout asserted index-by-index.
+- `assessment_run_frontend_swarm_emits_per_iter_findings` — frontend swarm (5 agents incl. trailing synthesizer skip); same 16 lines, verdict `warn`, sub-asserts on per-iter binding resolution (`${agent.name}`, `${agent.candidate_json}`).
+- `assessment_run_schema_version_unsupported_emits_failure_pipeline` — 4-line failure layout; asserts wire-byte deviation #1 (response is terminal); validates `total_checks=0` from empty family.
+- `assessment_run_candidate_schema_invalid_emits_failure_pipeline` — same 4-line shape with the `candidate_missing_title` code + `candidates[0].title` path.
+- `assessment_run_redaction_applied_emits_failure_pipeline` — same 4-line shape with `sample_reason: "redaction_applied"` distinct field.
+
 ## Migration plan (per-handler order)
 
 Once primitives land, port handlers from simplest to heaviest:
@@ -375,7 +409,7 @@ Once primitives land, port handlers from simplest to heaviest:
 3. **`context.mention_search`** — Filter DSL only; no counter or ledger. Mid-weight (~4h).
 4. **`handoff.create` / `handoff.approve`** — Both need multi-event ledger (`signers`, `required_signers`, `status`). Pair-port together (~6h).
 5. **`handoff.dispatch_local`** — Branches on `executor.spawn_failed` vs `dispatch_ok`. Needs ledger + conditional (deferred — design conditionals in a follow-up if branching becomes common).
-6. **`assessment.run`** — Heaviest. ~15-event evidence stream + verdict computation per-rubric. Needs all three primitives + possibly conditional branches.
+6. **`assessment.run`** — Heaviest. ~15-event evidence stream + verdict computation per-rubric. Needs all three primitives + possibly conditional branches. **✅ Ported in Pass #36** via foreach over `@assessment_family_catalog` + condition primitive on `is_failure` binding (Section A: 7 / 8).
 7. **`message.submit`** — Largest tree. Defer until all above stabilise.
 
 ## Codegen impact

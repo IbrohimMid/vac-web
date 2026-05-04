@@ -2794,3 +2794,79 @@ The inner step-render-and-emit loop body (Primitive 4 condition skip + Primitive
 ### UX impact
 
 Zero behaviour change. Pass #35 introduces a new fixture-only scenario (`debug.foreach_smoke`) that no production surface dispatches. All 26 prior runtime-dispatched scenarios remain wire-byte-identical. Cockpit operator interaction unchanged.
+
+## Pass #36 — port assessment.run via foreach + condition primitive composition (2026-05-04)
+
+**Scope**: port the legacy `handle_assessment_run` handler (~291 lines, 12-swarm family catalog + 3 early-failure swarms + verdict computation + DevComplete/ReadyToDeploy gate pair) to `tools/mock-engine/scenarios/assessment-run.yaml` via the Pass #35 `foreach` primitive (over a Rust-owned family catalog) composed with the Pass #34 `condition` primitive (single-equality skip on `is_failure` and per-iter `agent.is_skip` / `agent.is_first_finding`). Section A progress: **7 / 8 ported** (was 6 / 8 after Pass #35 split A; sole remaining handler is `message.submit`, the largest tree).
+
+### Why Pass #36 is the proof of primitive composition
+
+This is the first scenario that uses the foreach primitive AND the condition primitive simultaneously — condition gates inside foreach body, condition gates around foreach. The composition exercises the per-iter binding hygiene (`{as_prefix}.{key}` plus `{index_var}`) that Pass #35 introduced, against a real 12-swarm catalog (vs. the 3-item smoke fixture). It also exercises a new wire constraint (inner-JSON pattern) that Pass #28's design contemplated but did not concretely demand until now.
+
+### Generator catalog (15 new entries in ALLOWED_GENERATORS, 14 new arms in eval_seed_value)
+
+14 new generator arms in `scenarios.rs::eval_seed_value` (codegen mjs `ALLOWED_GENERATORS` set bumped by 14):
+
+| Generator | Returns | Notes |
+|---|---|---|
+| `@assessment_run_id` | scalar | bumps `state.counter`; format `run_01J{seed%10000:0>20}{counter:0>3}`. **MUST be the first state_seed.** |
+| `@assessment_is_failure` | scalar | `"true"` / `"false"` for the three failure swarms vs. success path. |
+| `@assessment_family_catalog` | JSON array | per-item bakes `name`, `is_skip`, `is_first_finding` plus `candidate_json` + `bad_candidate_json` strings. Empty `[]` for failure swarms. |
+| `@assessment_family_size` | scalar decimal | 0 for failure swarms. |
+| `@assessment_scope_json` | JSON object | calls `pub(crate) legacy_scenarios::repo_context` (wire-byte deviation #2). |
+| `@assessment_connector_snapshots_json` | JSON array | reads `state.counter` POST-bump from `@assessment_run_id`. |
+| `@assessment_failure_rejected_inner_json` | inner-JSON | object body **without** outer braces; switch by swarm. |
+| `@assessment_failure_failed_inner_json` | inner-JSON | same wrapping rationale; per-swarm `detail`. |
+| `@assessment_verdict` | scalar | `warn` / `pass` via `assessment_verdict_for_swarm` (>= 3 findings -> warn). |
+| `@assessment_release_score` | scalar | `0.7` / `0.9`. |
+| `@assessment_rtd_state` | scalar | `open` / `fail`. |
+| `@assessment_rtd_summary` | scalar | `Awaiting signoff` / `Verdict warns`. |
+| `@assessment_rtd_satisfied` | scalar | `true` / `false`. |
+| `@assessment_rtd_blockers_json` | JSON array | `[]` / `["verdict not pass"]`. |
+
+State_seed declaration order is significant: `run_id` first, then `connector_snapshots_json` last among counter-sensitive seeds, mirroring the legacy `state.counter += 1; ...; format!("01J{:0>23}", state.counter)` ordering.
+
+### Wire-byte deviations (2, both acknowledged in design doc)
+
+1. **Response ordering on failure path** (`#1`). Legacy emitted `started → response → worker_output_rejected → failed`. YAML port emits `started → worker_output_rejected → failed → response`. Uniform response-last via `final_response_json` simplifies runtime dispatch. No cockpit/local-bridge production assertion was hit; the failure-path tests assert response-as-terminal as the new contract.
+2. **`repo_context` coupling kept** (`#2`). `@assessment_scope_json` calls `crate::legacy_scenarios::repo_context` the same way legacy did. To enable this without code duplication, `family_catalog`, `repo_context`, and `RepoContext` (with all fields) are now `pub(crate)`. If `repo_context` is dropped in a future pass, scope's `repo_ref` + `base_commit_sha` will lose git introspection — acknowledged for Pass #36 zero-deviation.
+
+### Inner-JSON pattern (new Pass #36 wire constraint)
+
+`scenarios::render_string` is single-pass: a generator returning `${other_var}` literal will not be re-substituted. To interpolate `${run_id}` INSIDE failure-path object payloads, the inner-JSON generators (`@assessment_failure_rejected_inner_json` + `@assessment_failure_failed_inner_json`) return the object body **without** outer braces (strip leading `{` + trailing `}` from `json!(...).to_string()`), and the YAML wraps via `{"run_id":"${run_id}",${rejected_inner_json}}`. The first-pass render then substitutes `${run_id}` + `${...inner_json}` simultaneously into a valid JSON object.
+
+### Files touched
+
+- `tools/mock-engine/src/legacy_scenarios.rs`: `family_catalog`, `repo_context`, and `RepoContext` flipped to `pub(crate)`; `"assessment.run"` dispatch arm dropped (replaced with port comment); `handle_assessment_run` (~291 lines) deleted. File 661 lines (was 952, **-291 lines**).
+- `tools/mock-engine/src/scenarios.rs`: 2 new helpers (`assessment_swarm_is_failure`, `assessment_verdict_for_swarm`) + 14 new arms in `eval_seed_value` + 5 new integration tests. File 1558 lines (was 1022, **+536 lines** — ~150 in helpers + generators, ~195 in tests, the rest in inline doc comments).
+- `tools/mock-engine/scenarios/assessment-run.yaml`: NEW — 91-line scenario with 9 timeline steps (1 outer foreach + 8 conditional emit steps) + state_seeds + final_response + assertions.
+- `scripts/codegen-mock-scenarios.mjs`: 14 generator names added to `ALLOWED_GENERATORS`. File 441 lines (was 426, +15).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated — 29 scenarios, 28 runtime-dispatched (was 28 / 27).
+- `docs/plans/wiring/section-a-resolver-extensions-design.md`: Pass #36 section appended after Primitive 5; Migration plan item 6 marked ✅ ported.
+
+### Validation gate (all green)
+
+- `cargo build -p mock-engine`: clean.
+- `cargo test -p mock-engine`: **38 / 0** (was 33 / 0; +5 Pass #36 tests).
+- `cargo test -p local-bridge --lib`: **351 / 0**.
+- `cargo test -p local-bridge --test event_catalog_parity`: **7 / 0**.
+- `cargo fmt --all -- --check`: clean.
+- `node scripts/check-architecture-boundaries.mjs`: ok (**264 / 817 / 211** — unchanged).
+- `node scripts/codegen-mock-scenarios.mjs --check`: clean (29 / 28).
+- `git diff --check`: clean.
+
+### Architecture invariants preserved
+
+- YAML stays declarative: foreach binding name, body event order, condition single-equality skip, payload templates — nothing more.
+- Rust runtime stays source of truth: reads `swarm` from params, decides verdict via `assessment_verdict_for_swarm`, generates the family catalog from `legacy_scenarios::family_catalog`, picks the failure-payload variant, computes RTD state.
+- 27 prior runtime-dispatched scenarios untouched (all default to `foreach: None` + no condition + no inner-JSON).
+- Single-level foreach + single-equality condition still hold; codegen rejection paths unchanged.
+- Legacy fallback path still works (`unknown_command_falls_through_to_legacy` test passes).
+
+### Remaining Section A work (1 of 8)
+
+- `message.submit` (~175 lines legacy + 106 lines `handle_handoff_message_submit` helper) — Pass #37+, largest tree, branches on packet detection (`is_handoff_execution_submit`) + tool_call lifecycle. May need a new generator for packet-kind branching (analogous to `@handoff_dispatch_outcome` from Pass #34) and possibly a per-chunk variant of the foreach primitive for `transcript.delta` streaming.
+
+### UX impact
+
+Zero behaviour change on the success path — default RTD swarm emits the same 16-line shape (timestamps + run_id format + per-finding identity hashes + connector_snapshot_id all wire-byte identical to legacy). On the failure path, the response is now terminal instead of mid-stream (wire-byte deviation #1, audited and accepted). Cockpit assessment-run dispatch interaction otherwise byte-identical.

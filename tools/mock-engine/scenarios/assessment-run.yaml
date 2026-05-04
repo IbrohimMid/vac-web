@@ -1,0 +1,95 @@
+scenario: assessment_run
+status: production_parity
+runtime_dispatch: true
+description: |
+  Pass #36 port of legacy handle_assessment_run. Foreach over the swarm-specific
+  family catalog (12+ swarms via family_catalog) emits per-agent progress + a
+  candidate_received, with a bad-candidate stub at the first finding when
+  agent.is_first_finding == "true". After the loop, a synthesizer progress +
+  completed + DevComplete/ReadyToDeploy gate.changed pair close the success
+  path.
+
+  Three failure swarms (schema_version_unsupported, candidate_schema_invalid,
+  redaction_applied) short-circuit to worker_output_rejected + failed. Wire-byte
+  deviation #1 vs legacy: response is terminal on the failure path (legacy
+  emitted response immediately after started; uniform response-last via the
+  runtime catalog's final_response simplifies the dispatch surface).
+
+  Inner-JSON pattern (Pass #36 wire constraint): the failure-path payloads are
+  spliced via @assessment_failure_rejected_inner_json / @assessment_failure_failed_inner_json,
+  which return the JSON object body WITHOUT outer braces. The YAML wraps with
+  {"run_id":"${run_id}",${...inner_json}} because render_string is single-pass
+  and embedding ${run_id} literal inside generator output would not be re-substituted.
+input:
+  command: assessment.run
+  payload:
+    swarm: "<optional swarm name; default 'rtd'. Special swarms schema_version_unsupported, candidate_schema_invalid, redaction_applied trigger the failure pipeline.>"
+state_seeds:
+  run_id: '@assessment_run_id'
+  swarm: '$input.swarm|rtd'
+  is_failure: '@assessment_is_failure'
+  family: '@assessment_family_catalog'
+  family_size: '@assessment_family_size'
+  scope_json: '@assessment_scope_json'
+  connector_snapshots_json: '@assessment_connector_snapshots_json'
+  rejected_inner_json: '@assessment_failure_rejected_inner_json'
+  failed_inner_json: '@assessment_failure_failed_inner_json'
+  verdict: '@assessment_verdict'
+  release_score: '@assessment_release_score'
+  rtd_state: '@assessment_rtd_state'
+  rtd_summary: '@assessment_rtd_summary'
+  rtd_satisfied: '@assessment_rtd_satisfied'
+  rtd_blockers_json: '@assessment_rtd_blockers_json'
+timeline:
+  - event: assessment.started
+    payload_template: '{"run_id":"${run_id}","swarm":"${swarm}","total_checks":${family_size},"started_at":"2026-04-24T10:00:00Z","scope":${scope_json},"connector_snapshots":${connector_snapshots_json}}'
+
+  - event: assessment.worker_output_rejected
+    condition: { binding: is_failure, equals: "true" }
+    payload_template: '{"run_id":"${run_id}",${rejected_inner_json}}'
+
+  - event: assessment.failed
+    condition: { binding: is_failure, equals: "true" }
+    payload_template: '{"run_id":"${run_id}",${failed_inner_json}}'
+
+  - foreach:
+      binding: family
+      as: agent
+      index_var: idx
+    body:
+      - event: assessment.progress
+        payload_template: '{"run_id":"${run_id}","completed":${idx},"total":${family_size},"current":"${agent.name}"}'
+      - event: assessment.candidate_received
+        condition: { binding: agent.is_skip, equals: "false" }
+        payload_template: '{"run_id":"${run_id}","candidate_count":1,"agent_id":"${agent.name}","candidate":${agent.candidate_json}}'
+      - event: assessment.candidate_received
+        condition: { binding: agent.is_first_finding, equals: "true" }
+        payload_template: '{"run_id":"${run_id}","candidate_count":1,"agent_id":"${agent.name}","candidate":${agent.bad_candidate_json}}'
+
+  - event: assessment.progress
+    condition: { binding: is_failure, equals: "false" }
+    payload_template: '{"run_id":"${run_id}","completed":${family_size},"total":${family_size},"current":"synthesizer"}'
+
+  - event: assessment.completed
+    condition: { binding: is_failure, equals: "false" }
+    payload_template: '{"run_id":"${run_id}","verdict":"${verdict}","score":{"technical":0.78,"product":0.72,"ux":0.65,"release":${release_score},"ops":0.81}}'
+
+  - event: gate.changed
+    condition: { binding: is_failure, equals: "false" }
+    payload_template: '{"id":"DevComplete","state":"pass","summary":"RTD run completed","criteria":[{"id":"ci_green","label":"CI green","satisfied":true},{"id":"tests_pass","label":"Tests pass","satisfied":true}],"blockers":[],"required_signers":1,"signers":[]}'
+
+  - event: gate.changed
+    condition: { binding: is_failure, equals: "false" }
+    payload_template: '{"id":"ReadyToDeploy","state":"${rtd_state}","summary":"${rtd_summary}","criteria":[{"id":"verdict_pass","label":"Assessment verdict pass","satisfied":${rtd_satisfied}}],"blockers":${rtd_blockers_json},"required_signers":2,"signers":[]}'
+
+final_response:
+  ok: true
+  run_id: '${run_id}'
+
+assertions:
+  - "default RTD swarm (5 agents incl. release_gate skip): 1 started + foreach[ 5 progress + 4 candidate_received (one per non-skip agent) + 1 bad-candidate at idx 0 ] + 1 synth progress + 1 completed + 2 gate.changed + 1 response = 16 lines"
+  - "frontend swarm (5 agents incl. trailing synthesizer skip): same 16 lines, verdict=warn (4 findings >= 3 threshold), RTD state=fail, blockers=[\"verdict not pass\"]"
+  - "failure swarms (schema_version_unsupported, candidate_schema_invalid, redaction_applied): family_size=0 makes the foreach a graceful no-op; emits 1 started + 1 worker_output_rejected + 1 failed + 1 response = 4 lines. Wire-byte deviation #1: response is terminal (legacy emitted response right after started, before rejected/failed)"
+  - "@assessment_run_id MUST be the first state_seed so the counter bump precedes @assessment_connector_snapshots_json reading state.counter (mirrors legacy ordering: state.counter += 1, then snapshot id format!(\"01J{:0>23}\", state.counter))"
+  - "inner-JSON pattern (Pass #36 wire constraint): @assessment_failure_rejected_inner_json + @assessment_failure_failed_inner_json return JSON object bodies without outer braces; YAML wraps via {\"run_id\":\"${run_id}\",${...inner_json}} because render_string is single-pass"
+  - "wire-byte deviation #2 (repo_context coupling): @assessment_scope_json calls crate::legacy_scenarios::repo_context the same way legacy did; keep family_catalog + repo_context + RepoContext pub(crate) for Pass #36 zero-deviation"
