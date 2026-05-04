@@ -6,7 +6,7 @@ area: workflows
 owners:
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/workflows', 'apps/local-bridge/src/workflows/spec.rs']
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/workflows', 'apps/local-bridge/src/workflows/spec.rs']; Pass #26 deep audit: P18 acceptance verified — UI destinations + internal classification mapped in workflowEvents.ts (5 tests); Rust executor.rs is source of truth; YAML metadata-only (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

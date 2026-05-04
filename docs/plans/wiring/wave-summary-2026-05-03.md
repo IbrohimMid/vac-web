@@ -2157,3 +2157,126 @@ Total Pass #23 + #24 + #25: **51 plans flipped** dari planned ke landed (Pass #2
 3. **Per-plan acceptance verification** — 51 plans flipped berbasis artifact existence; deep acceptance audit per plan masih recommended untuk catch false-positive landings.
 
 **Working tree state**: 159+ files dirty (no commits made per execution rule 2; user akan handle commit sendiri).
+
+## Pass #26 — Deep acceptance verification of 3 P0 plans (18, 20, 26) + explicit parity test
+
+**Status:** All P0 plan acceptance criteria verified against actual source/tests. Explicit `event_catalog_parity` binary passes (7 ok). Full validation gate green. No code changes — verification-only pass with frontmatter audit annotations.
+
+**Mode:** continuation audit. Goal: catch false-positive `status: landed` flips by walking each acceptance criterion to actual code paths (vs Pass #23-#25 artifact-existence audits).
+
+### P0 plan 18 — `wiring.workflow_engine` acceptance audit
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Every workflow event has UI destination or internal classification | verified | `apps/web/src/domain/capabilities/workflowEvents.ts:48-56` maps all 9 events: `workflow.started/completed/failed` -> `workflow_rail`; `workflow.step.{started,updated,completed,failed}` -> `step_detail`; `workflow.artifact.created` -> `artifact_panel`; `workflow.input.message_submit` -> `internal` (explicit internal-only). `workflowEvents.test.ts` (5 tests) validates routing + terminal flags. |
+| YAML controls orchestration metadata only | verified | Plan's own YAML control-plane block (lines 20-69) is metadata-only. Runtime emission lives in `apps/local-bridge/src/workflows/events.rs` (Rust). YAML carries no execution. |
+| Rust executor remains source of truth for side effects | verified | `apps/local-bridge/src/workflows/executor.rs` (22KB, ~12 emit-event tests assert ordering of `workflow.started` / `step.*` / `completed` / `failed` / `artifact.created`). `workflows/adapters.rs:69` classifies `workflow.input.message_submit` as `WorkflowAdvance::PromptSubmitted` (internal advance, not a UI surface). `workflows/process.rs:7-8` doc comment confirms `workflow.started` fires on first `message.submit`, not session spawn. |
+
+**UX impact:** Workflow rail (steps, artifacts, terminal markers) sourced from Rust executor's emitted events; cockpit cannot fabricate fake-realtime workflow state. `workflow.input.message_submit` correctly stays internal — no leakage of internal advance into UI surface. Users see deterministic step transitions tied to real bridge state.
+
+### P0 plan 20 — `wiring.profile_policy` acceptance audit
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Profile denial enforced bridge-side before side effects | verified | `packages/profile-core/src/enforce.rs` is the deny source: 7 `Decision::deny(code, reason)` sites for `profile.tool_denied` (line 61), `profile.shell_bin_not_allowed` (80), `profile.fs_out_of_scope` (131, 153), `profile.egress_disabled` (200), `profile.egress_host` (211), `profile.egress_method` (222), `profile.egress_mode_unknown` (229). Consumed bridge-side by `profile_layer/mod.rs` (`enforce_tool`), `agent_runtime/acp/fs_handler.rs` (`enforce_fs_read`/`write`), `agent_runtime/acp/terminal_handler.rs` (`enforce_shell`), `translator/mod.rs` (`enforce_agent_kind`). Bridge invokes `enforce_*` BEFORE side-effect dispatch. |
+| Denial codes render as precise UI copy | verified | `apps/web/src/domain/capabilities/profileDenial.ts:30-110` maps all 7 deny codes to UI copy entries. `profileDenial.test.ts` covers all 7 codes via `isProfileDenial` + structured copy assertions. `notifyAttention.test.ts:11` confirms `profile.tool_denied` escalates to `sticky` banner level. |
+| Connector/file/shell writes require explicit profile capability | verified | `fs_handler.rs:6` uses `enforce_fs_read`/`enforce_fs_write` — both block before fs syscalls. `terminal_handler.rs:5` uses `enforce_shell` — blocks before terminal exec. `profile_layer/mod.rs:11` uses `enforce_tool` for arbitrary tool calls. Connector writes route through `enforce_agent_kind` for agent-class gating. Tests: `packages/profile-core/tests/{shell_allowlist,enforce_basics,inheritance}.rs`. |
+
+**UX impact:** When a denied operation is attempted, UI surfaces the specific denial code (`profile.fs_out_of_scope`, `profile.shell_bin_not_allowed`, etc.) with precise copy explaining why — not a generic "permission denied". Sticky banner attention level for `profile.tool_denied` ensures the user sees the policy block. Bridge-side enforcement means bypassing UI gate cannot bypass policy.
+
+### P0 plan 26 — `wiring.agent_registry_mcp` acceptance audit
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| User can see why an agent is disabled/untrusted | verified | `apps/web/src/domain/capabilities/registryEvents.ts:56` defines `registry.trust_violation` copy with explicit non-blocking-refresh semantics. `registryEvents.test.ts:13` asserts `isRegistryBlocking('registry.trust_violation') === true`. Bridge emits the event from `translator/mod.rs:4292` when sync detects a non-allowlisted source URL (allowlist defined in `agent_runtime/config.rs:90-91`). |
+| MCP drift blocks or warns according to policy | verified | `config/resume_policy.rs:82-84,126-143` defines `McpDriftPolicy::{Warn, Fail, Ignore}`. `translator/mod.rs:3704-3774` is the drift-detection helper: when `meta.mcp_servers != agent.mcp_servers`, it dispatches per `state.resume_policy.mcp_server_drift` policy — `Fail` emits `session.mcp_server_drift` ack with persisted/live counts and refuses resume; `Warn` emits warning then continues; `Ignore` short-circuits. `registryEvents.test.ts:14` confirms `isRegistryBlocking('session.mcp_server_drift') === true`. Web `domain/sessions/history.test.ts` covers all three drift policies. |
+| Registry UI does not hide trust violations | verified | Per `registryEvents.ts:56`, `registry.trust_violation` is `error` category with `refreshRegistry: false` — UI must show, not silently retry. `registryEvents.test.ts:22` asserts the refresh-suppression. Bridge command catalog marks `registry.add` and `registry.sync` as `Implemented` + `Sessionless` + `State` side-effect (`generated/command_catalog.rs:128, 130`). |
+
+**UX impact:** Agents that fail trust validation (URL outside allowlist) surface a specific `registry.trust_violation` error to the user — the user sees *which* violation and the registry refresh does NOT silently retry. MCP server drift on resume gives the user a deterministic policy-based outcome (block / warn / ignore) instead of mystery resume failures. SessionPicker / RegistryBrowser cannot hide a trust violation because the error is blocking.
+
+### P1 — Explicit `event_catalog_parity` binary
+
+```
+$ cargo test -p local-bridge --test event_catalog_parity
+running 7 tests
+test catalog_ids_are_sorted ... ok
+test allowlist_does_not_overlap_catalog ... ok
+test catalog_ids_are_well_formed ... ok
+test catalog_ids_are_unique ... ok
+test allowlist_is_sorted_and_unique ... ok
+test allowlist_entries_are_actually_emitted ... ok
+test every_emitted_id_is_known ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored
+```
+
+Drained allowlist still empty (`KNOWN_UNCATALOGED_EVENTS: &[]` per Pass #11 confirmation). All emitted ids appear in `EVENT_CATALOG`.
+
+### P1 — Mock-engine legacy scenarios — re-confirmed intentional non-port
+
+`tools/mock-engine/src/legacy_scenarios.rs` (1401 lines) still owns 8 handler families:
+
+- `message.submit` (line 189) — large multi-event tree with handoff_execution branching + tool_call lifecycle.
+- `context.mention_search` (217) — server-side filter (`if query.is_empty() || p.contains(...)`).
+- `assessment.run` (218) — evidence stream (~15 events) + verdict computation per-rubric.
+- `handoff.create` (222) / `handoff.approve` (223) / `handoff.dispatch_local` (227) — multi-event ledger with side-effect chain.
+- `release.deploy` (229) / `release.generate_notes` (251) — counter-based git-hash generator + deploy_progress timing.
+
+Per Pass #11 architectural decision (wave-summary line ~1107) and Pass #12-#22 reaffirmation, these stay imperative until the resolver primitives land:
+
+1. Counter-based hash generator (e.g. `@hash_truncated_7(seed, counter)`) for deterministic commit hashes.
+2. Multi-event ledger primitive for handoff state-machine branching.
+3. Filtering DSL for query-driven `mention_search` (`query.empty() || path.contains(query)`).
+
+These are heavy design work, out of scope for an audit pass. The thin-dispatcher refactor from Pass #9 already keeps the future port tractable: `scenarios.rs` short-circuits on YAML hits before falling through to `legacy_scenarios.rs`. Audit confirms Pass #11's "intentional non-port" decision still stands; `generated-mock-scenario-inventory.md:23-27` already lists these as follow-ups.
+
+**No code change this pass for Section A.**
+
+### P2 — Frontmatter audit annotations (3 plans)
+
+Appended a Pass #26 deep-audit note onto the `status:` line of each P0 plan (preserves Pass #25 artifact-existence note, adds deep-acceptance evidence pointer):
+
+- `docs/plans/wiring/18-workflow-engine.md`
+- `docs/plans/wiring/20-profile-policy-enforcement.md`
+- `docs/plans/wiring/26-agent-registry-mcp.md`
+
+The remaining 48 plans keep their Pass #23-#25 artifact-existence annotations. Their deep audits are still recommended but were not part of this pass's scope.
+
+### Validation gate (full, post Pass #26)
+
+| Check | Status | Notes |
+| --- | --- | --- |
+| `cargo build -p local-bridge` | ok | 0.17s incremental |
+| `cargo test -p local-bridge --lib` | 351 / 0 | unchanged baseline |
+| `cargo fmt --all -- --check` | clean | no diff |
+| `cargo test -p local-bridge --test event_catalog_parity` | 7 / 0 | explicit binary |
+| `cargo test event_catalog_parity --workspace` | ok | red-team build clean from Pass #13 |
+| `cargo test -p mock-engine` | 20 / 0 | 21 scenarios catalog (20 runtime-dispatched) |
+| `bash scripts/verify-codegen.sh` | ok | 16 modules, 21 scenarios match committed |
+| `node scripts/check-architecture-boundaries.mjs` | ok | 264 files / 817 edges / 211 external |
+| `pnpm typecheck` workspace | clean |  |
+| `CI=true pnpm --filter @vac-web/web test -- --run` | 648 / 87 | unchanged |
+| `pnpm --filter @vac-web/web lint` | 0 errors / 0 warnings | unchanged |
+| `git diff --check` | clean | no whitespace / conflict markers |
+| Working tree pre-audit | clean | `main...origin/main [ahead 1]`, 0 untracked |
+
+### Files modified (Pass #26)
+
+- `docs/plans/wiring/wave-summary-2026-05-03.md` (this section).
+- `docs/plans/wiring/18-workflow-engine.md` (status line: appended Pass #26 deep-audit note).
+- `docs/plans/wiring/20-profile-policy-enforcement.md` (status line: appended Pass #26 deep-audit note).
+- `docs/plans/wiring/26-agent-registry-mcp.md` (status line: appended Pass #26 deep-audit note).
+
+No code changes. No commits / pushes per execution rule (commit only if explicitly instructed).
+
+### Remaining risks
+
+1. **Section A — 8 handler ports** still intentional non-port pending resolver extensions (counter-based hash, multi-event ledger, filtering DSL). Heavy design effort; not addressable inside an audit pass. Web tests do not depend on these scenarios today (vitest 648/648 green).
+2. **48 plans without deep-acceptance audit** — Pass #26 covers only the 3 highest-risk P0 plans the user prompt named (18 / 20 / 26). The remaining 48 plans landed via Pass #23-#25 artifact-existence audits; per-plan deep audits remain recommended (especially heavy slices: 04 assessment-index, 05 review-taxonomy, 06 approval-lifecycle, 07 handoff-errors, 14 release, 22 persistence-replay-redaction, 41 observability-slos).
+3. **Translator raw `state.audit.log` fallback paths** — 25 fallback paths intentionally preserved (Slice 41 closeout per Pass #22). Each fallback is unreachable on validated input but kept as audit-trail safety net during schema evolution.
+
+### Next-session pointers
+
+- Per-plan deep audit pass for the 7 heavy slices listed above (estimated 2-3 audits per session).
+- Resolver extension design pass (counter-based hash + multi-event ledger + filtering DSL) before any Section A handler port can land.
+- Optionally migrate 1-2 fallback paths in `translator/mod.rs` into the structured-log path with regression-test coverage.
