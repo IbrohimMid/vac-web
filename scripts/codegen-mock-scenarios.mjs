@@ -44,6 +44,7 @@ const ALLOWED_GENERATORS = new Set([
 	'session_id',
 	'release_deploy_id',
 	'release_deploy_commit',
+	'release_notes_id',
 ]);
 
 function loadScenarios() {

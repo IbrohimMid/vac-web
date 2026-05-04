@@ -247,7 +247,6 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
                 emit_response(id.unwrap_or(Value::Null), json!({ "ok": true })),
             ]
         }
-        "release.generate_notes" => handle_release_notes(id, params, state),
         // session.close: ported to YAML runtime catalog (session-close.yaml).
         // scenarios::handle short-circuits before reaching this dispatcher.
         "" => vec![emit_error(id, -32600, "missing method")],
@@ -433,43 +432,6 @@ fn handle_handoff_message_submit(
 // connector_catalog + titlecase helpers: removed; their data was inlined into
 // tools/mock-engine/scenarios/connector-list.yaml (14 static connector entries
 // with deterministic rate_limit + reset_at timestamps).
-
-fn handle_release_notes(id: Option<Value>, params: Value, state: &mut State) -> Vec<String> {
-    let target = params
-        .get("target_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    state.counter += 1;
-    let markdown = "\
-## What changed
-
-- Auto-resolved RTD finding: coverage drift
-- Handoff pkt_01…: 3 tasks completed
-
-## Deploy window
-
-commit range: abc1234..def5678
-"
-    .to_string();
-    vec![
-        emit_notification(
-            "release.notes_draft",
-            json!({
-                "id": format!("notes_{target}_{}", state.counter),
-                "target_id": target,
-                "commit_range": "abc1234..def5678",
-                "markdown": markdown,
-                "source_refs": [
-                    { "kind": "commit", "ref": "abc1234" },
-                    { "kind": "packet", "ref": "pkt_01" }
-                ],
-                "generated_at": "2026-04-24T10:00:00Z"
-            }),
-        ),
-        emit_response(id.unwrap_or(Value::Null), json!({ "ok": true })),
-    ]
-}
 
 /// Canonical agent catalog per assessor family. Phase 6 ships the full 12.
 /// (agent, category, check).

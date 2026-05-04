@@ -23,7 +23,7 @@ pub struct ScenarioEntry {
     pub assertions: &'static [&'static str],
 }
 
-pub const SCENARIO_CATALOG: [ScenarioEntry; 22] = [
+pub const SCENARIO_CATALOG: [ScenarioEntry; 23] = [
     ScenarioEntry {
         id: "approval_approve",
         status: ScenarioStatus::FutureWhenBackendLands,
@@ -119,6 +119,14 @@ pub const SCENARIO_CATALOG: [ScenarioEntry; 22] = [
         input_command: "release.deploy",
         timeline_events: &["release.deploy_progress", "release.deploy_progress", "release.post_deploy_observation"],
         assertions: &["emits 2 release.deploy_progress events (deploying then deployed) with stable deploy_id + commit pair, then a post_deploy_observation tied to the same deploy_id; final response carries deploy_id and ok=true", "port of legacy handle_release_deploy via Section A counter-based hash generators (@release_deploy_id, @release_deploy_commit)"],
+    },
+    ScenarioEntry {
+        id: "release_generate_notes",
+        status: ScenarioStatus::ProductionParity,
+        replacement: None,
+        input_command: "release.generate_notes",
+        timeline_events: &["release.notes_draft"],
+        assertions: &["emits exactly 1 release.notes_draft notification with deterministic notes_id derived from counter + target_id plus canonical markdown summary and 2 source_refs (commit + packet)", "port of legacy handle_release_notes via Pass #30 counter-based generator @release_notes_id; markdown body kept byte-identical to legacy fixture"],
     },
     ScenarioEntry {
         id: "release_list_targets",
@@ -227,7 +235,7 @@ pub struct RuntimeScenarioEntry {
     pub final_response_json: Option<&'static str>,
 }
 
-pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 21] = [
+pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 22] = [
     RuntimeScenarioEntry {
         id: "approval_approve",
         input_command: "approval.approve",
@@ -304,6 +312,13 @@ pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 21] = [
         state_seeds: &[RuntimeStateSeed { var: "deploy_id", value: "@release_deploy_id" }, RuntimeStateSeed { var: "commit", value: "@release_deploy_commit" }, RuntimeStateSeed { var: "target_id", value: "$input.target_id" }],
         timeline: &[RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deploying\",\"started_at\":\"2026-04-24T10:00:00Z\"}" }, RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deployed\",\"started_at\":\"2026-04-24T10:00:00Z\",\"finished_at\":\"2026-04-24T10:00:08Z\"}" }, RuntimeTimelineStep { event: "release.post_deploy_observation", after_ms: 0, payload_json: "{\"id\":\"obs_${deploy_id}_1\",\"target_id\":\"${target_id}\",\"connector\":\"sentry\",\"severity\":\"info\",\"message\":\"no new issues in 5-minute window\",\"observed_at\":\"2026-04-24T10:05:00Z\"}" }],
         final_response_json: Some("{\"ok\":true,\"deploy_id\":\"${deploy_id}\"}"),
+    },
+    RuntimeScenarioEntry {
+        id: "release_generate_notes",
+        input_command: "release.generate_notes",
+        state_seeds: &[RuntimeStateSeed { var: "target_id", value: "$input.target_id" }, RuntimeStateSeed { var: "notes_id", value: "@release_notes_id" }],
+        timeline: &[RuntimeTimelineStep { event: "release.notes_draft", after_ms: 0, payload_json: "{\"id\":\"${notes_id}\",\"target_id\":\"${target_id}\",\"commit_range\":\"abc1234..def5678\",\"markdown\":\"## What changed\\n\\n- Auto-resolved RTD finding: coverage drift\\n- Handoff pkt_01…: 3 tasks completed\\n\\n## Deploy window\\n\\ncommit range: abc1234..def5678\\n\",\"source_refs\":[{\"kind\":\"commit\",\"ref\":\"abc1234\"},{\"kind\":\"packet\",\"ref\":\"pkt_01\"}],\"generated_at\":\"2026-04-24T10:00:00Z\"}" }],
+        final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
         id: "release_list_targets",

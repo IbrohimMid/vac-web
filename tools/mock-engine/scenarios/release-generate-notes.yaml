@@ -1,0 +1,29 @@
+scenario: release_generate_notes
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  target_id: "$input.target_id"
+  notes_id: "@release_notes_id"
+input:
+  command: release.generate_notes
+  payload:
+    target_id: "<environment label, e.g. staging | prod>"
+timeline:
+  - event: release.notes_draft
+    after_ms: 0
+    payload:
+      id: "${notes_id}"
+      target_id: "${target_id}"
+      commit_range: "abc1234..def5678"
+      markdown: "## What changed\n\n- Auto-resolved RTD finding: coverage drift\n- Handoff pkt_01…: 3 tasks completed\n\n## Deploy window\n\ncommit range: abc1234..def5678\n"
+      source_refs:
+        - kind: commit
+          ref: abc1234
+        - kind: packet
+          ref: pkt_01
+      generated_at: "2026-04-24T10:00:00Z"
+final_response:
+  ok: true
+assertions:
+  - "emits exactly 1 release.notes_draft notification with deterministic notes_id derived from counter + target_id plus canonical markdown summary and 2 source_refs (commit + packet)"
+  - "port of legacy handle_release_notes via Pass #30 counter-based generator @release_notes_id; markdown body kept byte-identical to legacy fixture"

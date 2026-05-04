@@ -91,6 +91,17 @@ fn build_bindings(
                 "release_deploy_commit" => {
                     format!("{:040x}", state.counter.wrapping_mul(0xDEAD_BEEF_u64))
                 }
+                // Section A primitive (Pass #30): bumps counter and renders
+                // `notes_{target_id}_{counter}` shape used by release.generate_notes.
+                // Reads target_id from input params (empty if absent, matches legacy).
+                "release_notes_id" => {
+                    state.counter += 1;
+                    let target = params
+                        .get("target_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    format!("notes_{target}_{}", state.counter)
+                }
                 _ => seed.value.to_string(),
             }
         } else if let Some(key) = seed.value.strip_prefix("$input.") {
@@ -356,7 +367,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn release_deploy_runtime_dispatch_emits_three_progress_events_and_final_response() {
         let mut state = mk_state();
         let out = handle(
@@ -396,6 +406,46 @@ mod tests {
         assert_eq!(r["result"]["deploy_id"], deploy_id);
     }
 
+    #[test]
+    fn release_generate_notes_runtime_dispatch_emits_notes_draft_then_response() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":92,"method":"release.generate_notes","params":{"target_id":"prod"}}"#,
+            &mut state,
+        );
+        assert_eq!(
+            out.len(),
+            2,
+            "expected 1 notification + 1 response, got {out:?}"
+        );
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "release.notes_draft");
+        let notes_id = n0["params"]["id"].as_str().unwrap();
+        assert!(
+            notes_id.starts_with("notes_prod_"),
+            "unexpected notes_id {notes_id}"
+        );
+        assert_eq!(n0["params"]["target_id"], "prod");
+        assert_eq!(n0["params"]["commit_range"], "abc1234..def5678");
+        let md = n0["params"]["markdown"].as_str().unwrap();
+        assert!(
+            md.contains("## What changed"),
+            "markdown missing header: {md}"
+        );
+        assert!(
+            md.contains("## Deploy window"),
+            "markdown missing deploy window: {md}"
+        );
+        let refs = n0["params"]["source_refs"].as_array().unwrap();
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0]["kind"], "commit");
+        assert_eq!(refs[1]["kind"], "packet");
+        let r: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(r["id"], 92);
+        assert_eq!(r["result"]["ok"], true);
+    }
+
+    #[test]
     fn render_value_recurses_into_arrays_and_objects() {
         let mut b = HashMap::new();
         b.insert("id".to_string(), "sh_01".to_string());
