@@ -2700,3 +2700,97 @@ Zero behaviour regression. `handoff.dispatch_local` mock flow emits the same obs
 - failure (`force_failure: true` or `mode: "fail"`): `started` → `handoff.failed` → `handoff.upserted(failed)` → response.
 
 Now sourced from YAML/runtime-dispatched scenario via condition primitive. Reduced imperative mock surface; tighter audit trail. Cockpit handoff dispatch interaction byte-identical.
+
+## Pass #35 — foreach loop primitive + debug smoke canary (2026-05-04)
+
+**Scope**: implement single-level foreach iteration over a JSON-array binding (Primitive 5; Pass #28 had deferred bounded looping as Non-goal) and validate the primitive end-to-end via a smoke canary scenario, before Pass #36 layers `assessment.run` on top. Section A progress: **6 / 8 ported (no change — Pass #36 ports `assessment.run`)**.
+
+### Why split #35 / #36
+
+User direction (Split A): land the primitive infrastructure + a smoke canary in Pass #35, port `assessment.run` in Pass #36. Rationale:
+- Smaller audit blast radius per pass — primitive validation is decoupled from the 12-swarm family catalog port.
+- Clean revert window — if Pass #36 hits an unexpected legacy edge case (early-failure wire order, identity hash format, verdict threshold), Pass #35 stays landed and the foreach primitive remains independently validated.
+- Generator authority stays preserved across both passes (`@debug_smoke_items` is a stand-in for `@assessment_family_catalog`, same Rust-owns-the-array contract).
+
+### Primitives implemented
+
+**Primitive 5 — foreach loop over JSON-array binding**: optional `foreach: { binding, as, index_var? }` + sibling `body: [steps]` on each timeline step. Codegen emits `foreach: Option<RuntimeForeach>` on `RuntimeTimelineStep` plus the new `RuntimeForeach { binding, as_prefix, index_var, body }` struct. At dispatch:
+
+```rust
+if let Some(fe) = step.foreach {
+    let arr_str = bindings.get(fe.binding).map(String::as_str).unwrap_or("[]");
+    let parsed: Value = serde_json::from_str(arr_str).unwrap_or(Value::Array(Vec::new()));
+    let items: Vec<Value> = match parsed { Value::Array(a) => a, _ => Vec::new() };
+    for (idx, item) in items.iter().enumerate() {
+        let mut iter_bindings = bindings.clone();
+        if !fe.index_var.is_empty() { iter_bindings.insert(fe.index_var.to_string(), idx.to_string()); }
+        if let Value::Object(obj) = item {
+            for (k, val) in obj {
+                let key = format!("{}.{}", fe.as_prefix, k);
+                let v = match val { Value::String(s) => s.clone(), other => other.to_string() };
+                iter_bindings.insert(key, v);
+            }
+        }
+        for body_step in fe.body { emit_single_step(body_step, &mut iter_bindings, state, &params, &mut out)?; }
+    }
+    continue;
+}
+emit_single_step(step, &mut bindings, state, &params, &mut out)?;
+```
+
+Single-level only — no nested foreach, no break/continue, no early exit. Codegen rejects nested foreach, mutual `event` + `foreach` on the same step, and any unknown key inside the foreach object. Per-iter bindings (`{as_prefix}.{key}` plus `{index_var}`) live in a clone so iterations stay hygienic; persistent counter bumps still flow through `state` since generators read/write `state` directly.
+
+### Refactor: `emit_single_step` extracted
+
+The inner step-render-and-emit loop body (Primitive 4 condition skip + Primitive 2 state_seeds_after + dual render path) extracted into `fn emit_single_step` so the foreach branch can reuse it for body steps. The non-foreach path now calls the same helper with the outer bindings — single source of truth for per-step rendering.
+
+### Domain-specific generator (smoke canary)
+
+- `@debug_smoke_items` — returns a fixed 3-item JSON-array string (alpha/beta/gamma) with `label`, `kind`, `skip`, and optionally `skip_reason` fields. Used by the `debug.foreach_smoke` scenario only; Pass #36 will introduce `@assessment_family_catalog` following the same pattern.
+
+### Smoke canary: debug.foreach_smoke
+
+- 1 outer foreach step over `items` binding, `as_prefix=item`, `index_var=idx`.
+- Body has 2 steps:
+  1. `debug.smoke_item` (no condition) — emits per-iter with `${idx}`, `${item.label}`, `${item.kind}`.
+  2. `debug.smoke_skipped` (Primitive 4 condition: `item.skip == "true"`) — emits only on beta with `${item.skip_reason}`.
+- Total emissions for default params: 3 smoke_item + 1 smoke_skipped + 1 final response = 5 lines.
+- Final response: `{ ok: true }`.
+- Status: `fixture_only` — not exposed as production parity, lives in the catalog purely to validate primitive plumbing.
+
+### Files touched
+
+- `tools/mock-engine/scenarios/debug-foreach-smoke.yaml`: NEW — 33-line canary scenario.
+- `tools/mock-engine/src/scenarios.rs`: 1 generator branch (`@debug_smoke_items`); foreach branch in `try_runtime_dispatch`; `fn emit_single_step` extracted; 2 integration tests. File 1022 lines (was 890, +132).
+- `scripts/codegen-mock-scenarios.mjs`: extended `RuntimeTimelineStep` (added `foreach` field) + new `RuntimeForeach` struct emit; 1 new generator in `ALLOWED_GENERATORS`; foreach shape validation; recursive `renderStep` helper; `flattenEventNames` for SCENARIO_CATALOG metadata. File 426 lines (was 356, +70).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated — 28 scenarios, 27 runtime-dispatched (was 27 / 26).
+- `docs/plans/wiring/section-a-resolver-extensions-design.md`: Primitive 5 section added; Non-goals item extended to cover loop grammar.
+
+### Validation gate (all green)
+
+- `cargo build -p mock-engine`: clean (1 pre-existing dead_code warning on legacy `RepoContext` struct).
+- `cargo test -p mock-engine`: **33 / 0** (was 31/0; +2 tests).
+- `cargo test -p local-bridge --lib`: 351 / 0.
+- `cargo test -p local-bridge --test event_catalog_parity`: 7 / 0.
+- `cargo fmt --all -- --check`: clean.
+- `node scripts/check-architecture-boundaries.mjs`: ok (264 / 817 / 211).
+- `git diff --check`: clean.
+- `bash scripts/verify-codegen.sh`: confirmed post-commit (pre-commit drift expected — uncommitted scenario_catalog.rs).
+
+### Architecture invariants preserved
+
+- YAML stays declarative: foreach binding name, body event order, payload templates, single-equality condition skip — nothing more.
+- Rust runtime stays source of truth: reads params, generates the array (`@debug_smoke_items` and Pass #36's `@assessment_family_catalog`), iterates, emits, evaluates condition.
+- 26 prior runtime-dispatched scenarios untouched (default `foreach: None` is a no-op).
+- Single-level only — no nested foreach, no break/continue. Codegen rejects nested foreach, mutual `event` + `foreach`, and unknown keys.
+- Legacy fallback path still works (`unknown_command_falls_through_to_legacy` test passes).
+- Pre-existing scenarios' wire shape unchanged — behaviour-preserving infra-only pass.
+
+### Remaining Section A work (2 of 8)
+
+- `assessment.run` (~290 lines legacy) — Pass #36, full port using foreach over `@assessment_family_catalog` + 3 early-failure path discriminants + verdict computation. Primitive 5 is the foundation.
+- `message.submit` (~175 lines legacy + 106 lines helper) — Pass #37+, largest tree, branches on packet detection + tool_call lifecycle.
+
+### UX impact
+
+Zero behaviour change. Pass #35 introduces a new fixture-only scenario (`debug.foreach_smoke`) that no production surface dispatches. All 26 prior runtime-dispatched scenarios remain wire-byte-identical. Cockpit operator interaction unchanged.

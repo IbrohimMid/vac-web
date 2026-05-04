@@ -1,0 +1,33 @@
+scenario: debug_foreach_smoke
+status: fixture_only
+description: |
+  Pass #35 smoke scenario for the foreach primitive. Iterates a fixed 3-item
+  JSON array provided by @debug_smoke_items, emitting one debug.smoke_item event
+  per item plus a debug.smoke_skipped event when the item's `skip` field equals
+  "true". Exercises (a) foreach over a JSON-array binding, (b) per-iter
+  ${item.field} substitution, (c) ${idx} 0-based index, and (d) Pass #34
+  condition-skip primitive used inside a foreach body. Pass #36 layers
+  assessment.run on top of these mechanics.
+runtime_dispatch: true
+input:
+  command: debug.foreach_smoke
+state_seeds:
+  items: '@debug_smoke_items'
+timeline:
+  - foreach:
+      binding: items
+      as: item
+      index_var: idx
+    body:
+      - event: debug.smoke_item
+        payload_template: '{"index":${idx},"label":"${item.label}","kind":"${item.kind}"}'
+      - event: debug.smoke_skipped
+        condition: { binding: item.skip, equals: "true" }
+        payload_template: '{"index":${idx},"reason":"${item.skip_reason}"}'
+final_response:
+  ok: true
+assertions:
+  - emits one debug.smoke_item per item in the catalog
+  - emits debug.smoke_skipped only for items where skip equals "true"
+  - per-iter bindings ${item.field} and ${idx} resolve correctly inside body
+  - foreach must not nest (codegen rejects nested foreach in body)

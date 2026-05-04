@@ -50,43 +50,43 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
     let mut bindings = bindings;
     let mut out = Vec::with_capacity(entry.timeline.len() + 1);
     for step in entry.timeline {
-        // Pass #34: single-equality skip primitive (conditional branching).
-        // When `condition` is set, the step is emitted only if
-        // `bindings[condition.binding] == condition.equals`. Missing binding compares
-        // against the empty string. No operators, no nesting — entire authority for
-        // branch resolution lives in generators (e.g. @handoff_dispatch_outcome) which
-        // produce the binding value; YAML only declares which literal triggers the step.
-        if let Some(cond) = step.condition {
-            let actual = bindings.get(cond.binding).map(String::as_str).unwrap_or("");
-            if actual != cond.equals {
-                continue;
+        // Pass #35: foreach loop primitive. When `step.foreach` is Some, this step iterates
+        // the JSON-array string stored in `bindings[foreach.binding]` (typically produced by
+        // an @-generator that returns a serde_json::Value::Array of objects, .to_string()-ed).
+        // Body steps execute per-item with extended bindings: `{as_prefix}.{key}` for each
+        // object field plus `{index_var}` (when non-empty) for the 0-based index. Per-iter
+        // bindings are scoped to a clone so iterations stay hygienic; persistent counter
+        // bumps still flow through `state` since generators read/write `state` directly.
+        // Single-level only — codegen rejects nested foreach in body.
+        if let Some(fe) = step.foreach {
+            let arr_str = bindings.get(fe.binding).map(String::as_str).unwrap_or("[]");
+            let parsed: Value = serde_json::from_str(arr_str).unwrap_or(Value::Array(Vec::new()));
+            let items: Vec<Value> = match parsed {
+                Value::Array(a) => a,
+                _ => Vec::new(),
+            };
+            for (idx, item) in items.iter().enumerate() {
+                let mut iter_bindings = bindings.clone();
+                if !fe.index_var.is_empty() {
+                    iter_bindings.insert(fe.index_var.to_string(), idx.to_string());
+                }
+                if let Value::Object(obj) = item {
+                    for (k, val) in obj {
+                        let key = format!("{}.{}", fe.as_prefix, k);
+                        let v = match val {
+                            Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        iter_bindings.insert(key, v);
+                    }
+                }
+                for body_step in fe.body {
+                    emit_single_step(body_step, &mut iter_bindings, state, &params, &mut out)?;
+                }
             }
+            continue;
         }
-        // Two render paths:
-        //  (a) payload_template_json is Some: substitute ${var} placeholders
-        //      directly in the raw JSON template string, then parse. Lets typed
-        //      JSON-value bindings (e.g. array from @mention_search_results)
-        //      splice in as real arrays/objects rather than string blobs.
-        //  (b) payload_template_json is None (default): parse payload_json into
-        //      a Value first, then walk the Value substituting string-typed
-        //      bindings via render_value. Used for the 22 existing scenarios.
-        let rendered = if let Some(template) = step.payload_template_json {
-            let substituted = render_string(template, &bindings);
-            serde_json::from_str(&substituted).ok()?
-        } else {
-            let raw: Value = serde_json::from_str(step.payload_json).ok()?;
-            render_value(&raw, &bindings)
-        };
-        out.push(emit_notification(step.event, rendered));
-        // Section A primitive (Pass #33): multi-event ledger.
-        // After rendering this step, evaluate any state_seeds_after directives
-        // and extend the bindings map. Subsequent steps in the same scenario
-        // can reference these additions via ${var}. Useful for counter bumps
-        // mid-timeline or computed derivations from prior payload metadata.
-        for seed in step.state_seeds_after {
-            let val = eval_seed_value(seed.value, state, &params);
-            bindings.insert(seed.var.to_string(), val);
-        }
+        emit_single_step(step, &mut bindings, state, &params, &mut out)?;
     }
     let result = if let Some(json_str) = entry.final_response_json {
         let raw: Value = serde_json::from_str(json_str).ok()?;
@@ -96,6 +96,40 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
     };
     out.push(emit_response(id, result));
     Some(out)
+}
+
+/// Pass #35: render + emit a single (non-foreach) timeline step.
+/// Extracted from `try_runtime_dispatch` so the foreach branch can reuse it for body steps.
+/// Honors the Pass #34 `condition` skip primitive, the Pass #32 dual render paths
+/// (payload_template_json vs payload_json), and the Pass #33 `state_seeds_after` ledger.
+/// Returns `Some(())` on success or skip; `None` on JSON parse failure (matches outer
+/// scenario-abort semantics so a malformed step bails the whole runtime dispatch).
+fn emit_single_step(
+    step: &crate::generated::scenario_catalog::RuntimeTimelineStep,
+    bindings: &mut HashMap<String, String>,
+    state: &mut State,
+    params: &Value,
+    out: &mut Vec<String>,
+) -> Option<()> {
+    if let Some(cond) = step.condition {
+        let actual = bindings.get(cond.binding).map(String::as_str).unwrap_or("");
+        if actual != cond.equals {
+            return Some(());
+        }
+    }
+    let rendered = if let Some(template) = step.payload_template_json {
+        let substituted = render_string(template, bindings);
+        serde_json::from_str(&substituted).ok()?
+    } else {
+        let raw: Value = serde_json::from_str(step.payload_json).ok()?;
+        render_value(&raw, bindings)
+    };
+    out.push(emit_notification(step.event, rendered));
+    for seed in step.state_seeds_after {
+        let val = eval_seed_value(seed.value, state, params);
+        bindings.insert(seed.var.to_string(), val);
+    }
+    Some(())
 }
 
 /// Mirror of legacy `legacy_scenarios::deterministic_hex` for seed-derived
@@ -229,6 +263,18 @@ fn eval_seed_value(seed_value: &str, state: &mut State, params: &Value) -> Strin
                     "success".to_string()
                 }
             }
+            // Section A (Pass #35): foreach loop primitive smoke generator.
+            // Returns a fixed JSON-array string of 3 objects exercising per-iter
+            // bindings (`{item.label}`, `{item.kind}`, `{item.skip_reason}`) plus
+            // the condition primitive (only beta has skip="true"). Pass #36 will
+            // add the real `@assessment_family_catalog` generator on top of this
+            // same foreach plumbing.
+            "debug_smoke_items" => json!([
+                { "label": "alpha", "kind": "primary", "skip": "false" },
+                { "label": "beta", "kind": "secondary", "skip": "true", "skip_reason": "policy" },
+                { "label": "gamma", "kind": "primary", "skip": "false" }
+            ])
+            .to_string(),
             _ => seed_value.to_string(),
         }
     } else if let Some(rest) = seed_value.strip_prefix("$input_json.") {
@@ -886,5 +932,91 @@ mod tests {
         let n1: Value = serde_json::from_str(&out[1]).unwrap();
         assert_eq!(n1["method"], "handoff.failed");
         assert_eq!(n1["params"]["status"], "failed");
+    }
+
+    // ---- Pass #35: foreach loop primitive smoke + catalog-shape tests. ----
+
+    #[test]
+    fn runtime_foreach_smoke_scenario_present_in_catalog() {
+        // Catalog-shape assertion: confirms codegen emitted the foreach step with the
+        // expected binding/as_prefix/index_var and a 2-step body (smoke_item + smoke_skipped).
+        // Body must NOT itself contain foreach (single-level iteration only).
+        let entry = RUNTIME_SCENARIO_CATALOG
+            .iter()
+            .find(|e| e.input_command == "debug.foreach_smoke")
+            .expect("debug_foreach_smoke runtime scenario present");
+        assert_eq!(
+            entry.timeline.len(),
+            1,
+            "smoke scenario has exactly 1 outer step (the foreach)"
+        );
+        let outer = &entry.timeline[0];
+        let fe = outer.foreach.expect("outer step is a foreach");
+        assert_eq!(fe.binding, "items");
+        assert_eq!(fe.as_prefix, "item");
+        assert_eq!(fe.index_var, "idx");
+        assert_eq!(fe.body.len(), 2);
+        assert_eq!(fe.body[0].event, "debug.smoke_item");
+        assert_eq!(fe.body[1].event, "debug.smoke_skipped");
+        assert!(
+            fe.body[1].condition.is_some(),
+            "smoke_skipped guarded by condition primitive"
+        );
+        assert!(
+            fe.body[0].foreach.is_none(),
+            "body step must not nest foreach"
+        );
+        assert!(
+            fe.body[1].foreach.is_none(),
+            "body step must not nest foreach"
+        );
+    }
+
+    #[test]
+    fn runtime_foreach_smoke_emits_per_item_with_resolved_bindings_and_condition() {
+        // End-to-end smoke: dispatch the runtime scenario, verify body steps emit per-item
+        // with resolved {item.field} + {idx} bindings, and that the condition primitive
+        // skips smoke_skipped on items where skip != "true" (alpha + gamma) but emits it
+        // for beta. Final response carries ok=true. This is the canary for Pass #36.
+        let mut state = mk_state();
+        let line = r#"{"jsonrpc":"2.0","id":42,"method":"debug.foreach_smoke","params":{}}"#;
+        let out = handle(line, &mut state);
+        assert_eq!(
+            out.len(),
+            5,
+            "3 smoke_item + 1 smoke_skipped (beta only) + 1 response = 5 lines, got: {out:?}"
+        );
+
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).expect("each line is valid JSON"))
+            .collect();
+
+        // Iteration 0 (alpha): smoke_item with index=0, label=alpha, kind=primary.
+        // Iteration 1 (beta):  smoke_item with index=1, label=beta, kind=secondary;
+        //                      then smoke_skipped (condition matches skip="true") with index=1, reason=policy.
+        // Iteration 2 (gamma): smoke_item with index=2, label=gamma, kind=primary.
+        assert_eq!(parsed[0]["method"], "debug.smoke_item");
+        assert_eq!(parsed[0]["params"]["index"], 0);
+        assert_eq!(parsed[0]["params"]["label"], "alpha");
+        assert_eq!(parsed[0]["params"]["kind"], "primary");
+
+        assert_eq!(parsed[1]["method"], "debug.smoke_item");
+        assert_eq!(parsed[1]["params"]["index"], 1);
+        assert_eq!(parsed[1]["params"]["label"], "beta");
+        assert_eq!(parsed[1]["params"]["kind"], "secondary");
+
+        assert_eq!(parsed[2]["method"], "debug.smoke_skipped");
+        assert_eq!(parsed[2]["params"]["index"], 1);
+        assert_eq!(parsed[2]["params"]["reason"], "policy");
+
+        assert_eq!(parsed[3]["method"], "debug.smoke_item");
+        assert_eq!(parsed[3]["params"]["index"], 2);
+        assert_eq!(parsed[3]["params"]["label"], "gamma");
+        assert_eq!(parsed[3]["params"]["kind"], "primary");
+
+        // Final response on the JSON-RPC id (42) with ok=true.
+        assert_eq!(parsed[4]["id"], 42);
+        assert_eq!(parsed[4]["result"]["ok"], true);
     }
 }

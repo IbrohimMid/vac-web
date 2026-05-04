@@ -53,6 +53,8 @@ const ALLOWED_GENERATORS = new Set([
 	// Pass #34: handoff.dispatch_local conditional branching primitives.
 	'executor_session_id',
 	'handoff_dispatch_outcome',
+	// Pass #35: foreach primitive smoke (returns fixed 3-item JSON array of objects).
+	'debug_smoke_items',
 ]);
 
 function loadScenarios() {
@@ -131,6 +133,50 @@ function validate({ file, doc }) {
 			}
 		}
 	}
+	// Pass #35: validate optional `foreach` loop primitive on each timeline step.
+	// foreach iterates a JSON-array binding; body must be an array of steps WITHOUT
+	// nested foreach (single-level iteration only). Required keys on foreach:
+	// binding, as. Optional: index_var. Step with foreach must NOT also set event.
+	if (Array.isArray(doc.timeline)) {
+		for (let i = 0; i < doc.timeline.length; i++) {
+			const step = doc.timeline[i];
+			if (!step || step.foreach === undefined) continue;
+			if (typeof step.foreach !== 'object' || Array.isArray(step.foreach)) {
+				errs.push(`${file}: timeline[${i}].foreach must be an object`);
+				continue;
+			}
+			if (typeof step.foreach.binding !== 'string') {
+				errs.push(`${file}: timeline[${i}].foreach.binding must be a string`);
+			}
+			if (typeof step.foreach.as !== 'string') {
+				errs.push(`${file}: timeline[${i}].foreach.as must be a string`);
+			}
+			if (step.foreach.index_var !== undefined && typeof step.foreach.index_var !== 'string') {
+				errs.push(`${file}: timeline[${i}].foreach.index_var must be a string when set`);
+			}
+			for (const k of Object.keys(step.foreach)) {
+				if (k !== 'binding' && k !== 'as' && k !== 'index_var') {
+					errs.push(`${file}: timeline[${i}].foreach unknown key '${k}'; allowed: binding, as, index_var`);
+				}
+			}
+			if (!Array.isArray(step.body)) {
+				errs.push(`${file}: timeline[${i}].body must be an array (foreach loop body)`);
+			} else {
+				for (let j = 0; j < step.body.length; j++) {
+					const inner = step.body[j];
+					if (inner && inner.foreach !== undefined) {
+						errs.push(`${file}: timeline[${i}].body[${j}] nested foreach not allowed (single-level iteration only)`);
+					}
+					if (inner && typeof inner.event !== 'string') {
+						errs.push(`${file}: timeline[${i}].body[${j}].event must be a string`);
+					}
+				}
+			}
+			if (step.event !== undefined) {
+				errs.push(`${file}: timeline[${i}] cannot have both 'foreach' and 'event'`);
+			}
+		}
+	}
 	return errs;
 }
 
@@ -176,8 +222,11 @@ function render(scenarios) {
 			.join('');
 		const replacement =
 			typeof doc.replacement === 'string' ? `Some("${rustEscape(doc.replacement)}")` : 'None';
-		const events = (doc.timeline ?? [])
-			.map((t) => `"${rustEscape(t.event ?? '')}"`)
+		// Pass #35: foreach steps expose body event names instead of their own (which is empty).
+		const flattenEventNames = (steps) =>
+			(steps ?? []).flatMap((t) => (t.foreach !== undefined ? flattenEventNames(t.body) : [t.event ?? '']));
+		const events = flattenEventNames(doc.timeline)
+			.map((e) => `"${rustEscape(e)}"`)
 			.join(', ');
 		const assertions = (doc.assertions ?? [])
 			.map((a) => `"${rustEscape(a)}"`)
@@ -214,6 +263,22 @@ function render(scenarios) {
 	lines.push('    /// only if `bindings[condition.binding] == condition.equals` at dispatch time.');
 	lines.push('    /// Missing bindings compare against the empty string. No operators, no nesting.');
 	lines.push('    pub condition: Option<RuntimeStepCondition>,');
+	lines.push('    /// Pass #35: optional foreach loop primitive. When Some, this step iterates the JSON');
+	lines.push('    /// array stored in `bindings[foreach.binding]` (set by a state_seed generator that');
+	lines.push('    /// returns a JSON-encoded array of objects). Body steps execute per-item with');
+	lines.push('    /// extended bindings: `{as_prefix}.{key}` for each object field plus `{index_var}`');
+	lines.push('    /// (when non-empty) for the 0-based index. event/payload_json/etc on this step are');
+	lines.push('    /// ignored when foreach is Some. Single-level iteration only (codegen rejects nesting).');
+	lines.push('    pub foreach: Option<RuntimeForeach>,');
+	lines.push('}');
+	lines.push('');
+	lines.push('#[derive(Debug, Clone, Copy)]');
+	lines.push('pub struct RuntimeForeach {');
+	lines.push('    pub binding: &\'static str,');
+	lines.push('    pub as_prefix: &\'static str,');
+	lines.push('    /// Empty string when YAML omits index_var (no index binding emitted per-iter).');
+	lines.push('    pub index_var: &\'static str,');
+	lines.push('    pub body: &\'static [RuntimeTimelineStep],');
 	lines.push('}');
 	lines.push('');
 	lines.push('#[derive(Debug, Clone, Copy)]');
@@ -244,22 +309,27 @@ function render(scenarios) {
 		const seeds = Object.entries(doc.state_seeds ?? {})
 			.map(([k, v]) => `RuntimeStateSeed { var: "${rustEscape(k)}", value: "${rustEscape(v)}" }`)
 			.join(', ');
-		const steps = (doc.timeline ?? [])
-			.map((t) => {
-				const payloadJson = JSON.stringify(t.payload ?? {});
-				const payloadTemplate = t.payload_template;
-				const payloadTemplateField = payloadTemplate
-					? `Some("${rustEscape(payloadTemplate)}")`
-					: 'None';
-				const seedsAfter = Object.entries(t.state_seeds_after ?? {})
-					.map(([k, v]) => `RuntimeStateSeed { var: "${rustEscape(k)}", value: "${rustEscape(v)}" }`)
-					.join(', ');
-				const conditionField = t.condition
-					? `Some(RuntimeStepCondition { binding: "${rustEscape(t.condition.binding)}", equals: "${rustEscape(t.condition.equals)}" })`
-					: 'None';
-				return `RuntimeTimelineStep { event: "${rustEscape(t.event ?? '')}", after_ms: ${t.after_ms ?? 0}, payload_json: "${rustEscape(payloadJson)}", payload_template_json: ${payloadTemplateField}, state_seeds_after: &[${seedsAfter}], condition: ${conditionField} }`;
-			})
-			.join(', ');
+		const renderStep = (t, depth = 0) => {
+			if (t.foreach !== undefined) {
+				if (depth > 0) throw new Error('nested foreach rejected by validator');
+				const bodySteps = (t.body ?? []).map((b) => renderStep(b, depth + 1)).join(', ');
+				const indexVar = typeof t.foreach.index_var === 'string' ? t.foreach.index_var : '';
+				return `RuntimeTimelineStep { event: \"\", after_ms: 0, payload_json: \"{}\", payload_template_json: None, state_seeds_after: &[], condition: None, foreach: Some(RuntimeForeach { binding: \"${rustEscape(t.foreach.binding)}\", as_prefix: \"${rustEscape(t.foreach.as)}\", index_var: \"${rustEscape(indexVar)}\", body: &[${bodySteps}] }) }`;
+			}
+			const payloadJson = JSON.stringify(t.payload ?? {});
+			const payloadTemplate = t.payload_template;
+			const payloadTemplateField = payloadTemplate
+				? `Some(\"${rustEscape(payloadTemplate)}\")`
+				: 'None';
+			const seedsAfter = Object.entries(t.state_seeds_after ?? {})
+				.map(([k, v]) => `RuntimeStateSeed { var: \"${rustEscape(k)}\", value: \"${rustEscape(v)}\" }`)
+				.join(', ');
+			const conditionField = t.condition
+				? `Some(RuntimeStepCondition { binding: \"${rustEscape(t.condition.binding)}\", equals: \"${rustEscape(t.condition.equals)}\" })`
+				: 'None';
+			return `RuntimeTimelineStep { event: \"${rustEscape(t.event ?? '')}\", after_ms: ${t.after_ms ?? 0}, payload_json: \"${rustEscape(payloadJson)}\", payload_template_json: ${payloadTemplateField}, state_seeds_after: &[${seedsAfter}], condition: ${conditionField}, foreach: None }`;
+		};
+		const steps = (doc.timeline ?? []).map((t) => renderStep(t)).join(', ');
 		const finalResp = doc.final_response
 			? `Some("${rustEscape(JSON.stringify(doc.final_response))}")`
 			: 'None';

@@ -258,6 +258,114 @@ Pass #34 introduces `@handoff_dispatch_outcome` (domain-specific) rather than a 
 - `handoff_dispatch_local_runtime_dispatch_failure_branch_via_force_failure_param` — `force_failure: true`; expects 3 events + final response.
 - `handoff_dispatch_local_failure_branch_via_mode_fail_alias` — `mode: "fail"`; verifies first non-progress event is `handoff.failed`.
 
+## Primitive 5 — foreach loop over JSON-array binding (Pass #35, single-level)
+
+### Why
+
+`assessment.run` emits a per-rubric event stream (~12 evidence rows + per-row identity hashes) where the count and content come from a Rust-owned family catalog. Without a foreach primitive, porting this handler requires either (a) hand-unrolling 12 near-identical timeline steps in YAML (loses the catalog as the source of truth) or (b) keeping the imperative handler. Neither is acceptable.
+
+Pass #28 originally listed bounded looping as a Non-goal pending a dedicated design pass. Pass #35 promotes it with a deliberately minimal contract: iterate a JSON-array binding, expose item fields + 0-based index, no break/continue, no nested foreach, no expression engine.
+
+### Spec
+
+A timeline step may be either a regular emit step (existing) **or** a foreach step. A foreach step has the shape:
+
+```yaml
+- foreach:
+    binding: <name>           # required: name of a string binding holding a JSON-encoded array
+    as: <prefix>              # required: prefix used for per-iter object-field bindings
+    index_var: <name>         # optional: name for the 0-based loop index binding
+  body:
+    - event: ...              # one or more body steps; same shape as a regular timeline step
+      payload_template: ...
+      condition: { ... }      # Primitive 4 still works inside body
+```
+
+A step that sets `foreach` **must not** also set `event`. Body steps **must not** themselves contain `foreach` — single-level iteration only. Codegen rejects both shapes.
+
+### Dispatch semantics
+
+In `try_runtime_dispatch`, when a step has `foreach: Some(...)`:
+
+1. Read `bindings[foreach.binding]` as a string and `serde_json::from_str` it into a `Value`. If parsing fails or the result is not `Value::Array`, treat as empty array (no body emissions, no error — graceful no-op).
+2. For each `(idx, item)` in the array (`item: &Value`):
+   - Clone the outer bindings into `iter_bindings` (per-iter scope; outer bindings are not mutated).
+   - If `index_var` is non-empty, insert `{index_var: idx.to_string()}`.
+   - If `item` is `Value::Object(obj)`, for each `(k, v)` insert `{format!("{as_prefix}.{k}")}: <v as string>` (string fields verbatim, other types via `serde_json::to_string`).
+   - For each `body_step` in `foreach.body`, call `emit_single_step(body_step, &mut iter_bindings, ...)` — which honors Primitive 4 conditions and Primitive 2 `state_seeds_after` exactly as on regular steps.
+3. After the loop, drop `iter_bindings` and resume with the original `bindings`. Persistent counter bumps still flow through `state` (generators read/write `state` directly, not `bindings`).
+
+No break, no continue, no early exit. The body always runs once per item in declaration order; condition-skipped body steps still consume their iteration slot.
+
+### Codegen impact
+
+`scenario_catalog.rs` `RuntimeTimelineStep` gains an optional field:
+
+```rust
+pub foreach: Option<RuntimeForeach>,
+
+pub struct RuntimeForeach {
+    pub binding: &'static str,
+    pub as_prefix: &'static str,
+    pub index_var: &'static str, // empty when YAML omits index_var
+    pub body: &'static [RuntimeTimelineStep],
+}
+```
+
+Default `None` for the 26 prior runtime-dispatched scenarios — no behaviour change. When `Some`, the step's `event`/`payload_json`/`condition`/`state_seeds_after` are ignored at dispatch (all set to empty/None by the codegen for foreach steps).
+
+`scripts/codegen-mock-scenarios.mjs` validates the YAML `foreach` block:
+
+- `foreach` must be an object with keys ⊆ `{binding, as, index_var}`; `binding` and `as` required and string-typed; `index_var` optional and string-typed.
+- Step must NOT also set `event` — `event` and `foreach` are mutually exclusive.
+- Sibling `body` must be an array of step objects.
+- Each body step must have a string `event`. No body step may itself set `foreach` (codegen errors out — single-level only).
+
+`SCENARIO_CATALOG.timeline_events` flattens foreach body event names so the metadata catalog still surfaces the actual event surface for any audit grep.
+
+### YAML example (debug-foreach-smoke, the Pass #35 canary)
+
+```yaml
+state_seeds:
+  items: '@debug_smoke_items'           # generator returns a JSON-array string
+timeline:
+  - foreach:
+      binding: items
+      as: item
+      index_var: idx
+    body:
+      - event: debug.smoke_item
+        payload_template: '{"index":${idx},"label":"${item.label}","kind":"${item.kind}"}'
+      - event: debug.smoke_skipped
+        condition: { binding: item.skip, equals: "true" }
+        payload_template: '{"index":${idx},"reason":"${item.skip_reason}"}'
+```
+
+`@debug_smoke_items` is a Rust-owned generator returning three fixed objects (alpha/beta/gamma). The body emits one `debug.smoke_item` per iteration plus an extra `debug.smoke_skipped` only when `item.skip == "true"` (beta only). Real handlers will use domain-specific generators (e.g. `@assessment_family_catalog`) that build their array from Rust-side static data.
+
+### Why so restricted
+
+1. **Audit boundary** — single-level + no break/continue keeps every iteration grep-decidable: count the body steps × items in the bound array. A nested or early-exit form would let YAML compute its own emission count from inside the loop, inverting the source-of-truth boundary.
+2. **Source-of-truth invariant** — Rust generators decide the array contents (12 swarms for `@assessment_family_catalog`, 3 fixtures for `@debug_smoke_items`); YAML only decides the per-iter event template. Adding `if/break` would let YAML mutate iteration count or order, which the boundary forbids.
+3. **Force a design pass for richer needs** — the next handler that genuinely needs nested loops, break, or continue triggers a fresh design pass and a separate primitive (not an ad-hoc extension to this one). Same anti-creep policy as Primitives 3 and 4.
+
+### Per-iter binding format
+
+- Object fields: `{as_prefix}.{key}` for each top-level field on the JSON object (e.g. `item.label`, `item.kind`).
+- Index: `{index_var}` (e.g. `idx`) holds the 0-based iteration index as a string.
+- Outer bindings remain visible during body execution (per-iter is an extension, not a replacement).
+- Per-iter bindings vanish after the loop closes — subsequent timeline steps cannot reference `item.*` or `idx`.
+- `state_seeds_after` on body steps writes into the **per-iter** scope; subsequent body steps in the same iteration see the addition, but the next iteration starts from a fresh clone of the outer bindings.
+
+### Tests
+
+- `runtime_foreach_smoke_scenario_present_in_catalog` — catalog-shape assertion: confirms codegen emitted the foreach step with `binding=items`, `as_prefix=item`, `index_var=idx`, body length 2, and that body steps cannot themselves contain foreach.
+- `runtime_foreach_smoke_emits_per_item_with_resolved_bindings_and_condition` — end-to-end smoke: dispatches `debug.foreach_smoke`, asserts the 3-item array yields 4 notifications (3 smoke_item + 1 smoke_skipped only on beta) + 1 final response, with `${item.field}` and `${idx}` resolved per iteration.
+
+### Pass #35 split rationale
+
+The original Section A roadmap slated `assessment.run` for Pass #35 as the foreach primitive's first user. To keep the audit blast radius small, Pass #35 lands the primitive + smoke canary only; Pass #36 layers the actual `assessment.run` port (12-swarm family catalog, 3 early-failure paths, verdict computation) on top of identical foreach semantics. Splitting also preserves a clean revert window — if Pass #36 hits an unexpected legacy edge case, Pass #35 stays landed and the primitive remains validated by the smoke scenario.
+
 ## Migration plan (per-handler order)
 
 Once primitives land, port handlers from simplest to heaviest:
@@ -288,7 +396,7 @@ Once primitives land, port handlers from simplest to heaviest:
 
 ## Non-goals
 
-- Rich conditional grammar (`if/else`, `not_equals`, `equals_any`, `&&`, `||`, function calls, nested expressions) in YAML. Pass #34 introduced **Primitive 4** (above) as a deliberately minimal single-equality skip primitive (`condition: { binding, equals }`) — sufficient for `handoff.dispatch_local`. Anything richer triggers a fresh design pass and a separate primitive, never an ad-hoc grammar extension.
+- Rich conditional grammar (`if/else`, `not_equals`, `equals_any`, `&&`, `||`, function calls, nested expressions) and rich loop grammar (nested foreach, `break`, `continue`, while-loops, range expressions) in YAML. Pass #34 introduced **Primitive 4** (above) and Pass #35 introduced **Primitive 5** (foreach loop over JSON-array binding, single-level, no break/continue) — both deliberately minimal as a deliberately minimal single-equality skip primitive (`condition: { binding, equals }`) — sufficient for `handoff.dispatch_local`. Anything richer triggers a fresh design pass and a separate primitive, never an ad-hoc grammar extension.
 - Macros / template inheritance. Each scenario is self-contained.
 - Cross-scenario state. Each scenario gets a fresh `State` via `mk_state` per dispatch.
 
