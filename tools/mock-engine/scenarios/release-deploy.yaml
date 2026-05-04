@@ -1,0 +1,47 @@
+scenario: release_deploy
+status: production_parity
+runtime_dispatch: true
+state_seeds:
+  deploy_id: "@release_deploy_id"
+  commit: "@release_deploy_commit"
+  target_id: "$input.target_id"
+input:
+  command: release.deploy
+  payload:
+    target_id: "<environment label, e.g. staging | prod>"
+timeline:
+  - event: release.deploy_progress
+    after_ms: 0
+    payload:
+      deploy_id: "${deploy_id}"
+      target_id: "${target_id}"
+      commit: "${commit}"
+      status: deploying
+      started_at: "2026-04-24T10:00:00Z"
+  - event: release.deploy_progress
+    after_ms: 0
+    payload:
+      deploy_id: "${deploy_id}"
+      target_id: "${target_id}"
+      commit: "${commit}"
+      status: deployed
+      started_at: "2026-04-24T10:00:00Z"
+      finished_at: "2026-04-24T10:00:08Z"
+  - event: release.post_deploy_observation
+    after_ms: 0
+    payload:
+      id: "obs_${deploy_id}_1"
+      target_id: "${target_id}"
+      connector: sentry
+      severity: info
+      message: "no new issues in 5-minute window"
+      observed_at: "2026-04-24T10:05:00Z"
+final_response:
+  ok: true
+  deploy_id: "${deploy_id}"
+assertions:
+  - emits 2 release.deploy_progress events (deploying then deployed) with stable
+    deploy_id + commit pair, then a post_deploy_observation tied to the same
+    deploy_id; final response carries deploy_id and ok=true
+  - port of legacy handle_release_deploy via Section A counter-based hash
+    generators (@release_deploy_id, @release_deploy_commit)

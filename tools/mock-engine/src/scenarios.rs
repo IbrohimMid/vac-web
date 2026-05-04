@@ -77,6 +77,20 @@ fn build_bindings(
                 "next_tool_call_id" => state.next_tool_call_id(),
                 "next_job_id" => state.next_job_id(),
                 "session_id" => state.session_id.clone(),
+                // Section A primitive: counter-bumping generator for release.deploy ids.
+                // `@release_deploy_id` mutates state.counter and renders a deterministic
+                // `dep_{seed%10000:0>12}{counter:0>3}` shape (matches legacy contract).
+                "release_deploy_id" => {
+                    state.counter += 1;
+                    format!("dep_{:0>12}{:0>3}", state.seed % 10000, state.counter)
+                }
+                // Read-only counter projection: returns 40-char hex of
+                // `state.counter * 0xDEAD_BEEF` without bumping. Pair with
+                // `@release_deploy_id` placed first in state_seeds so both
+                // bindings derive from the same counter snapshot.
+                "release_deploy_commit" => {
+                    format!("{:040x}", state.counter.wrapping_mul(0xDEAD_BEEF_u64))
+                }
                 _ => seed.value.to_string(),
             }
         } else if let Some(key) = seed.value.strip_prefix("$input.") {
@@ -342,6 +356,46 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn release_deploy_runtime_dispatch_emits_three_progress_events_and_final_response() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":91,"method":"release.deploy","params":{"target_id":"prod"}}"#,
+            &mut state,
+        );
+        // 3 notifications + 1 response.
+        assert_eq!(
+            out.len(),
+            4,
+            "expected 3 notifications + 1 response, got {out:?}"
+        );
+        let n0: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(n0["method"], "release.deploy_progress");
+        let deploy_id = n0["params"]["deploy_id"].as_str().unwrap().to_string();
+        assert!(
+            deploy_id.starts_with("dep_"),
+            "unexpected deploy_id {deploy_id}"
+        );
+        assert_eq!(n0["params"]["target_id"], "prod");
+        assert_eq!(n0["params"]["status"], "deploying");
+        let n1: Value = serde_json::from_str(&out[1]).unwrap();
+        assert_eq!(n1["method"], "release.deploy_progress");
+        assert_eq!(n1["params"]["deploy_id"], deploy_id);
+        assert_eq!(n1["params"]["status"], "deployed");
+        let n2: Value = serde_json::from_str(&out[2]).unwrap();
+        assert_eq!(n2["method"], "release.post_deploy_observation");
+        assert_eq!(n2["params"]["target_id"], "prod");
+        let obs_id = n2["params"]["id"].as_str().unwrap();
+        assert!(
+            obs_id.contains(&deploy_id),
+            "obs_id should embed deploy_id, got {obs_id}"
+        );
+        let r: Value = serde_json::from_str(&out[3]).unwrap();
+        assert_eq!(r["id"], 91);
+        assert_eq!(r["result"]["ok"], true);
+        assert_eq!(r["result"]["deploy_id"], deploy_id);
+    }
+
     fn render_value_recurses_into_arrays_and_objects() {
         let mut b = HashMap::new();
         b.insert("id".to_string(), "sh_01".to_string());

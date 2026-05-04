@@ -2397,3 +2397,48 @@ No source code touched.
 2. **41 plans without deep-acceptance audit** — mostly infrastructure/index/ADR docs; lower-risk than the 7 just audited. Per-plan deep audits remain recommended on cadence.
 3. **Translator raw `state.audit.log` fallback paths** — 25 fallback paths preserved as Slice 41 audit-trail safety net. Should be retired one-by-one as schema stabilises.
 4. **P41 SLO measurement** — budgets documented but not actively tested in CI. Add perf-run or k6/synthetic measurement when feasible.
+
+## Pass #28 — Section A resolver extensions design (docs-only, 2026-05-04)
+
+**Scope**: design pass for the three resolver primitives required to port the remaining 8 imperative handler families from `tools/mock-engine/src/legacy_scenarios.rs` into YAML-driven runtime-dispatched scenarios.
+
+**Deliverable**: `docs/plans/wiring/section-a-resolver-extensions-design.md` (223 lines). Specifies:
+
+1. **Counter-based hash generator** — `@release_deploy_id`, `@release_deploy_commit`, `@hash_7(seed)`, `@hash_12(seed)`, `@uuid_v7()`. Counter-stateful: each invocation bumps `state.counter` and emits a deterministic short hex/format string.
+2. **Multi-event ledger** — `state_seeds_after` block on timeline steps; lets later steps consume bindings computed from earlier step payloads. New helpers `@count`, `@first`, `@last`, `@nth`. Required for handoff lifecycle (3-5 events that share `signers` / `required_signers`).
+3. **Filtering DSL** — `filter_then_emit` step kind. Tiny grammar: `expr := atom (op atom)?`, methods `contains|is_empty|starts_with|eq`, ops `|||&&`. Required for `context.mention_search`. Rejected by codegen if grammar boundaries violated.
+
+Migration order (simplest → heaviest): `release.generate_notes` → `release.deploy` → `context.mention_search` → `handoff.create`+`approve` → `handoff.dispatch_local` → `assessment.run` → `message.submit`.
+
+Non-goals: general-purpose conditionals, macros, cross-scenario state. Deliberate: keep YAML auditable; runtime stays source of truth.
+
+**UX impact**: ports unlock declarative cockpit demos for release & handoff flows without inflating mock-engine's trust boundary. Operator-facing surface unchanged today (design pass only); future ports yield identical event streams with tighter audit trail.
+
+## Pass #29 — Counter-based hash generator + release.deploy ported to YAML (2026-05-04)
+
+**Scope**: implement the smallest of the three primitives from Pass #28 (counter-based hash) and complete the first handler port end-to-end as proof.
+
+**Files touched** (4 modified, 2 added):
+
+- `tools/mock-engine/src/scenarios.rs`: added 2 generator branches in `build_bindings` — `@release_deploy_id` (bumps `state.counter`, formats `dep_{seed%10000:0>12}{counter:0>3}`) and `@release_deploy_commit` (read-only projection of current counter via `wrapping_mul(0xDEAD_BEEF)` → 40-char hex). Added 1 integration test (`release_deploy_runtime_dispatch_emits_three_progress_events_and_final_response`) verifying 3 notifications + 1 response with consistent deploy_id across all 4 messages.
+- `scripts/codegen-mock-scenarios.mjs`: extended `ALLOWED_GENERATORS` set with both new names so codegen validates YAML usage.
+- `tools/mock-engine/scenarios/release-deploy.yaml`: new 46-line scenario. State_seeds (insertion-order-preserving): `deploy_id` first (bumps counter), `commit` second (reads bumped counter), `target_id` from `$input`. Timeline emits 2 `release.deploy_progress` events (deploying → deployed) + 1 `release.post_deploy_observation` referencing `obs_${deploy_id}_1`. Final response carries `ok: true` + `deploy_id`.
+- `tools/mock-engine/src/legacy_scenarios.rs`: dropped `release.deploy` dispatch arm (line 229) and `fn handle_release_deploy` (48 lines). File now 1351 lines (was 1401, −50).
+- `tools/mock-engine/src/generated/scenario_catalog.rs`: regenerated via `scripts/codegen-mock-scenarios.mjs` — now 22 scenarios, 21 runtime-dispatched (was 21 / 20).
+- `docs/plans/wiring/section-a-resolver-extensions-design.md`: design doc from Pass #28 (committed alongside Pass #29).
+
+**Validation gate** (all green):
+
+- `cargo build -p mock-engine`: clean.
+- `cargo test -p mock-engine`: 21/0 (was 20/0; +1 from new test).
+- `cargo fmt --all -- --check`: clean.
+- `cargo test -p local-bridge --test event_catalog_parity`: 7/0.
+- `cargo test -p local-bridge --lib`: 351/0.
+- `node scripts/check-architecture-boundaries.mjs`: ok (264 files / 817 edges / 211 external).
+- `bash scripts/verify-codegen.sh`: drift expected pre-commit (working tree contains the regenerated catalog); resolves once Pass #29 commit lands.
+
+**Architecture invariants preserved**: counter-based hash generators stay metadata-only (state mutation lives in the resolver, not in YAML); legacy fallback path `unknown_command_falls_through_to_legacy` test still passes; YAML/runtime split intact.
+
+**Remaining Section A work** (handlers still in `legacy_scenarios.rs`): 7 of 8 — `message.submit`, `context.mention_search`, `assessment.run`, `handoff.create`, `handoff.approve`, `handoff.dispatch_local`, `release.generate_notes`. Next likely port: `release.generate_notes` (reuses same hash primitive, simplest of remaining). Multi-event ledger + filtering DSL impl deferred to follow-on passes.
+
+**UX impact**: zero user-facing behaviour change — emitted events for `release.deploy` are byte-identical in shape to legacy (same method names, payload keys, ordering). What changes: deploy_id format derives from counter snapshot (slightly different commit hex due to read-after-bump rather than read-once-shared, both 40-char lowercase hex; collision probability remains negligible for mock-only). Operator-facing release cockpit will see no regression.

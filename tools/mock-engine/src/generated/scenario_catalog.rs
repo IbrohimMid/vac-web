@@ -23,7 +23,7 @@ pub struct ScenarioEntry {
     pub assertions: &'static [&'static str],
 }
 
-pub const SCENARIO_CATALOG: [ScenarioEntry; 21] = [
+pub const SCENARIO_CATALOG: [ScenarioEntry; 22] = [
     ScenarioEntry {
         id: "approval_approve",
         status: ScenarioStatus::FutureWhenBackendLands,
@@ -111,6 +111,14 @@ pub const SCENARIO_CATALOG: [ScenarioEntry; 21] = [
         input_command: "handoff.reject",
         timeline_events: &["handoff.status"],
         assertions: &["mock-engine emits handoff.status with status=rejected so the cockpit handoff surface flips the packet to a terminal rejected state", "rejecting a packet is idempotent in the mock; subsequent rejects are silently accepted by the bridge", "packet_id echoes the inbound params so the cockpit can match the rejection to the originating row"],
+    },
+    ScenarioEntry {
+        id: "release_deploy",
+        status: ScenarioStatus::ProductionParity,
+        replacement: None,
+        input_command: "release.deploy",
+        timeline_events: &["release.deploy_progress", "release.deploy_progress", "release.post_deploy_observation"],
+        assertions: &["emits 2 release.deploy_progress events (deploying then deployed) with stable deploy_id + commit pair, then a post_deploy_observation tied to the same deploy_id; final response carries deploy_id and ok=true", "port of legacy handle_release_deploy via Section A counter-based hash generators (@release_deploy_id, @release_deploy_commit)"],
     },
     ScenarioEntry {
         id: "release_list_targets",
@@ -219,7 +227,7 @@ pub struct RuntimeScenarioEntry {
     pub final_response_json: Option<&'static str>,
 }
 
-pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 20] = [
+pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 21] = [
     RuntimeScenarioEntry {
         id: "approval_approve",
         input_command: "approval.approve",
@@ -289,6 +297,13 @@ pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 20] = [
         state_seeds: &[RuntimeStateSeed { var: "packet_id", value: "$input.packet_id" }],
         timeline: &[RuntimeTimelineStep { event: "handoff.status", after_ms: 0, payload_json: "{\"packet_id\":\"${packet_id}\",\"status\":\"rejected\"}" }],
         final_response_json: Some("{\"ok\":true}"),
+    },
+    RuntimeScenarioEntry {
+        id: "release_deploy",
+        input_command: "release.deploy",
+        state_seeds: &[RuntimeStateSeed { var: "deploy_id", value: "@release_deploy_id" }, RuntimeStateSeed { var: "commit", value: "@release_deploy_commit" }, RuntimeStateSeed { var: "target_id", value: "$input.target_id" }],
+        timeline: &[RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deploying\",\"started_at\":\"2026-04-24T10:00:00Z\"}" }, RuntimeTimelineStep { event: "release.deploy_progress", after_ms: 0, payload_json: "{\"deploy_id\":\"${deploy_id}\",\"target_id\":\"${target_id}\",\"commit\":\"${commit}\",\"status\":\"deployed\",\"started_at\":\"2026-04-24T10:00:00Z\",\"finished_at\":\"2026-04-24T10:00:08Z\"}" }, RuntimeTimelineStep { event: "release.post_deploy_observation", after_ms: 0, payload_json: "{\"id\":\"obs_${deploy_id}_1\",\"target_id\":\"${target_id}\",\"connector\":\"sentry\",\"severity\":\"info\",\"message\":\"no new issues in 5-minute window\",\"observed_at\":\"2026-04-24T10:05:00Z\"}" }],
+        final_response_json: Some("{\"ok\":true,\"deploy_id\":\"${deploy_id}\"}"),
     },
     RuntimeScenarioEntry {
         id: "release_list_targets",

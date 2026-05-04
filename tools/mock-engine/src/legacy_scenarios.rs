@@ -226,7 +226,6 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
         // short-circuits before reaching this dispatcher.
         "handoff.dispatch_local" => handle_handoff_dispatch(id, params, state),
 
-        "release.deploy" => handle_release_deploy(id, params, state),
         "release.publish" => {
             let target = params
                 .get("target_id")
@@ -434,55 +433,6 @@ fn handle_handoff_message_submit(
 // connector_catalog + titlecase helpers: removed; their data was inlined into
 // tools/mock-engine/scenarios/connector-list.yaml (14 static connector entries
 // with deterministic rate_limit + reset_at timestamps).
-
-fn handle_release_deploy(id: Option<Value>, params: Value, state: &mut State) -> Vec<String> {
-    let target = params
-        .get("target_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    state.counter += 1;
-    let deploy_id = format!("dep_{:0>12}{:0>3}", state.seed % 10000, state.counter);
-    let commit = format!("{:040x}", state.counter.wrapping_mul(0xDEAD_BEEF));
-    vec![
-        emit_notification(
-            "release.deploy_progress",
-            json!({
-                "deploy_id": deploy_id,
-                "target_id": target,
-                "commit": commit,
-                "status": "deploying",
-                "started_at": "2026-04-24T10:00:00Z"
-            }),
-        ),
-        emit_notification(
-            "release.deploy_progress",
-            json!({
-                "deploy_id": deploy_id,
-                "target_id": target,
-                "commit": commit,
-                "status": "deployed",
-                "started_at": "2026-04-24T10:00:00Z",
-                "finished_at": "2026-04-24T10:00:08Z"
-            }),
-        ),
-        emit_notification(
-            "release.post_deploy_observation",
-            json!({
-                "id": format!("obs_{deploy_id}_1"),
-                "target_id": target,
-                "connector": "sentry",
-                "severity": "info",
-                "message": "no new issues in 5-minute window",
-                "observed_at": "2026-04-24T10:05:00Z"
-            }),
-        ),
-        emit_response(
-            id.unwrap_or(Value::Null),
-            json!({ "ok": true, "deploy_id": deploy_id }),
-        ),
-    ]
-}
 
 fn handle_release_notes(id: Option<Value>, params: Value, state: &mut State) -> Vec<String> {
     let target = params
