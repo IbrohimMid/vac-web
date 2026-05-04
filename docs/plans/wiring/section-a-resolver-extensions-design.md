@@ -13,6 +13,8 @@ runtime_source_of_truth: rust_ts_runtime
 
 # Section A resolver extensions for mock-engine YAML scenarios
 
+> **Current head note (audit fixup, 2026-05-04):** Section A progress is **7 of 8** as of Pass #36 (`assessment.run` ported via `foreach` + `condition` primitives). Do **not** re-run Pass #34 instructions against current `main` — that work is already merged. The only remaining handler is `message.submit`, slated for Pass #37+. Post-Pass-#36 audit also closed two control-plane gaps: (1) outer `foreach` steps now honor their `condition` field via the shared `condition_matches` helper in `scenarios::try_runtime_dispatch`, and (2) `scripts/codegen-mock-scenarios.mjs` gained a per-step schema firewall (`event` / `after_ms` / `payload` / `payload_template` / `state_seeds_after` + `payload` ⊕ `payload_template` mutex) that runs on every non-foreach step and every foreach body step.
+
 Design spec for the three resolver primitives required to port the remaining 8 handler families from `tools/mock-engine/src/legacy_scenarios.rs` to YAML-driven scenarios:
 
 - `message.submit`

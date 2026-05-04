@@ -1,4 +1,4 @@
-//! Scenario dispatcher (Slice 34).
+//! YAML-driven scenario dispatcher.
 //!
 //! `scenarios::handle` first attempts to dispatch via the YAML-driven
 //! `RUNTIME_SCENARIO_CATALOG` (codegen'd from
@@ -37,6 +37,21 @@ pub fn handle(line: &str, state: &mut State) -> Vec<String> {
     crate::legacy_scenarios::handle(line, state)
 }
 
+/// Audit fixup (post-Pass #36): centralised single-equality condition check used by
+/// both the outer-step gate (in `try_runtime_dispatch`) and the per-step gate (in
+/// `emit_single_step`). Returns `true` when the step has no condition or when the
+/// binding equals the literal. Missing bindings compare against the empty string,
+/// matching the Pass #34 contract.
+fn condition_matches(
+    cond: Option<crate::generated::scenario_catalog::RuntimeStepCondition>,
+    bindings: &HashMap<String, String>,
+) -> bool {
+    match cond {
+        Some(c) => bindings.get(c.binding).map(String::as_str).unwrap_or("") == c.equals,
+        None => true,
+    }
+}
+
 fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
     let v: Value = serde_json::from_str(line).ok()?;
     let method = v.get("method").and_then(|m| m.as_str())?;
@@ -58,7 +73,15 @@ fn try_runtime_dispatch(line: &str, state: &mut State) -> Option<Vec<String>> {
         // bindings are scoped to a clone so iterations stay hygienic; persistent counter
         // bumps still flow through `state` since generators read/write `state` directly.
         // Single-level only — codegen rejects nested foreach in body.
+        //
+        // Audit fixup (post-Pass #36): the outer step's `condition` (when set) gates the
+        // ENTIRE foreach. Previously the foreach branch ran before `emit_single_step`'s
+        // condition check, so a `condition` on a foreach step was silently ignored. The
+        // fix funnels both gates through `condition_matches`.
         if let Some(fe) = step.foreach {
+            if !condition_matches(step.condition, &bindings) {
+                continue;
+            }
             let arr_str = bindings.get(fe.binding).map(String::as_str).unwrap_or("[]");
             let parsed: Value = serde_json::from_str(arr_str).unwrap_or(Value::Array(Vec::new()));
             let items: Vec<Value> = match parsed {
@@ -111,11 +134,8 @@ fn emit_single_step(
     params: &Value,
     out: &mut Vec<String>,
 ) -> Option<()> {
-    if let Some(cond) = step.condition {
-        let actual = bindings.get(cond.binding).map(String::as_str).unwrap_or("");
-        if actual != cond.equals {
-            return Some(());
-        }
+    if !condition_matches(step.condition, bindings) {
+        return Some(());
     }
     let rendered = if let Some(template) = step.payload_template_json {
         let substituted = render_string(template, bindings);
@@ -1554,5 +1574,99 @@ mod tests {
         );
         // Response terminal.
         assert_eq!(parsed[3]["id"], 114);
+    }
+
+    // ---- Audit fixup (post-Pass #36): outer foreach respects outer condition. ----
+
+    #[test]
+    fn foreach_outer_condition_skip_prevents_body_emissions() {
+        // Default params -> enabled binding falls back to "false" via $input.enabled|false.
+        // Outer condition `enabled == "true"` doesn't match -> the entire foreach is skipped.
+        // Only the final response is emitted (regression guard for the audit fixup).
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":200,"method":"debug.foreach_condition_smoke","params":{}}"#,
+            &mut state,
+        );
+        assert_eq!(
+            out.len(),
+            1,
+            "outer condition unmatched -> response only, got: {out:?}"
+        );
+        let r: Value = serde_json::from_str(&out[0]).unwrap();
+        assert_eq!(r["id"], 200);
+        assert_eq!(r["result"]["ok"], true);
+        // Negative leakage assertion: no debug.smoke_item slipped through the gated foreach.
+        assert!(
+            !out.iter().any(|line| line.contains("debug.smoke_item")),
+            "outer-condition-skip must not leak any body emissions, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn foreach_outer_condition_match_runs_body() {
+        // params.enabled == "true" -> outer condition matches -> 3 items emit + final response.
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":201,"method":"debug.foreach_condition_smoke","params":{"enabled":"true"}}"#,
+            &mut state,
+        );
+        assert_eq!(
+            out.len(),
+            4,
+            "outer condition matched -> 3 items + response, got: {out:?}"
+        );
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[0]["method"], "debug.smoke_item");
+        assert_eq!(parsed[0]["params"]["label"], "alpha");
+        assert_eq!(parsed[1]["params"]["label"], "beta");
+        assert_eq!(parsed[2]["params"]["label"], "gamma");
+        assert_eq!(parsed[3]["id"], 201);
+        assert_eq!(parsed[3]["result"]["ok"], true);
+    }
+
+    // ---- Audit fixup (post-Pass #36): negative branch-leakage guards for handoff.dispatch_local. ----
+
+    #[test]
+    fn handoff_dispatch_local_success_branch_does_not_leak_failure_events() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":300,"method":"handoff.dispatch_local","params":{"packet_id":"pkt_neg"}}"#,
+            &mut state,
+        );
+        // Success branch must NOT include any failure-path event method.
+        assert!(
+            !out.iter().any(|line| line.contains("\"handoff.failed\"")),
+            "success branch leaked handoff.failed, got: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|line| line.contains("\"status\":\"failed\"")),
+            "success branch leaked status=failed, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn handoff_dispatch_local_failure_branch_does_not_leak_completed_events() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":301,"method":"handoff.dispatch_local","params":{"packet_id":"pkt_neg2","force_failure":true}}"#,
+            &mut state,
+        );
+        // Failure branch must NOT include any success-path event method.
+        assert!(
+            !out.iter()
+                .any(|line| line.contains("\"handoff.completed\"")),
+            "failure branch leaked handoff.completed, got: {out:?}"
+        );
+        // The second `execution_progress` (status=completed) from the success branch must not appear.
+        assert!(
+            !out.iter()
+                .any(|line| line.contains("\"status\":\"completed\"")),
+            "failure branch leaked status=completed, got: {out:?}"
+        );
     }
 }

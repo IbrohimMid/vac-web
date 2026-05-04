@@ -1,0 +1,35 @@
+scenario: debug_foreach_condition_smoke
+status: fixture_only
+runtime_dispatch: true
+description: |
+  Audit fixup (post-Pass #36): regression canary for outer-foreach condition gating.
+
+  When `enabled: "true"` is in params, the outer foreach iterates @debug_smoke_items
+  (3 items) and emits one debug.smoke_item per item. When omitted, the binding
+  defaults to "false" via $input.enabled|false; the outer condition fails and the
+  ENTIRE foreach is skipped — only the final response is emitted.
+
+  Regresses the gap where `try_runtime_dispatch` ran the foreach branch before
+  reaching the condition check inside `emit_single_step`, allowing event leakage
+  on outer foreach steps that intended to gate the whole loop.
+input:
+  command: debug.foreach_condition_smoke
+  payload:
+    enabled: "<optional 'true' string to enable iteration; default 'false' skips the foreach>"
+state_seeds:
+  items: '@debug_smoke_items'
+  enabled: '$input.enabled|false'
+timeline:
+  - foreach:
+      binding: items
+      as: item
+    condition: { binding: enabled, equals: "true" }
+    body:
+      - event: debug.smoke_item
+        payload_template: '{"label":"${item.label}","kind":"${item.kind}"}'
+final_response:
+  ok: true
+assertions:
+  - "outer condition unmatched (default enabled=false): foreach is skipped entirely; emits only the final response (1 line)"
+  - "outer condition matched (enabled=true): foreach iterates @debug_smoke_items (3 items) -> 3 debug.smoke_item events + final response = 4 lines"
+  - "regression guard for the audit fixup that wired condition_matches into the foreach branch in scenarios::try_runtime_dispatch"

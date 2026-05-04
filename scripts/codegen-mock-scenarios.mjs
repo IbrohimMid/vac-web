@@ -192,6 +192,65 @@ function validate({ file, doc }) {
 			}
 		}
 	}
+	// Audit fixup (post-Pass #36): per-step schema firewall. Validates the common step
+	// fields (event / after_ms / payload / payload_template / state_seeds_after) on every
+	// non-foreach step plus every foreach body step. Catches type mismatches at codegen
+	// time so a typo in YAML never reaches the runtime as a silently-aborting scenario.
+	const validateStepShape = (where, step) => {
+		const e = [];
+		const isForeach = step && step.foreach !== undefined;
+		if (!isForeach && typeof step.event !== 'string') {
+			e.push(`${file}: ${where}.event must be a string`);
+		}
+		if (
+			step.after_ms !== undefined &&
+			(typeof step.after_ms !== 'number' || !Number.isInteger(step.after_ms) || step.after_ms < 0)
+		) {
+			e.push(`${file}: ${where}.after_ms must be a non-negative integer`);
+		}
+		if (
+			step.payload !== undefined &&
+			(typeof step.payload !== 'object' || Array.isArray(step.payload) || step.payload === null)
+		) {
+			e.push(`${file}: ${where}.payload must be an object`);
+		}
+		if (step.payload_template !== undefined && typeof step.payload_template !== 'string') {
+			e.push(`${file}: ${where}.payload_template must be a string`);
+		}
+		if (step.payload !== undefined && step.payload_template !== undefined) {
+			e.push(`${file}: ${where} cannot set both 'payload' and 'payload_template'`);
+		}
+		if (step.state_seeds_after !== undefined) {
+			if (
+				typeof step.state_seeds_after !== 'object' ||
+				Array.isArray(step.state_seeds_after) ||
+				step.state_seeds_after === null
+			) {
+				e.push(`${file}: ${where}.state_seeds_after must be an object`);
+			} else {
+				for (const [k, v] of Object.entries(step.state_seeds_after)) {
+					if (typeof v !== 'string') {
+						e.push(`${file}: ${where}.state_seeds_after.${k} must be a string`);
+					}
+				}
+			}
+		}
+		return e;
+	};
+	if (Array.isArray(doc.timeline)) {
+		for (let i = 0; i < doc.timeline.length; i++) {
+			const step = doc.timeline[i];
+			if (!step || typeof step !== 'object' || Array.isArray(step)) continue;
+			errs.push(...validateStepShape(`timeline[${i}]`, step));
+			if (step.foreach !== undefined && Array.isArray(step.body)) {
+				for (let j = 0; j < step.body.length; j++) {
+					const inner = step.body[j];
+					if (!inner || typeof inner !== 'object' || Array.isArray(inner)) continue;
+					errs.push(...validateStepShape(`timeline[${i}].body[${j}]`, inner));
+				}
+			}
+		}
+	}
 	return errs;
 }
 
@@ -329,7 +388,12 @@ function render(scenarios) {
 				if (depth > 0) throw new Error('nested foreach rejected by validator');
 				const bodySteps = (t.body ?? []).map((b) => renderStep(b, depth + 1)).join(', ');
 				const indexVar = typeof t.foreach.index_var === 'string' ? t.foreach.index_var : '';
-				return `RuntimeTimelineStep { event: \"\", after_ms: 0, payload_json: \"{}\", payload_template_json: None, state_seeds_after: &[], condition: None, foreach: Some(RuntimeForeach { binding: \"${rustEscape(t.foreach.binding)}\", as_prefix: \"${rustEscape(t.foreach.as)}\", index_var: \"${rustEscape(indexVar)}\", body: &[${bodySteps}] }) }`;
+				// Audit fixup (post-Pass #36): outer foreach steps now honor `condition`. The
+				// runtime gates the entire loop via condition_matches in try_runtime_dispatch.
+				const foreachConditionField = t.condition
+					? `Some(RuntimeStepCondition { binding: \"${rustEscape(t.condition.binding)}\", equals: \"${rustEscape(t.condition.equals)}\" })`
+					: 'None';
+				return `RuntimeTimelineStep { event: \"\", after_ms: 0, payload_json: \"{}\", payload_template_json: None, state_seeds_after: &[], condition: ${foreachConditionField}, foreach: Some(RuntimeForeach { binding: \"${rustEscape(t.foreach.binding)}\", as_prefix: \"${rustEscape(t.foreach.as)}\", index_var: \"${rustEscape(indexVar)}\", body: &[${bodySteps}] }) }`;
 			}
 			const payloadJson = JSON.stringify(t.payload ?? {});
 			const payloadTemplate = t.payload_template;

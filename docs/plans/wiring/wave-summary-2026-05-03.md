@@ -2870,3 +2870,62 @@ State_seed declaration order is significant: `run_id` first, then `connector_sna
 ### UX impact
 
 Zero behaviour change on the success path — default RTD swarm emits the same 16-line shape (timestamps + run_id format + per-finding identity hashes + connector_snapshot_id all wire-byte identical to legacy). On the failure path, the response is now terminal instead of mid-stream (wire-byte deviation #1, audited and accepted). Cockpit assessment-run dispatch interaction otherwise byte-identical.
+
+---
+
+## Audit fixup (post-Pass #36, 2026-05-04)
+
+Deep-dive audit on top of Pass #34/#35/#36 surfaced two P1 control-plane gaps that did not regress current YAMLs but would have allowed silent failures in future scenarios. Fixed in a single commit, no Section-A-progress bump (still 7 of 8).
+
+### P1 #1 — outer `foreach` now respects outer `condition`
+
+Before: `try_runtime_dispatch` matched the `step.foreach` branch and ran the body before reaching the condition check inside `emit_single_step`, so `condition` on a foreach step was silently ignored. Cosmetic for current YAMLs (`assessment.run` failure path uses an empty family rather than an outer-condition gate; `handoff.dispatch_local` has no foreach), but a latent footgun for any future scenario that wanted to gate a whole loop.
+
+Fix: extracted a single `condition_matches(cond, bindings) -> bool` helper next to `try_runtime_dispatch`. Funnelled both the outer-foreach gate and the per-step gate through it. The codegen renderer for foreach steps was updated to propagate `t.condition` (was hardcoded `condition: None`), so YAML authors can now write `condition: { binding, equals }` on a foreach step and have it gate the entire loop.
+
+New fixture-only canary `tools/mock-engine/scenarios/debug-foreach-condition-smoke.yaml` exercises both polarities (default `enabled=false` skips the foreach entirely; `enabled="true"` iterates `@debug_smoke_items` and emits 3 `debug.smoke_item` events). Two integration tests (`foreach_outer_condition_skip_prevents_body_emissions`, `foreach_outer_condition_match_runs_body`) plus a negative-leakage assertion guard against regressions.
+
+### P1 #2 — codegen schema firewall for common step fields
+
+Before: validator covered `condition` shape, unknown `condition` keys, basic `foreach` shape, and nested-foreach rejection — but `event`, `after_ms`, `payload`, `payload_template`, and `state_seeds_after` were unchecked. A YAML typo could produce a catalog that compiles but runtime-aborts silently.
+
+Fix: added `validateStepShape(where, step)` in `scripts/codegen-mock-scenarios.mjs`. Runs on every non-foreach step and every foreach body step. Validates:
+- `event`: required `string` on non-foreach steps
+- `after_ms`: optional non-negative integer
+- `payload`: optional plain object (rejects arrays / `null`)
+- `payload_template`: optional string
+- `state_seeds_after`: optional `object<string, string>`
+- mutual exclusivity: `payload` ⊕ `payload_template`
+
+### Bonus low-cost wins (bundled in same commit)
+
+- **P2 #4 — negative branch-leakage tests for `handoff.dispatch_local`.** Two new tests assert the success branch emits no `handoff.failed` / `status=failed` and the failure branch emits no `handoff.completed` / `status=completed`. Cheap insurance against future condition regressions surfacing as a cockpit double-status glitch.
+- **P2 #5 — stale-context head note** added to `section-a-resolver-extensions-design.md` so future passes don't re-run Pass #34 instructions against current `main`.
+- **P3 #1 — file header polish.** `scenarios.rs` header changed from `Scenario dispatcher (Slice 34).` to evergreen `YAML-driven scenario dispatcher.`.
+
+### Gates after audit fixup
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p mock-engine` | **42/0** (38 prior + 4 audit-fixup) |
+| `cargo test -p local-bridge --lib` | **351/0** (unchanged) |
+| `cargo test -p local-bridge --test event_catalog_parity` | **7/0** (unchanged) |
+| `cargo fmt --all -- --check` | clean |
+| `node scripts/check-architecture-boundaries.mjs` | ok (264/817/211, unchanged) |
+| `node scripts/codegen-mock-scenarios.mjs --check` | OK — 30 scenarios, 29 runtime-dispatched |
+| `git diff --check` | clean |
+
+### Line budget delta
+
+| File | Before | After | Δ |
+| --- | --- | --- | --- |
+| `tools/mock-engine/src/scenarios.rs` | 1558 | 1672 | +114 (helper + 4 tests + comments) |
+| `scripts/codegen-mock-scenarios.mjs` | 441 | 505 | +64 (schema firewall + foreach condition propagation) |
+| `tools/mock-engine/scenarios/debug-foreach-condition-smoke.yaml` | — | 35 | +35 (new fixture) |
+| `tools/mock-engine/src/generated/scenario_catalog.rs` | 29 scenarios | 30 scenarios | +1 fixture-only entry |
+
+### Items intentionally deferred
+
+- **P2 #2 — `payload_template_json` escaping.** Behaviour documented in this section; no runtime change yet. Add a targeted negative test or an `@json_string:<binding>` generator only when a real scenario needs free-form operator input spliced into a JSON template.
+- **P2 #3 — missing-binding lint on `condition`.** Pragmatic value; needs an inventory pass over `state_seeds` + foreach `as_prefix` exceptions + dynamic `agent.*` allow-list. Defer until either a typo is hit in practice or Pass #37 introduces enough new bindings to justify the lint.
+- **P3 #2 — pretty multi-line catalog emission.** Reviewer ergonomics only; touches every committed catalog blob. Keep deferred.

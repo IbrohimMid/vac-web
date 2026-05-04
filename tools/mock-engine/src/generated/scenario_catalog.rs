@@ -23,7 +23,7 @@ pub struct ScenarioEntry {
     pub assertions: &'static [&'static str],
 }
 
-pub const SCENARIO_CATALOG: [ScenarioEntry; 29] = [
+pub const SCENARIO_CATALOG: [ScenarioEntry; 30] = [
     ScenarioEntry {
         id: "approval_approve",
         status: ScenarioStatus::FutureWhenBackendLands,
@@ -103,6 +103,14 @@ pub const SCENARIO_CATALOG: [ScenarioEntry; 29] = [
         input_command: "context.mention_search",
         timeline_events: &["context.mention_results"],
         assertions: &["emits 1 context.mention_results notification carrying query echoed back plus results array; results filtered via @mention_search_results generator using lowercased substring match against fixed sample paths", "port of legacy handle_mention_search via Pass #32 payload_template_json render path; results binding holds JSON-array string and splices in as a real array, not a string blob", "empty query returns all 4 sample paths with descending score 1.0, 0.9, 0.8, 0.7 indexed by position"],
+    },
+    ScenarioEntry {
+        id: "debug_foreach_condition_smoke",
+        status: ScenarioStatus::FixtureOnly,
+        replacement: None,
+        input_command: "debug.foreach_condition_smoke",
+        timeline_events: &["debug.smoke_item"],
+        assertions: &["outer condition unmatched (default enabled=false): foreach is skipped entirely; emits only the final response (1 line)", "outer condition matched (enabled=true): foreach iterates @debug_smoke_items (3 items) -> 3 debug.smoke_item events + final response = 4 lines", "regression guard for the audit fixup that wired condition_matches into the foreach branch in scenarios::try_runtime_dispatch"],
     },
     ScenarioEntry {
         id: "debug_foreach_smoke",
@@ -317,7 +325,7 @@ pub struct RuntimeScenarioEntry {
     pub final_response_json: Option<&'static str>,
 }
 
-pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 28] = [
+pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 29] = [
     RuntimeScenarioEntry {
         id: "approval_approve",
         input_command: "approval.approve",
@@ -379,6 +387,13 @@ pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 28] = [
         input_command: "context.mention_search",
         state_seeds: &[RuntimeStateSeed { var: "query", value: "$input.query" }, RuntimeStateSeed { var: "results", value: "@mention_search_results" }],
         timeline: &[RuntimeTimelineStep { event: "context.mention_results", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"query\":\"${query}\",\"results\":${results}}"), state_seeds_after: &[], condition: None, foreach: None }],
+        final_response_json: Some("{\"ok\":true}"),
+    },
+    RuntimeScenarioEntry {
+        id: "debug_foreach_condition_smoke",
+        input_command: "debug.foreach_condition_smoke",
+        state_seeds: &[RuntimeStateSeed { var: "items", value: "@debug_smoke_items" }, RuntimeStateSeed { var: "enabled", value: "$input.enabled|false" }],
+        timeline: &[RuntimeTimelineStep { event: "", after_ms: 0, payload_json: "{}", payload_template_json: None, state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "enabled", equals: "true" }), foreach: Some(RuntimeForeach { binding: "items", as_prefix: "item", index_var: "", body: &[RuntimeTimelineStep { event: "debug.smoke_item", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"label\":\"${item.label}\",\"kind\":\"${item.kind}\"}"), state_seeds_after: &[], condition: None, foreach: None }] }) }],
         final_response_json: Some("{\"ok\":true}"),
     },
     RuntimeScenarioEntry {
