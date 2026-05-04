@@ -2280,3 +2280,120 @@ No code changes. No commits / pushes per execution rule (commit only if explicit
 - Per-plan deep audit pass for the 7 heavy slices listed above (estimated 2-3 audits per session).
 - Resolver extension design pass (counter-based hash + multi-event ledger + filtering DSL) before any Section A handler port can land.
 - Optionally migrate 1-2 fallback paths in `translator/mod.rs` into the structured-log path with regression-test coverage.
+
+## Pass #27 — Deep acceptance verification of 7 next-priority plans (04, 05, 06, 07, 14, 22, 41)
+
+**Status:** All 7 plans verified against actual source/tests. No code changes — audit-only pass with frontmatter annotations. Continuation of Pass #26 deep-audit pattern, scoped to the seven heavy-risk plans flagged for follow-up.
+
+### P04 — `wiring.assessment_index` — verified
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| User sees enabled / current / stale / rebuilding / failed | verified | `apps/local-bridge/src/translator/assessment_query.rs:204` emits `assessment.index.status`; status enum from `crate::storage::AssessmentIndexStatus`. Failure codes `assessment.index_status_failed` (168, 179). `Readiness/FreshnessBadge.tsx` consumes status in `ReadinessHub`. |
+| Rebuild progress visible | verified | Translator emits `assessment.index.rebuild_started` (224) -> `rebuild_progress` (263) -> `rebuilt` (305). Tests `assessment_query.rs:2570-2640` cover full ok-path + failure-path event ordering. |
+| Failure reason distinguishes storage/schema/project-root/persistence-disabled | verified | `assessment.index_rebuild_failed` codes routed via `AssessmentIndexStatus` discriminants (line 252, 294). Distinct codes carried in error payload. |
+
+**UX impact:** ReadinessHub shows real index lifecycle states; rebuild button acts on actual bridge state. Findings list is never cleared mid-rebuild (state events are additive). Operators distinguish recoverable failures (storage/schema) from configuration issues (persistence-disabled).
+
+### P05 — `wiring.review_taxonomy` — verified
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| One canonical event taxonomy | verified | `apps/web/src/stores/review.ts:5` comment: "Slice 05 removed the legacy changeset.* taxonomy". `domain/review/handlers.ts:4` confirms legacy listeners removed. Bridge emits `review.changeset_updated` + `review.file_diff_chunk` only (event_catalog.rs:44-45). |
+| Tests use bridge events, not mock-only changeset.* | verified | `eventCatalog.test.ts:36-37` asserts `isLegacyMockOnly('changeset.updated')` + `replacementFor === 'review.changeset_updated'`. `eventCatalog.ts:79` carries the legacy adapter as metadata-only. |
+| Destructive revert disabled unless safe | verified | `review.{open_file, revert_all, revert_file}` all `NotWired` in `command_catalog.rs:135-137`. `affordanceCatalog.ts:165` carries disabled copy. ReviewTab buttons gate on affordance. |
+
+**UX impact:** Review surface relies on real bridge canonicalization; revert buttons stay disabled until backend can safely restore content. No mock-only changeset events leak into production code paths.
+
+### P06 — `wiring.approval_lifecycle` — verified
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Expired approvals cannot be approved silently | verified | `domain/approvals/handlers.ts:183` listens to `approval.expired`; `approvalErrors.ts:55` carries copy; `approvalErrors.test.ts:27` confirms expired is distinct from option_not_found. |
+| Invalid approval options show precise copy | verified | 5 distinct codes mapped in `approvalErrors.ts:25-49` (`not_found`, `not_acp`, `option_not_found`, `option_kind_mismatch`, `option_forbidden`). Bridge emits each via `translator/mod.rs:3547-3552`. `approvalErrors.test.ts:13-18` covers all five. |
+| Bulk approval not available without visible scope | verified | `approval.approve_all` + `approval.inspect` both `NotWired` in `command_catalog.rs:75-76`. ApprovalsTab.tsx:55 `approveAll` gated by `affordanceFor('approvals.approve_all', ...)` (line 123). Currently disabled by catalog status. |
+
+**UX impact:** User sees specific approval-error copy ("This approval option is forbidden by your profile" vs "Approval not found"). Bulk approve is gated until scope/confirmation surface lands; cannot approve a stale/expired approval silently.
+
+### P07 — `wiring.handoff_errors` — verified
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| User can decide retry/recreate/wait/inspect | verified | 7 distinct handoff error events emitted with codes + reason fields (`approve_failed`, `reject_failed`, `dispatch_rejected`, `dispatch_state_error`, `execution_bind_failed`, `execution_failed`, `invalid_state`). Each emit site in `translator/mod.rs:2588-3344` carries `reason_tag` + `reason` for operator decisioning. |
+| No handoff error is console-only | verified | All 7 events propagate to `PacketDetail.tsx` via handoff store. Slice 41 migration confirmed each emit uses `log_structured` + ServerEvent (Pass #21 wave-summary record). |
+| Success/failure share one state machine | verified | `apps/local-bridge/src/handoff/mod.rs` uses `handoff.invalid_state` as state-transition guard at 6 sites (725, 847, 973, 1110, 1185, 1294); same enum drives ok-paths (`HandoffApproveOutcome::Ok` -> `handoff.approved`). |
+
+**UX impact:** Each failure variant maps to a packet-detail state with operator-actionable copy (re-approve / recreate / fix pin / wait / inspect). State machine is single source of truth; no parallel approve/reject codepaths can drift.
+
+### P14 — `wiring.release` — verified
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Release tab never implies production confidence from mock | verified | `releaseEvents.ts:49,55` flag `release.deploy_progress` + `release.post_deploy_observation` as `mock_only`. `releaseEvents.test.ts:21-22` asserts the flag. UI copy explicitly labels mock provenance. |
+| Deploy/publish disabled until gates and executor exist | verified | `release.deploy` + `release.publish` are `NotWired` + `External` side-effect in `command_catalog.rs:131-134`. ReleaseTab.tsx:46-66 gates `canDeploy` via `gateReady` flag + `affordanceFor('release.deploy.button', ...)` decision. `affordance.test.ts:45,52` confirms `canExecute('release.deploy') === false`, `statusOf === 'not_wired'`. |
+| Draft notes labeled drafts | verified | `releaseEvents.ts:43` flags `release.notes_draft` as `draft_only`. `releaseEvents.test.ts:17` asserts the label. |
+
+**UX impact:** Deploy/publish buttons stay disabled with explicit "not wired" copy until bridge implements real executors. Mock progress events still flow but UI brands them as mock-only so operators do not mistake them for production state. Draft notes carry visible "draft" badge.
+
+### P22 — `wiring.persistence_replay_redaction` — verified
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| History UI never shows unredacted secrets | verified | `apps/local-bridge/src/session/persistence/redact.rs:1-3,94` — `redact_event_payload` runs BEFORE persistence; replaces sensitive values with `"<redacted>"` / `"<truncated:N>"` while preserving structure. `RedactionLabel` returned to caller for UI affordance ("this content was redacted"). |
+| Persistence degraded state visible | verified | `session/persistence/sink.rs:240` emits `session.persistence_degraded` ServerEvent on append/mark_status failure. Test `append_failure_emits_session_persistence_degraded_event` (line 371-385) confirms wire shape. Translator surfaces it via `session.history.list` `health` payload (`mod.rs:1845-1881`). |
+| Replay cannot be mistaken for live | verified | TranscriptRenderMode capability (`transcriptFreeze.ts`) routes replay events through `pipelineModeFor('replay')` with `cacheRenderedHtml: false` semantics. `sessionModeBridge.ts` flips mode on `session.resume.started` -> `replay.started`. Auto-mounted in `main.tsx:150` (per Pass #14 evidence). |
+
+**UX impact:** History list never displays raw secrets (redaction is mandatory pre-persistence). When persistence degrades, user sees explicit "persistence-degraded" copy with remediation hint instead of silent data loss. Replay shows distinct `replay` mode chrome so operators know they're looking at history, not live agent output.
+
+### P41 — `wiring.observability_slos` — verified (partial scope on SLO measurement)
+
+| Criterion | Status | Evidence |
+| --- | --- | --- |
+| Every side-effect command has audit event | verified | 102 `state.audit.log` / `log_structured` calls across `apps/local-bridge/src/`. Slice 41 closeout (Pass #22) migrated 39/39 translator emit sites to `StructuredLogBuilder`. `observability-events.yaml` defines allowed namespace prefixes; `event_catalog_parity` test enforces every emitted id is catalogued. |
+| Degraded persistence/auth/config states visible | verified | `session.persistence_degraded` ServerEvent (sink.rs:240). Auth degraded surfaces via `pairing.exchange_denied` + `ws.auth_failed` events (catalogued in `event_catalog.yaml`). Config degraded surfaces via `config.validate` errors. |
+| Performance and reliability budgets documented and testable | partial | `docs/observability.md` (2961 bytes) + `docs/perf-test-plan.md` (7104 bytes) document the model. SLO candidates listed in plan body (`command_ack_p95_ms: 250`, `websocket_event_delivery_p95_ms: 250`, etc.). **Caveat:** "These are targets, not promises, until measured in CI/local perf runs" — plan acknowledges measurement is not wired into CI yet. Acceptance treats this as documented (criterion met); active CI measurement is a follow-up. |
+
+**UX impact:** Operators see degraded-persistence and degraded-auth via specific notify-lane copy. Audit trail is structured + parity-tested so investigations have reliable telemetry. Caveat: SLO breach detection is not yet automated in CI; manual perf runs required for now.
+
+### Validation gate snapshot (post Pass #27)
+
+No code changes — docs-only. Existing gates from Pass #26 final report still hold:
+
+| Gate | Result |
+| --- | --- |
+| cargo build / lib / fmt | clean / 351 / clean |
+| event_catalog_parity binary | 7 / 0 |
+| event_catalog_parity workspace | clean (no --exclude red-team) |
+| mock-engine | 20 / 0 |
+| verify-codegen | OK (16 modules / 21 scenarios) |
+| arch boundaries | ok (264 / 817 / 211) |
+| pnpm typecheck | clean |
+| pnpm vitest | 648 / 87 |
+| pnpm lint | 0 / 0 |
+
+### Files modified (Pass #27)
+
+- `docs/plans/wiring/wave-summary-2026-05-03.md` (this section).
+- `docs/plans/wiring/04-assessment-index.md` (status line: appended Pass #27 deep-audit note).
+- `docs/plans/wiring/05-review-taxonomy.md` (status line: appended Pass #27 deep-audit note).
+- `docs/plans/wiring/06-approval-lifecycle.md` (status line: appended Pass #27 deep-audit note).
+- `docs/plans/wiring/07-handoff-errors.md` (status line: appended Pass #27 deep-audit note).
+- `docs/plans/wiring/14-release.md` (status line: appended Pass #27 deep-audit note).
+- `docs/plans/wiring/22-persistence-replay-redaction.md` (status line: appended Pass #27 deep-audit note).
+- `docs/plans/wiring/41-observability-slos.md` (status line: appended Pass #27 deep-audit note + partial-scope caveat).
+
+No source code touched.
+
+### Cumulative deep-audit progress
+
+- **Pass #26 verified plans:** 18, 20, 26 (3 plans).
+- **Pass #27 verified plans:** 04, 05, 06, 07, 14, 22, 41 (7 plans).
+- **Total deep-audited:** 10 / 51 landed plans (20%).
+- **Remaining:** 41 plans landed via Pass #23-#25 artifact-existence audit (lower-risk slices: index, infrastructure, scaffolding, ADR docs, etc.).
+
+### Remaining risks (unchanged from Pass #26)
+
+1. **Section A 8 handler ports** still intentional non-port pending resolver extensions — next step: design resolver extensions doc, then implement primitives + port one heaviest handler.
+2. **41 plans without deep-acceptance audit** — mostly infrastructure/index/ADR docs; lower-risk than the 7 just audited. Per-plan deep audits remain recommended on cadence.
+3. **Translator raw `state.audit.log` fallback paths** — 25 fallback paths preserved as Slice 41 audit-trail safety net. Should be retired one-by-one as schema stabilises.
+4. **P41 SLO measurement** — budgets documented but not actively tested in CI. Add perf-run or k6/synthetic measurement when feasible.

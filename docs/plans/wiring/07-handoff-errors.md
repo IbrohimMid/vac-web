@@ -6,7 +6,7 @@ area: handoff
 owners:
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/handoff', 'apps/local-bridge/src/handoff/packet.rs']
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/handoff', 'apps/local-bridge/src/handoff/packet.rs']; Pass #27 deep audit: P07 acceptance verified — 7 handoff error events emit with reason_tag+reason (translator/mod.rs:2588-3344); handoff.invalid_state used at 6 state-machine guard sites (handoff/mod.rs); PacketDetail surfaces all variants; success+failure share one state machine (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

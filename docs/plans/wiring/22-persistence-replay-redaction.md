@@ -6,7 +6,7 @@ area: persistence
 owners:
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/session/persistence', 'apps/local-bridge/src/session/persistence/redact.rs']
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/session/persistence', 'apps/local-bridge/src/session/persistence/redact.rs']; Pass #27 deep audit: P22 acceptance verified — redact.rs runs before persistence with RedactionLabel return (sink uses redact_event_payload); session.persistence_degraded ServerEvent emitted on append/mark_status failure (sink.rs:240, test at 371-385); replay mode distinguishable via transcriptFreeze + pipelineModeFor + sessionModeBridge (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

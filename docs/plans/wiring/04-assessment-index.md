@@ -6,7 +6,7 @@ area: assessment
 owners:
   - bridge
   - web
-status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + wave-summary mentions)
+status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + wave-summary mentions); Pass #27 deep audit: P04 acceptance verified — status/rebuild_started/progress/rebuilt/failed events emit with discriminant codes (assessment_query.rs); failure codes distinct (storage/schema/persistence_disabled via AssessmentIndexStatus enum); ReadinessHub consumes lifecycle (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

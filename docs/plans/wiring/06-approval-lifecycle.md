@@ -6,7 +6,7 @@ area: approvals
 owners:
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/web/src/components/Approvals/ApprovalsTab.tsx', 'apps/local-bridge/src/translator/mod.rs']
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/web/src/components/Approvals/ApprovalsTab.tsx', 'apps/local-bridge/src/translator/mod.rs']; Pass #27 deep audit: P06 acceptance verified — approval.expired distinct from option_not_found (approvalErrors.test.ts:27); 5 invalid-option codes precisely mapped (approvalErrors.ts:25-49); approval.approve_all + inspect NotWired (command_catalog.rs:75-76); ApprovalsTab gated by affordance (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

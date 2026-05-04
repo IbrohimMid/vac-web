@@ -6,7 +6,7 @@ area: release
 owners:
   - bridge
   - web
-status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + wave-summary mentions)
+status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + wave-summary mentions); Pass #27 deep audit: P14 acceptance verified — release.deploy/publish NotWired+External (command_catalog.rs:131-134); ReleaseTab gates canDeploy via gateReady+affordance; release.notes_draft labeled draft_only, deploy_progress+post_deploy_observation labeled mock_only (releaseEvents.ts:43-55, tests at releaseEvents.test.ts:17-22) (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

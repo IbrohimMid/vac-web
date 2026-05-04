@@ -6,7 +6,7 @@ area: review
 owners:
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/web/src/stores/review.ts', 'apps/web/src/stores/review.test.ts']
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/web/src/stores/review.ts', 'apps/web/src/stores/review.test.ts']; Pass #27 deep audit: P05 acceptance verified — review.changeset_updated + file_diff_chunk are sole canonical events (event_catalog.rs:44-45); legacy changeset.* removed (handlers.ts:4, stores/review.ts:5); revert_{file,all,open_file} all NotWired (command_catalog.rs:135-137); affordance gates destructive controls (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

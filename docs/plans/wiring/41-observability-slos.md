@@ -7,7 +7,7 @@ owners:
   - bridge
   - web
   - ops
-status: landed  # Pass #24 audit: confirmed landed (output paths all exist)
+status: landed  # Pass #24 audit: confirmed landed (output paths all exist); Pass #27 deep audit: P41 acceptance verified — 102 audit/log_structured call sites in apps/local-bridge/src; Slice 41 closeout 39/39 translator emit sites migrated; degraded states emit (persistence/auth/config); SLO budgets documented in plan + docs/observability.md + docs/perf-test-plan.md (PARTIAL: budgets are targets, not actively CI-measured — follow-up tracked) (see wave-summary-2026-05-03.md)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---
