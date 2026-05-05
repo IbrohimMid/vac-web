@@ -70,6 +70,17 @@ const ALLOWED_GENERATORS = new Set([
 	'assessment_rtd_summary',
 	'assessment_rtd_satisfied',
 	'assessment_rtd_blockers_json',
+	// Pass #37: message.submit port. Branch authority + per-branch counter-bumping generators.
+	// branch returns "normal"/"handoff" via legacy_scenarios::is_handoff_execution_submit;
+	// per-branch generators no-op (return "") on the wrong branch so counter ordering matches
+	// legacy (normal=+2 for msg_id+tool_call_id; handoff=+1 for exec_sid).
+	'message_submit_branch',
+	'message_submit_msg_id',
+	'message_submit_tool_call_id',
+	'message_submit_exec_sid',
+	'message_submit_packet_id',
+	'message_submit_outcome',
+	'message_submit_chunks',
 ]);
 
 function loadScenarios() {

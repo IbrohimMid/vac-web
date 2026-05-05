@@ -2929,3 +2929,114 @@ Fix: added `validateStepShape(where, step)` in `scripts/codegen-mock-scenarios.m
 - **P2 #2 — `payload_template_json` escaping.** Behaviour documented in this section; no runtime change yet. Add a targeted negative test or an `@json_string:<binding>` generator only when a real scenario needs free-form operator input spliced into a JSON template.
 - **P2 #3 — missing-binding lint on `condition`.** Pragmatic value; needs an inventory pass over `state_seeds` + foreach `as_prefix` exceptions + dynamic `agent.*` allow-list. Defer until either a typo is hit in practice or Pass #37 introduces enough new bindings to justify the lint.
 - **P3 #2 — pretty multi-line catalog emission.** Reviewer ergonomics only; touches every committed catalog blob. Keep deferred.
+
+---
+
+## Pass #37 — port message.submit (Section A 8/8 complete, 2026-05-05)
+
+Closes the **last** legacy dispatch arm in Section A. After this pass, every Section A command is YAML-driven; `legacy_scenarios::handle` retains only the JSON-RPC envelope parser + a thin dispatch fall-through for unknown methods + the `is_handoff_execution_submit` helper (now `pub(crate)` so message-submit branch generators in `scenarios.rs` can call it).
+
+### Primitive composition (no new primitives)
+
+Per the user's directive ("hindari primitive baru — kalau tidak muat dengan yang sudah ada, defer message.submit ke Pass #38"), this pass uses ONLY the primitives already landed:
+
+- `payload_template_json` (Pass #32) for branch-templated event payloads
+- `condition: { binding, equals }` (Pass #34) for per-step branch gating
+- `foreach` (Pass #35) for the 5-chunk `transcript.delta` loop
+- outer-foreach `condition` gating (post-Pass-#36 audit fixup) so the foreach itself is skipped on the handoff branch
+- `state_seeds_after` ordering (Pass #33) for per-branch counter-bumping order
+
+The handler's `is_handoff_execution_submit(params)` OR-detection (`params.handoff_packet_id` present OR `params.text` contains "VAC Web Handoff Packet") is encapsulated in a single Rust generator `@message_submit_branch` that returns `"normal"` | `"handoff"`. This mirrors the Pass #34 `@handoff_dispatch_outcome` pattern: branch authority lives in Rust, the YAML only consumes the result via single-equality `condition`. No DSL extension was needed.
+
+### New generators (7, all in `scenarios.rs::eval_seed_value`)
+
+- `@message_submit_branch` — branch authority (`"normal"` | `"handoff"`)
+- `@message_submit_msg_id` — normal-branch only; bumps counter, returns `msg_01J...`; empty on handoff
+- `@message_submit_tool_call_id` — normal-branch only; bumps counter, returns `tc_01J...`; empty on handoff
+- `@message_submit_exec_sid` — handoff-branch only; bumps counter, returns `exec_NNNN_NNN` (mirrors legacy `format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter)`)
+- `@message_submit_packet_id` — handoff-branch only; reads `params.handoff_packet_id`, falls back to `"pkt_unknown"` when only the text-marker triggered detection
+- `@message_submit_outcome` — handoff-branch only; `"failure"` when `params.force_failure==true` OR `params.mode=="fail"`; `"success"` otherwise; empty on normal
+- `@message_submit_chunks` — returns the JSON-array string `[{"delta":"I'll "}, {"delta":"edit "}, {"delta":"a "}, {"delta":"file."}, {"delta":""}]` for the foreach loop
+
+Counter bumping mirrors legacy exactly: normal branch bumps `state.counter` twice (msg_id then tool_call_id); handoff branch bumps once (exec_sid).
+
+### Branches
+
+**Normal branch (`branch == "normal"`)** — 9 events + response:
+
+1. `transcript.message_added` (assistant role, fixed `2026-04-24T10:00:00Z` timestamp)
+2-6. `transcript.delta` x 5 via foreach over `@message_submit_chunks`. The outer foreach step gate `branch == "normal"` exercises the post-Pass-#36 audit fixup: handoff branch skips the entire foreach (zero body emissions), validated by negative-leakage assertions.
+7. `transcript.completed` (usage tokens 10/5)
+8. `tool_call.pending` (canonical `edit_file` shape)
+9. `review.changeset_updated` (1 file, modified)
+
+**Handoff branch (`branch == "handoff"`)** — 3 events + response, gated by `@message_submit_outcome`:
+
+1. `handoff.execution_progress` (status=started, completed=0, total=1)
+2a/2b. `handoff.execution_progress` (status=completed, completed=1) when `outcome == "success"`; (status=failed, completed=0) when `outcome == "failure"`
+3a/3b. `handoff.completed` (outcome.status=success, tasks_completed=["t1"]) when success; `handoff.failed` (outcome.status=failed, tasks_failed=["t1"]) when failure
+
+### Wire-byte deviation #3 (post-Pass-#36 precedent)
+
+Legacy normal branch returned `{ok: true, message_id}` only.
+Legacy handoff branch returned `{ok: true, executor_session_id}` only.
+Runtime-dispatched returns BOTH fields, with the unused field as empty string. The migrated legacy parity test (`mock_executor_progress_still_completes_from_message_submit_via_runtime_dispatch`) still passes — it asserts `is_string()` + `ok==true`, and `""` `is_string()` returns `true`. Cockpit consumers are field-tolerant per audit on Pass #36.
+
+This is the third accepted wire-byte deviation in Section A (after Pass #36 deviation #1: assessment.run failure response is now terminal instead of mid-stream; deviation #2: `repo_context` coupling kept via `pub(crate)` flip on `family_catalog`).
+
+### Test coverage (6 new tests in `scenarios::tests`)
+
+- `message_submit_normal_branch_emits_transcript_tool_call_and_review_then_response` — 9 events + response, msg_id format, tool_call_id format, deviation #3 (executor_session_id == ""), negative leakage (no `handoff.*`)
+- `message_submit_handoff_branch_via_packet_id_success_emits_started_completed_progress_and_handoff_completed` — 4 frames, exec_sid format, outcome-gated success path, deviation #3 (message_id == ""), double negative leakage (no transcript/tool_call/review + no handoff.failed)
+- `message_submit_handoff_branch_via_force_failure_emits_started_failed_progress_and_handoff_failed` — 4 frames, failed-progress + handoff.failed, negative leakage (no handoff.completed)
+- `message_submit_handoff_branch_via_mode_fail_alias` — verifies `mode=="fail"` is the alias for `force_failure` (Pass #34 contract preserved)
+- `message_submit_handoff_branch_detected_via_text_marker_falls_back_to_pkt_unknown` — OR detection via text marker; packet_id fallback to `"pkt_unknown"` when handoff_packet_id missing
+- `mock_executor_progress_still_completes_from_message_submit_via_runtime_dispatch` — migrated from `legacy_scenarios::tests`; same assertions, now via runtime catalog
+
+The legacy test was deleted from `legacy_scenarios.rs` and its parity assertions migrated to the new runtime-dispatch test. Per the user's directive ("hapus hanya setelah parity tests hijau di YAML path"), the legacy arm + handler functions were removed only after the migrated test was confirmed green.
+
+### Legacy code removed
+
+- `legacy_scenarios::handle_message_submit` (56 lines)
+- `legacy_scenarios::handle_handoff_message_submit` (95 lines)
+- Dispatch arm `"message.submit" => handle_message_submit(...)` (1 line)
+- Test `mock_executor_progress_still_completes_from_message_submit` (42 lines)
+
+Kept and exposed `pub(crate)`: `is_handoff_execution_submit` (11 lines) — used by `@message_submit_branch`, `@message_submit_msg_id`, `@message_submit_tool_call_id`, `@message_submit_exec_sid`, `@message_submit_packet_id`, `@message_submit_outcome`.
+
+### Gates after Pass #37
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p mock-engine` | **47/0** (was 42 baseline; +6 Pass #37 - 1 deleted legacy = +5 net) |
+| `cargo test -p local-bridge --lib` | **351/0** (unchanged) |
+| `cargo test -p local-bridge --test event_catalog_parity` | **7/0** (unchanged) |
+| `cargo fmt --all -- --check` | clean |
+| `node scripts/check-architecture-boundaries.mjs` | ok (264/817/211, unchanged) |
+| `node scripts/codegen-mock-scenarios.mjs --check` | OK — 31 scenarios, 30 runtime-dispatched (+1 message_submit) |
+| `bash scripts/verify-codegen.sh` | OK post-commit |
+| `git diff --check` | clean |
+
+### Line budget delta
+
+| File | Before | After | Δ |
+| --- | --- | --- | --- |
+| `tools/mock-engine/src/legacy_scenarios.rs` | 661 | 463 | −198 (handlers + dispatch arm + legacy test removed; helper kept and exposed) |
+| `tools/mock-engine/src/scenarios.rs` | 1672 | 1969 | +297 (7 generators + 6 tests + comments) |
+| `tools/mock-engine/scenarios/message-submit.yaml` | — | 133 | +133 (new YAML) |
+| `scripts/codegen-mock-scenarios.mjs` | 505 | 516 | +11 (7 names in ALLOWED_GENERATORS) |
+| `tools/mock-engine/src/generated/scenario_catalog.rs` | 30 scenarios | 31 scenarios | +1 (message_submit) |
+
+### Section A milestone
+
+| Pass | Handler | Method |
+| --- | --- | --- |
+| Pass #32 | context.mention_search | payload_template_json |
+| Pass #33 | handoff.create / handoff.approve | state_seeds_after |
+| Pass #34 | handoff.dispatch_local | condition primitive |
+| Pass #35 | (foreach primitive scaffolding via debug_smoke) | foreach |
+| Pass #36 | assessment.run | foreach + condition composition |
+| Audit fixup | (control-plane gaps) | outer-foreach condition gate + codegen schema firewall |
+| **Pass #37** | **message.submit** | **branch generator + outcome generator + foreach reuse** |
+
+**Section A progress: 8 / 8 complete.** All YAML-portable handlers in scope are now runtime-dispatched. Future passes (Section B+) will tackle the remaining legacy handlers outside Section A scope, or extend primitives only when a real scenario demands it (per audit fixup deferred items P2 #2 escaping, P2 #3 missing-binding lint, P3 #2 pretty multi-line catalog emission).

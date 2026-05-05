@@ -636,6 +636,94 @@ fn eval_seed_value(seed_value: &str, state: &mut State, params: &Value) -> Strin
                     r#"["verdict not pass"]"#.to_string()
                 }
             }
+            // ---- Section A (Pass #37): message.submit port. ----
+            //
+            // Branch authority: returns "handoff" when params.handoff_packet_id is present
+            // OR params.text contains "VAC Web Handoff Packet"; else "normal". Mirrors the
+            // Pass #34 @handoff_dispatch_outcome pattern: branch authority lives in this
+            // generator (Rust runtime), the YAML only consumes the result via
+            // condition: { binding: branch, equals: "normal"|"handoff" }.
+            "message_submit_branch" => {
+                if crate::legacy_scenarios::is_handoff_execution_submit(params) {
+                    "handoff".to_string()
+                } else {
+                    "normal".to_string()
+                }
+            }
+            // Per-branch counter-bumping. Normal branch bumps state.counter twice (msg_id,
+            // then tool_call_id) preserving legacy ordering from handle_message_submit.
+            // Handoff branch leaves these empty so the counter only bumps once via exec_sid.
+            "message_submit_msg_id" => {
+                if crate::legacy_scenarios::is_handoff_execution_submit(params) {
+                    String::new()
+                } else {
+                    state.next_msg_id()
+                }
+            }
+            "message_submit_tool_call_id" => {
+                if crate::legacy_scenarios::is_handoff_execution_submit(params) {
+                    String::new()
+                } else {
+                    state.next_tool_call_id()
+                }
+            }
+            // Handoff-branch executor session id. Format mirrors legacy:
+            // format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter) AFTER bump.
+            "message_submit_exec_sid" => {
+                if crate::legacy_scenarios::is_handoff_execution_submit(params) {
+                    state.counter += 1;
+                    format!("exec_{:0>12}{:0>3}", state.seed % 10000, state.counter)
+                } else {
+                    String::new()
+                }
+            }
+            // Handoff-branch packet id. Reads params.handoff_packet_id; falls back to
+            // "pkt_unknown" when only the text-marker triggered branch detection (mirrors
+            // legacy unwrap_or("pkt_unknown")). Empty on the normal branch.
+            "message_submit_packet_id" => {
+                if !crate::legacy_scenarios::is_handoff_execution_submit(params) {
+                    return String::new();
+                }
+                params
+                    .get("handoff_packet_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pkt_unknown")
+                    .to_string()
+            }
+            // Handoff-branch outcome. "failure" when params.force_failure==true OR
+            // params.mode=="fail"; "success" otherwise. Empty on the normal branch so the
+            // outcome-gated handoff.completed/handoff.failed steps skip via condition.
+            "message_submit_outcome" => {
+                if !crate::legacy_scenarios::is_handoff_execution_submit(params) {
+                    return String::new();
+                }
+                let force = params
+                    .get("force_failure")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    || params
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .map(|m| m == "fail")
+                        .unwrap_or(false);
+                if force {
+                    "failure".to_string()
+                } else {
+                    "success".to_string()
+                }
+            }
+            // 5-chunk array for the transcript.delta foreach (normal branch only). Mirrors
+            // legacy chunks ["I'll ", "edit ", "a ", "file.", ""] (the empty trailing chunk
+            // is intentional in handle_message_submit). Generated as a JSON-array string
+            // suitable for the foreach primitive; per-iter binding is ${chunk.delta}.
+            "message_submit_chunks" => json!([
+                {"delta": "I'll "},
+                {"delta": "edit "},
+                {"delta": "a "},
+                {"delta": "file."},
+                {"delta": ""}
+            ])
+            .to_string(),
             _ => seed_value.to_string(),
         }
     } else if let Some(rest) = seed_value.strip_prefix("$input_json.") {
@@ -1668,5 +1756,214 @@ mod tests {
                 .any(|line| line.contains("\"status\":\"completed\"")),
             "failure branch leaked status=completed, got: {out:?}"
         );
+    }
+
+    // ---- Pass #37: message.submit port (Section A 8/8). ----
+
+    #[test]
+    fn message_submit_normal_branch_emits_transcript_tool_call_and_review_then_response() {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":400,"method":"message.submit","params":{"text":"hello world"}}"#,
+            &mut state,
+        );
+        // Normal branch shape: 1 + 5 (foreach) + 1 + 1 + 1 events + 1 response = 10 frames.
+        assert_eq!(out.len(), 10, "normal branch frame count, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[0]["method"], "transcript.message_added");
+        assert_eq!(parsed[0]["params"]["role"], "assistant");
+        assert_eq!(parsed[0]["params"]["created_at"], "2026-04-24T10:00:00Z");
+        let msg_id = parsed[0]["params"]["message_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(msg_id.starts_with("msg_01J"));
+        // 5x transcript.delta from foreach over @message_submit_chunks.
+        let chunks = ["I'll ", "edit ", "a ", "file.", ""];
+        for (i, expected) in chunks.iter().enumerate() {
+            let frame = &parsed[1 + i];
+            assert_eq!(frame["method"], "transcript.delta");
+            assert_eq!(frame["params"]["message_id"], msg_id);
+            assert_eq!(frame["params"]["delta"], *expected);
+        }
+        assert_eq!(parsed[6]["method"], "transcript.completed");
+        assert_eq!(parsed[6]["params"]["usage"]["input_tokens"], 10);
+        assert_eq!(parsed[6]["params"]["usage"]["output_tokens"], 5);
+        assert_eq!(parsed[7]["method"], "tool_call.pending");
+        assert_eq!(parsed[7]["params"]["tool"], "edit_file");
+        assert_eq!(parsed[7]["params"]["risk"], "medium");
+        assert!(parsed[7]["params"]["tool_call_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("tc_01J"));
+        assert_eq!(parsed[8]["method"], "review.changeset_updated");
+        assert_eq!(parsed[8]["params"]["files"][0]["path"], "src/foo.ts");
+        assert_eq!(parsed[8]["params"]["files"][0]["additions"], 3);
+        // Response: id echoed, message_id populated, executor_session_id empty (deviation #3).
+        assert_eq!(parsed[9]["id"], 400);
+        assert_eq!(parsed[9]["result"]["ok"], true);
+        assert_eq!(parsed[9]["result"]["message_id"], msg_id);
+        assert_eq!(parsed[9]["result"]["executor_session_id"], "");
+        // Negative leakage: normal branch must NOT emit any handoff.* events.
+        assert!(!out.iter().any(|line| line.contains("handoff.")));
+    }
+
+    #[test]
+    fn message_submit_handoff_branch_via_packet_id_success_emits_started_completed_progress_and_handoff_completed(
+    ) {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":401,"method":"message.submit","params":{"handoff_packet_id":"pkt_handoff_1"}}"#,
+            &mut state,
+        );
+        // Handoff success: 1 (started) + 1 (completed-progress) + 1 (handoff.completed) + 1 response = 4 frames.
+        assert_eq!(out.len(), 4, "handoff success frame count, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        // Started progress.
+        assert_eq!(parsed[0]["method"], "handoff.execution_progress");
+        assert_eq!(parsed[0]["params"]["status"], "started");
+        assert_eq!(parsed[0]["params"]["packet_id"], "pkt_handoff_1");
+        assert_eq!(parsed[0]["params"]["completed"], 0);
+        assert_eq!(parsed[0]["params"]["total"], 1);
+        let exec_sid = parsed[0]["params"]["executor_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(exec_sid.starts_with("exec_"));
+        // Completed progress.
+        assert_eq!(parsed[1]["method"], "handoff.execution_progress");
+        assert_eq!(parsed[1]["params"]["status"], "completed");
+        assert_eq!(parsed[1]["params"]["completed"], 1);
+        // handoff.completed (terminal).
+        assert_eq!(parsed[2]["method"], "handoff.completed");
+        assert_eq!(parsed[2]["params"]["status"], "completed");
+        assert_eq!(parsed[2]["params"]["outcome"]["status"], "success");
+        assert_eq!(parsed[2]["params"]["outcome"]["tasks_completed"][0], "t1");
+        assert!(parsed[2]["params"]["outcome"]["tasks_failed"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        // Response.
+        assert_eq!(parsed[3]["id"], 401);
+        assert_eq!(parsed[3]["result"]["ok"], true);
+        assert_eq!(parsed[3]["result"]["executor_session_id"], exec_sid);
+        assert_eq!(parsed[3]["result"]["message_id"], "");
+        // Negative leakage: handoff branch must NOT emit any normal-branch event.
+        assert!(!out.iter().any(|line| line.contains("transcript.")
+            || line.contains("tool_call.pending")
+            || line.contains("review.changeset_updated")));
+        // Negative leakage: success branch must NOT emit handoff.failed.
+        assert!(!out.iter().any(|line| line.contains("\"handoff.failed\"")));
+    }
+
+    #[test]
+    fn message_submit_handoff_branch_via_force_failure_emits_started_failed_progress_and_handoff_failed(
+    ) {
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":402,"method":"message.submit","params":{"handoff_packet_id":"pkt_fail_1","force_failure":true}}"#,
+            &mut state,
+        );
+        assert_eq!(out.len(), 4, "handoff failure frame count, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[0]["params"]["status"], "started");
+        assert_eq!(parsed[1]["params"]["status"], "failed");
+        assert_eq!(parsed[1]["params"]["completed"], 0);
+        assert_eq!(parsed[2]["method"], "handoff.failed");
+        assert_eq!(parsed[2]["params"]["outcome"]["status"], "failed");
+        assert_eq!(parsed[2]["params"]["outcome"]["tasks_failed"][0], "t1");
+        assert!(parsed[2]["params"]["outcome"]["tasks_completed"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        // Negative leakage: failure branch must NOT emit handoff.completed.
+        assert!(!out
+            .iter()
+            .any(|line| line.contains("\"handoff.completed\"")));
+        assert_eq!(parsed[3]["id"], 402);
+        assert_eq!(parsed[3]["result"]["ok"], true);
+    }
+
+    #[test]
+    fn message_submit_handoff_branch_via_mode_fail_alias() {
+        // mode=="fail" is the alias for force_failure (Pass #34 contract preserved).
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":403,"method":"message.submit","params":{"handoff_packet_id":"pkt_fail_alias","mode":"fail"}}"#,
+            &mut state,
+        );
+        assert_eq!(out.len(), 4, "mode=fail alias frame count, got: {out:?}");
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[1]["params"]["status"], "failed");
+        assert_eq!(parsed[2]["method"], "handoff.failed");
+    }
+
+    #[test]
+    fn message_submit_handoff_branch_detected_via_text_marker_falls_back_to_pkt_unknown() {
+        // No handoff_packet_id; text contains "VAC Web Handoff Packet" -> handoff branch,
+        // packet_id falls back to "pkt_unknown" (mirror legacy unwrap_or).
+        let mut state = mk_state();
+        let out = handle(
+            r#"{"jsonrpc":"2.0","id":404,"method":"message.submit","params":{"text":"VAC Web Handoff Packet\nPacket: pkt_marker\n"}}"#,
+            &mut state,
+        );
+        assert_eq!(
+            out.len(),
+            4,
+            "text-marker detection frame count, got: {out:?}"
+        );
+        let parsed: Vec<Value> = out
+            .iter()
+            .map(|s| serde_json::from_str::<Value>(s).unwrap())
+            .collect();
+        assert_eq!(parsed[0]["method"], "handoff.execution_progress");
+        assert_eq!(parsed[0]["params"]["packet_id"], "pkt_unknown");
+        assert_eq!(parsed[0]["params"]["status"], "started");
+        assert_eq!(parsed[2]["method"], "handoff.completed");
+    }
+
+    #[test]
+    fn mock_executor_progress_still_completes_from_message_submit_via_runtime_dispatch() {
+        // Pass #37: migrated from legacy_scenarios::tests. Same line + same assertions;
+        // now exercises the runtime catalog (legacy handler removed).
+        let mut state = mk_state();
+        let line = r#"{"jsonrpc":"2.0","id":"cmd_1","method":"message.submit","params":{"text":"VAC Web Handoff Packet\nPacket: pkt_01\n","handoff_packet_id":"pkt_01","source_session_id":"sess_source"}}"#;
+        let outputs = handle(line, &mut state);
+        let frames: Vec<Value> = outputs
+            .iter()
+            .map(|frame| serde_json::from_str::<Value>(frame).expect("valid json"))
+            .collect();
+        assert!(frames.iter().any(|frame| {
+            frame.get("method") == Some(&json!("handoff.execution_progress"))
+                && frame["params"]["status"] == json!("started")
+                && frame["params"]["packet_id"] == json!("pkt_01")
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.get("method") == Some(&json!("handoff.execution_progress"))
+                && frame["params"]["status"] == json!("completed")
+                && frame["params"]["packet_id"] == json!("pkt_01")
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.get("method") == Some(&json!("handoff.completed"))
+                && frame["params"]["status"] == json!("completed")
+                && frame["params"]["outcome"]["status"] == json!("success")
+        }));
+        assert!(frames.iter().any(|frame| {
+            frame.get("id") == Some(&json!("cmd_1"))
+                && frame["result"]["ok"] == json!(true)
+                && frame["result"]["executor_session_id"].is_string()
+        }));
     }
 }

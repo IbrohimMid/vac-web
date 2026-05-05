@@ -23,7 +23,7 @@ pub struct ScenarioEntry {
     pub assertions: &'static [&'static str],
 }
 
-pub const SCENARIO_CATALOG: [ScenarioEntry; 30] = [
+pub const SCENARIO_CATALOG: [ScenarioEntry; 31] = [
     ScenarioEntry {
         id: "approval_approve",
         status: ScenarioStatus::FutureWhenBackendLands,
@@ -167,6 +167,14 @@ pub const SCENARIO_CATALOG: [ScenarioEntry; 30] = [
         input_command: "handoff.reject",
         timeline_events: &["handoff.status"],
         assertions: &["mock-engine emits handoff.status with status=rejected so the cockpit handoff surface flips the packet to a terminal rejected state", "rejecting a packet is idempotent in the mock; subsequent rejects are silently accepted by the bridge", "packet_id echoes the inbound params so the cockpit can match the rejection to the originating row"],
+    },
+    ScenarioEntry {
+        id: "message_submit",
+        status: ScenarioStatus::ProductionParity,
+        replacement: None,
+        input_command: "message.submit",
+        timeline_events: &["transcript.message_added", "transcript.delta", "transcript.completed", "tool_call.pending", "review.changeset_updated", "handoff.execution_progress", "handoff.execution_progress", "handoff.execution_progress", "handoff.completed", "handoff.failed"],
+        assertions: &["is_handoff_execution_submit branching mirrors legacy: presence of params.handoff_packet_id OR text contains 'VAC Web Handoff Packet' routes to handoff branch", "normal branch emits 9 events (transcript.message_added + 5x transcript.delta via foreach + transcript.completed + tool_call.pending + review.changeset_updated) + response", "handoff success branch emits 3 events (started + completed-progress + handoff.completed) + response with executor_session_id", "handoff failure branch (force_failure or mode=='fail') emits 3 events (started + failed-progress + handoff.failed) + response", "transcript.delta foreach exercises post-Pass-#36 audit fixup: outer condition gates the entire loop; handoff branch skips foreach entirely with zero body emissions", "wire-byte deviation #3: final_response carries both message_id and executor_session_id with empty string for unused field; legacy parity test still passes (is_string() + ok==true)", "counter bump ordering preserved: normal=+2 (msg_id, tool_call_id); handoff=+1 (exec_sid only)", "handoff branch text-marker fallback: when only params.text triggers detection (no handoff_packet_id), packet_id falls back to 'pkt_unknown' (mirror legacy unwrap_or)"],
     },
     ScenarioEntry {
         id: "release_deploy",
@@ -325,7 +333,7 @@ pub struct RuntimeScenarioEntry {
     pub final_response_json: Option<&'static str>,
 }
 
-pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 29] = [
+pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 30] = [
     RuntimeScenarioEntry {
         id: "approval_approve",
         input_command: "approval.approve",
@@ -444,6 +452,13 @@ pub const RUNTIME_SCENARIO_CATALOG: [RuntimeScenarioEntry; 29] = [
         state_seeds: &[RuntimeStateSeed { var: "packet_id", value: "$input.packet_id" }],
         timeline: &[RuntimeTimelineStep { event: "handoff.status", after_ms: 0, payload_json: "{\"packet_id\":\"${packet_id}\",\"status\":\"rejected\"}", payload_template_json: None, state_seeds_after: &[], condition: None, foreach: None }],
         final_response_json: Some("{\"ok\":true}"),
+    },
+    RuntimeScenarioEntry {
+        id: "message_submit",
+        input_command: "message.submit",
+        state_seeds: &[RuntimeStateSeed { var: "branch", value: "@message_submit_branch" }, RuntimeStateSeed { var: "msg_id", value: "@message_submit_msg_id" }, RuntimeStateSeed { var: "tool_call_id", value: "@message_submit_tool_call_id" }, RuntimeStateSeed { var: "executor_session_id", value: "@message_submit_exec_sid" }, RuntimeStateSeed { var: "packet_id", value: "@message_submit_packet_id" }, RuntimeStateSeed { var: "outcome", value: "@message_submit_outcome" }, RuntimeStateSeed { var: "chunks", value: "@message_submit_chunks" }],
+        timeline: &[RuntimeTimelineStep { event: "transcript.message_added", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"message_id\":\"${msg_id}\",\"role\":\"assistant\",\"created_at\":\"2026-04-24T10:00:00Z\"}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "branch", equals: "normal" }), foreach: None }, RuntimeTimelineStep { event: "", after_ms: 0, payload_json: "{}", payload_template_json: None, state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "branch", equals: "normal" }), foreach: Some(RuntimeForeach { binding: "chunks", as_prefix: "chunk", index_var: "", body: &[RuntimeTimelineStep { event: "transcript.delta", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"message_id\":\"${msg_id}\",\"delta\":\"${chunk.delta}\"}"), state_seeds_after: &[], condition: None, foreach: None }] }) }, RuntimeTimelineStep { event: "transcript.completed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"message_id\":\"${msg_id}\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "branch", equals: "normal" }), foreach: None }, RuntimeTimelineStep { event: "tool_call.pending", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"tool_call_id\":\"${tool_call_id}\",\"tool\":\"edit_file\",\"risk\":\"medium\",\"summary\":\"Edit src/foo.ts\",\"args\":{\"path\":\"src/foo.ts\",\"patch\":\"-- old\\n++ new\\n\"},\"created_at\":\"2026-04-24T10:00:01Z\"}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "branch", equals: "normal" }), foreach: None }, RuntimeTimelineStep { event: "review.changeset_updated", after_ms: 0, payload_json: "{\"files\":[{\"path\":\"src/foo.ts\",\"status\":\"modified\",\"additions\":3,\"deletions\":1}]}", payload_template_json: None, state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "branch", equals: "normal" }), foreach: None }, RuntimeTimelineStep { event: "handoff.execution_progress", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"packet_id\":\"${packet_id}\",\"executor_session_id\":\"${executor_session_id}\",\"task_id\":\"t1\",\"current_task\":\"t1\",\"status\":\"started\",\"completed\":0,\"total\":1}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "branch", equals: "handoff" }), foreach: None }, RuntimeTimelineStep { event: "handoff.execution_progress", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"packet_id\":\"${packet_id}\",\"executor_session_id\":\"${executor_session_id}\",\"task_id\":\"t1\",\"current_task\":\"t1\",\"status\":\"completed\",\"completed\":1,\"total\":1}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "outcome", equals: "success" }), foreach: None }, RuntimeTimelineStep { event: "handoff.execution_progress", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"packet_id\":\"${packet_id}\",\"executor_session_id\":\"${executor_session_id}\",\"task_id\":\"t1\",\"current_task\":\"t1\",\"status\":\"failed\",\"completed\":0,\"total\":1}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "outcome", equals: "failure" }), foreach: None }, RuntimeTimelineStep { event: "handoff.completed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"packet_id\":\"${packet_id}\",\"executor_session_id\":\"${executor_session_id}\",\"status\":\"completed\",\"outcome\":{\"status\":\"success\",\"tasks_completed\":[\"t1\"],\"tasks_failed\":[],\"changeset_summary\":\"mock execution complete\"}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "outcome", equals: "success" }), foreach: None }, RuntimeTimelineStep { event: "handoff.failed", after_ms: 0, payload_json: "{}", payload_template_json: Some("{\"packet_id\":\"${packet_id}\",\"executor_session_id\":\"${executor_session_id}\",\"status\":\"failed\",\"outcome\":{\"status\":\"failed\",\"tasks_completed\":[],\"tasks_failed\":[\"t1\"],\"changeset_summary\":\"mock execution failed\"}}"), state_seeds_after: &[], condition: Some(RuntimeStepCondition { binding: "outcome", equals: "failure" }), foreach: None }],
+        final_response_json: Some("{\"ok\":true,\"message_id\":\"${msg_id}\",\"executor_session_id\":\"${executor_session_id}\"}"),
     },
     RuntimeScenarioEntry {
         id: "release_deploy",
