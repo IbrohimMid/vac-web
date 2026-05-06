@@ -35,6 +35,18 @@ jobs:
         run: cargo run -p perf --release -- --duration 60 --output perf-results.json
       - name: Check measurements vs budgets (measurement-only)
         run: node scripts/check-slo-measurements.mjs perf-results.json --measurement-only
+      - name: Archive perf baseline
+        run: node scripts/perf-baseline-archive.mjs
+      - name: Compare against rolling perf baseline
+        continue-on-error: true
+        run: node scripts/perf-baseline-compare.mjs --window 10 --threshold 25
+      - name: Upload perf baseline history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-baseline-history
+          path: .perf-baseline/history.jsonl
+          retention-days: 90
       - name: Upload measurements artifact
         uses: actions/upload-artifact@v4
         with:

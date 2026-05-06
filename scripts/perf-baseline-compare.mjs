@@ -1,131 +1,91 @@
 #!/usr/bin/env node
-// Compare current perf run against a rolling N-day baseline history.
+// Compare the most recent perf measurement against a rolling window in
+// .perf-baseline/history.jsonl. Flags any p95/median/p99 that has regressed
+// more than --threshold percent vs the median of the last --window entries.
+// Defaults: warn-only (exit 0). Pass --strict to exit 1 on regression so the
+// CI step can later be made gating.
 //
-// Usage:
-//   node scripts/perf-baseline-compare.mjs <perf-results.json> [--history <path>] [--window <days>] [--threshold <pct>]
-//
-// Computes baseline p95 = p95 over all per-run p95 values from runs in the last
-// <window> days, per subsystem. Flags REGRESS when current p95 exceeds baseline
-// p95 by more than <threshold> percent (default 25).
-//
-// Exit codes: 0 = OK / first-run / no regression, 1 = regression detected, 2 = bad usage.
+// CLI:  node scripts/perf-baseline-compare.mjs --window 10 --threshold 25 [--strict]
 
-import { readFileSync, existsSync } from "node:fs"
-import { resolve, dirname } from "node:path"
-import { fileURLToPath } from "node:url"
+import fs from 'node:fs';
+import path from 'node:path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const ROOT = resolve(__dirname, "..")
-const DEFAULT_HISTORY = resolve(ROOT, ".perf-baseline/history.jsonl")
+const args = process.argv.slice(2);
+function flag(name, fallback) {
+  const idx = args.indexOf(`--${name}`);
+  if (idx === -1 || idx + 1 >= args.length) return fallback;
+  return args[idx + 1];
+}
+const windowSize = Number(flag('window', '10'));
+const thresholdPct = Number(flag('threshold', '25'));
+const strict = args.includes('--strict');
 
-function parseArgs(argv) {
-	const args = {
-		input: null,
-		history: DEFAULT_HISTORY,
-		window: 14,
-		threshold: 25,
-	}
-	for (let i = 0; i < argv.length; i++) {
-		if (argv[i] === "--history") {
-			args.history = resolve(argv[++i])
-		} else if (argv[i] === "--window") {
-			args.window = parseInt(argv[++i], 10)
-		} else if (argv[i] === "--threshold") {
-			args.threshold = parseFloat(argv[++i])
-		} else if (!args.input) {
-			args.input = resolve(argv[i])
-		} else {
-			console.error(`[perf-baseline-compare] unknown argument: ${argv[i]}`)
-			process.exit(2)
-		}
-	}
-	if (!args.input) {
-		console.error(
-			"usage: perf-baseline-compare.mjs <perf-results.json> [--history <path>] [--window <days>] [--threshold <pct>]",
-		)
-		process.exit(2)
-	}
-	return args
+const HIST = path.join(process.cwd(), '.perf-baseline', 'history.jsonl');
+if (!fs.existsSync(HIST)) {
+  console.log('[perf-baseline-compare] no history yet, skipping.');
+  process.exit(0);
 }
 
-function p95(values) {
-	if (values.length === 0) return null
-	const sorted = [...values].sort((a, b) => a - b)
-	const idx = Math.floor(sorted.length * 0.95)
-	return sorted[Math.min(idx, sorted.length - 1)]
+const lines = fs.readFileSync(HIST, 'utf8').split('\n').filter(Boolean);
+if (lines.length < 2) {
+  console.log(`[perf-baseline-compare] only ${lines.length} entry, need >=2; skipping.`);
+  process.exit(0);
 }
 
-function main() {
-	const args = parseArgs(process.argv.slice(2))
-	if (!existsSync(args.input)) {
-		console.error(`[perf-baseline-compare] FAIL: input not found: ${args.input}`)
-		process.exit(1)
-	}
-	const current = JSON.parse(readFileSync(args.input, "utf8"))
+const entries = lines
+  .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+  .filter(Boolean);
 
-	if (!existsSync(args.history)) {
-		console.log(
-			`[perf-baseline-compare] OK — no baseline history yet at ${args.history}; first run, baseline establishing.`,
-		)
-		return
-	}
-
-	const lines = readFileSync(args.history, "utf8").split("\n").filter(Boolean)
-	const nowSeconds = Math.floor(Date.now() / 1000)
-	const cutoffSeconds = nowSeconds - args.window * 86400
-	const recent = lines
-		.map(l => {
-			try {
-				return JSON.parse(l)
-			} catch {
-				return null
-			}
-		})
-		.filter(e => e && typeof e.captured_at_unix_seconds === "number")
-		.filter(e => e.captured_at_unix_seconds >= cutoffSeconds)
-
-	if (recent.length === 0) {
-		console.log(
-			`[perf-baseline-compare] OK — ${lines.length} total entries but 0 in last ${args.window}d; baseline still establishing.`,
-		)
-		return
-	}
-
-	console.log(
-		`[perf-baseline-compare] comparing current run vs ${recent.length} entries in last ${args.window}d (threshold +${args.threshold}%)`,
-	)
-
-	const subsystemHistory = new Map()
-	for (const entry of recent) {
-		for (const m of entry.measurements || []) {
-			if (!subsystemHistory.has(m.subsystem)) subsystemHistory.set(m.subsystem, [])
-			subsystemHistory.get(m.subsystem).push(m.p95_ms)
-		}
-	}
-
-	let regressions = 0
-	for (const m of current.measurements || []) {
-		const history = subsystemHistory.get(m.subsystem) || []
-		const baselineP95 = p95(history)
-		if (baselineP95 === null) {
-			console.log(`  ${m.subsystem.padEnd(28)} current=${m.p95_ms}ms  (no history yet)`)
-			continue
-		}
-		const regressionPct = ((m.p95_ms - baselineP95) / baselineP95) * 100
-		const flag = regressionPct > args.threshold ? "REGRESS" : "OK"
-		if (flag === "REGRESS") regressions++
-		console.log(
-			`  ${flag.padEnd(7)} ${m.subsystem.padEnd(28)} current=${m.p95_ms}ms  baseline_p95=${baselineP95}ms  delta=${regressionPct >= 0 ? "+" : ""}${regressionPct.toFixed(1)}%`,
-		)
-	}
-
-	if (regressions > 0) {
-		console.error(
-			`[perf-baseline-compare] FAIL: ${regressions} subsystem(s) regressed >${args.threshold}% vs baseline`,
-		)
-		process.exit(1)
-	}
-	console.log(`[perf-baseline-compare] OK — no regressions vs ${args.window}d baseline`)
+const latest = entries[entries.length - 1];
+const window = entries.slice(Math.max(0, entries.length - 1 - windowSize), entries.length - 1);
+if (window.length === 0) {
+  console.log('[perf-baseline-compare] no prior entries in window, skipping.');
+  process.exit(0);
 }
 
-main()
+function median(nums) {
+  const s = [...nums].sort((a, b) => a - b);
+  const n = s.length;
+  if (n === 0) return null;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+const metrics = ['p95_ms', 'median_ms', 'p99_ms'];
+const regressions = [];
+const ok = [];
+const latestM = latest.measurements || {};
+
+for (const [name, latestRow] of Object.entries(latestM)) {
+  if (!latestRow || typeof latestRow !== 'object') continue;
+  for (const metric of metrics) {
+    const latestVal = Number(latestRow[metric]);
+    if (!Number.isFinite(latestVal)) continue;
+    const windowVals = window
+      .map((e) => {
+        const row = (e.measurements || {})[name];
+        if (!row || typeof row !== 'object') return NaN;
+        return Number(row[metric]);
+      })
+      .filter((v) => Number.isFinite(v));
+    const baseline = median(windowVals);
+    if (baseline == null || baseline === 0) continue;
+    const deltaPct = ((latestVal - baseline) / baseline) * 100;
+    const row = {
+      measurement: name,
+      metric,
+      latest: latestVal,
+      baseline,
+      delta_pct: Number(deltaPct.toFixed(2)),
+    };
+    if (deltaPct > thresholdPct) regressions.push(row);
+    else ok.push(row);
+  }
+}
+
+console.log(`[perf-baseline-compare] window=${window.length} threshold=${thresholdPct}%`);
+console.log(JSON.stringify({ regressions, ok }, null, 2));
+
+if (regressions.length > 0) {
+  console.warn(`[perf-baseline-compare] ${regressions.length} regression(s) over threshold.`);
+  if (strict) process.exit(1);
+}
