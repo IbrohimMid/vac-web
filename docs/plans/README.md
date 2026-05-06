@@ -15,6 +15,7 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 ## Active handoffs
 
 - [`wiring/post-r1-r6-followups-plan-2026-05-07.md`](./wiring/post-r1-r6-followups-plan-2026-05-07.md) — Phase 2 follow-ups after R1–R6 closeout: F1 (trust real classification, closed), F2 (perf real drivers, planned), F3 (baseline watch, closed), F4 (flip CI strict, deferred), F5 (cockpit UX, planned), F6 (ADR refresh, planned). Status: active 2026-05-07.
+- [Cockpit UX implementation plan (2026-05-07)](wiring/cockpit-ux-implementation-plan-2026-05-07.md) — wire release panel, extensions settings page, perf indicator (F5a/F5b/F5c)
 
 ## Closed handoffs
 
