@@ -1,0 +1,21 @@
+{
+  "jobId": "617c1e2f-7d14-43f2-95fa-c9163b976c6c",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && node scripts/check-extension-trust.mjs 2>&1 | tail -3",
+  "status": "completed",
+  "createdAt": "2026-05-06T01:06:19.598Z",
+  "startedAt": "2026-05-06T01:06:19.599Z",
+  "finishedAt": "2026-05-06T01:06:19.812Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2800975,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && node scripts/check-extension-trust.mjs 2>&1 | tail -3",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

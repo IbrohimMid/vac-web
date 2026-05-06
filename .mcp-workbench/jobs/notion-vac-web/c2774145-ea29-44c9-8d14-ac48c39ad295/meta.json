@@ -1,0 +1,21 @@
+{
+  "jobId": "c2774145-ea29-44c9-8d14-ac48c39ad295",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && cargo check -p perf 2>&1 | tail -10",
+  "status": "completed",
+  "createdAt": "2026-05-06T01:06:04.570Z",
+  "startedAt": "2026-05-06T01:06:04.570Z",
+  "finishedAt": "2026-05-06T01:06:05.743Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2800222,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && cargo check -p perf 2>&1 | tail -10",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

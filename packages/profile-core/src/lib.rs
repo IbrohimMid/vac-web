@@ -7,8 +7,10 @@
 //! Outputs: load-time validated profile + pure functions that enforce rules.
 
 pub mod enforce;
+pub mod extension_trust;
 pub mod hash;
 pub mod profile;
 
 pub use enforce::{Decision, EnforceResult};
+pub use extension_trust::{enforce_extension_trust, EnforceContext, TrustDecision};
 pub use profile::{CapabilityProfile, Class, FsConfig, GitConfig, NetworkEgress, ShellAllowEntry};

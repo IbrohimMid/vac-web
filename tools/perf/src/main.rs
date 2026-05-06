@@ -19,6 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+// Phase 2 real per-subsystem drivers. Gated behind the `real_scenarios` feature
+// so Phase 1 synthetic measurements remain the default until Phase 2 lands.
+#[cfg(feature = "real_scenarios")]
+pub mod scenarios;
+
 #[derive(Parser, Debug)]
 #[command(name = "perf", about = "VAC backend SLO measurement harness", version)]
 struct Args {

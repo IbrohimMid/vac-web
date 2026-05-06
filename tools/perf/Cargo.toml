@@ -1,3 +1,9 @@
+[features]
+# When enabled, replaces Phase 1 synthetic measurements with real per-subsystem
+# drivers under `src/scenarios/`. Off by default until Phase 2 lands and we have
+# 2 weeks of real baseline data.
+real_scenarios = []
+
 [package]
 name = "perf"
 version.workspace = true

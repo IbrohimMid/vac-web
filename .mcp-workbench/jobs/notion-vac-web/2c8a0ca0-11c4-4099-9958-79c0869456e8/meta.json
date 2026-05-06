@@ -1,0 +1,31 @@
+{
+  "jobId": "2c8a0ca0-11c4-4099-9958-79c0869456e8",
+  "kind": "workflow",
+  "title": "phase2-scaffolding-perf-and-trust",
+  "status": "running",
+  "createdAt": "2026-05-06T01:06:04.557Z",
+  "startedAt": "2026-05-06T01:06:04.557Z",
+  "finishedAt": null,
+  "message": "Commit Phase 2 scaffolding",
+  "error": null,
+  "result": null,
+  "exitCode": null,
+  "signal": null,
+  "pid": null,
+  "childJobId": "36815eab-7bfc-4540-b180-1fcf5b36f3a8",
+  "command": null,
+  "presetName": null,
+  "presetPath": null,
+  "permissions": {
+    "filesystem": {
+      "read": true,
+      "write": true
+    },
+    "shell": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    }
+  }
+}

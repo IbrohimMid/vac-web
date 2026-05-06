@@ -1,0 +1,21 @@
+{
+  "jobId": "70fe25f4-a342-4cd6-9eb4-69fde54a0b8f",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== tools/perf structure ===' \\\n  && find tools/perf -type f |",
+  "status": "completed",
+  "createdAt": "2026-05-06T01:02:02.535Z",
+  "startedAt": "2026-05-06T01:02:02.535Z",
+  "finishedAt": "2026-05-06T01:02:02.706Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2797365,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== tools/perf structure ===' \\\n  && find tools/perf -type f | head -20 \\\n  && echo '' \\\n  && echo '=== tools/perf/src/main.rs (first 80 lines) ===' \\\n  && head -80 tools/perf/src/main.rs \\\n  && echo '' \\\n  && echo '=== profile-core structure ===' \\\n  && find packages/profile-core -type f -name '*.rs' | head -10 \\\n  && echo '' \\\n  && echo '=== profile-core/src/lib.rs (first 30 lines) ===' \\\n  && head -30 packages/profile-core/src/lib.rs 2>/dev/null || echo 'NO FILE' \\\n  && echo '' \\\n  && echo '=== profile-core Cargo.toml ===' \\\n  && cat packages/profile-core/Cargo.toml 2>/dev/null || echo 'NO FILE'",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

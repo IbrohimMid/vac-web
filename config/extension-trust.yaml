@@ -1,0 +1,27 @@
+# Extension trust configuration (Phase 2 schema v1).
+#
+# Documented in:
+# - docs/extension-trust-model.md
+# - docs/adr/0003-extension-trust-model.md
+#
+# Phase 1: this file exists but has no allowlist entries. The runtime stub in
+# `packages/profile-core::extension_trust::enforce_extension_trust` returns
+# `AllowedBundled` regardless of contents. Phase 2 will read this file and
+# classify extensions accordingly.
+
+version: 1
+
+# When false, refuses to load any extension that is not in `extensions` below
+# AND signed by an allowlisted publisher. Default false (deny-by-default).
+allow_unsigned: false
+
+# Allowlisted publisher pubkeys (base64). Extensions signed by any of these
+# publishers and matching the entry below get `AllowedSigned`.
+publishers: []
+
+# Per-extension entries. Each entry must include:
+#   - id: stable extension id (e.g. `vac.review-tab`)
+#   - tier: one of [allowed_bundled, allowed_signed, quarantined, revoked]
+#   - source: one of [bundled, signed]
+#   - publisher: optional publisher pubkey reference (required when source=signed)
+extensions: []
