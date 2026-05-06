@@ -14,6 +14,7 @@ import { useSession } from '../../stores/session';
 import { useSessionHistory } from '../../stores/sessionHistory';
 import type { TransportHandle } from '../../transport';
 import { Avatar, Icon } from './primitives';
+import { PerfBadge } from './PerfBadge';
 
 // Slice 33 follow-up: route surface controls through the declarative
 // affordance catalog. `commandStatus()` may return a longer status union
@@ -339,6 +340,7 @@ export function Topbar({ onCmdK, onTweaks, onSettings, transport }: Props) {
           <Icon name="shield" size={15} />
         </button>
       )}
+      <PerfBadge />
       <button
         className="icon-btn"
         onClick={onTweaks}
