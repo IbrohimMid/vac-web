@@ -28,6 +28,7 @@ function toAffordanceStatus(id: string): AffordanceCommandStatus {
 interface Props {
   onCmdK: () => void;
   onTweaks: () => void;
+  onSettings?: () => void;
   transport: TransportHandle | null;
 }
 
@@ -213,7 +214,7 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   );
 }
 
-export function Topbar({ onCmdK, onTweaks, transport }: Props) {
+export function Topbar({ onCmdK, onTweaks, onSettings, transport }: Props) {
   const theme = useCockpit((s) => s.theme);
   const setTheme = useCockpit((s) => s.setTheme);
   const project = useSession((s) => s.projectRoot ?? 'no project');
@@ -327,6 +328,17 @@ export function Topbar({ onCmdK, onTweaks, transport }: Props) {
       <button className="icon-btn" title="Notifications" aria-label="Notifications">
         <Icon name="bell" size={15} />
       </button>
+      {onSettings && (
+        <button
+          className="icon-btn"
+          onClick={onSettings}
+          title="Settings"
+          aria-label="Settings"
+          data-testid="topbar-settings-button"
+        >
+          <Icon name="shield" size={15} />
+        </button>
+      )}
       <button
         className="icon-btn"
         onClick={onTweaks}

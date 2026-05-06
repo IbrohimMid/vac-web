@@ -7,6 +7,7 @@ import { CommandPalette } from '../components/CommandPalette/CommandPalette';
 import { GateDetail } from '../components/Gates/GateDetail';
 import { GuidedMode } from '../components/GuidedMode/GuidedMode';
 import { DiffViewer } from '../components/Review/DiffViewer';
+import { SettingsPage } from '../components/Settings/SettingsPage';
 import type { OverlayRegistry } from './registry';
 
 export const overlayRegistry: OverlayRegistry = {
@@ -15,4 +16,5 @@ export const overlayRegistry: OverlayRegistry = {
   diff_viewer: DiffViewer,
   gate_detail: GateDetail,
   guided_mode: GuidedMode,
+  settings: SettingsPage,
 };

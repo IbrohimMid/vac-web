@@ -44,6 +44,7 @@ import { registerApprovalHandlers } from './domain/approvals/handlers';
 import { registerAgentSessionHandlers } from './domain/agentSession/handlers';
 import { registerToolActivityHandlers } from './domain/toolActivity/handlers';
 import { registerWorkflowHandlers } from './domain/workflow/handlers';
+import { registerExtensionsHandlers } from './domain/extensions/handlers';
 import { registerAssessmentHandlers } from './domain/assessment/handlers';
 import { registerCapabilitiesHandlers } from './domain/capabilities/handlers';
 import { registerConnectorHandlers } from './domain/connectors/handlers';
@@ -163,6 +164,7 @@ function App() {
         offs.push(registerRegressionHandlers(t));
         offs.push(registerToolActivityHandlers(t));
         offs.push(registerWorkflowHandlers(t));
+        offs.push(registerExtensionsHandlers(t));
         setTransport(t);
       } catch (e) {
         setError(String(e));
@@ -197,6 +199,7 @@ function App() {
       <CockpitTopbar
         onCmdK={() => useOverlays.getState().open('command_palette', { transport })}
         onTweaks={openTweaks}
+        onSettings={() => useOverlays.getState().open('settings', { transport })}
         transport={transport}
       />
       <Sidebar />

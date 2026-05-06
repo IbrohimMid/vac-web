@@ -17,7 +17,8 @@ export type OverlayKind =
   | 'connector_manager'
   | 'confirm'
   | 'ask_user'
-  | 'guided_mode';
+  | 'guided_mode'
+  | 'settings';
 
 export interface Overlay {
   id: string;
