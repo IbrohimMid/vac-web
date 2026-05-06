@@ -331,7 +331,7 @@ fn validate_event_id(id: &str) -> Result<(), LogValidationError> {
 }
 
 fn validate_namespaced_key(name: &str) -> Result<(), LogValidationError> {
-    if RESERVED_TOP_LEVEL_KEYS.iter().any(|k| *k == name) {
+    if RESERVED_TOP_LEVEL_KEYS.contains(&name) {
         return Err(LogValidationError::NamespacedKeyConflict(name.to_string()));
     }
     if !ALLOWED_NAMESPACE_PREFIXES

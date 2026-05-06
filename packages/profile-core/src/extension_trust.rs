@@ -11,9 +11,9 @@
 //!    - tier=quarantined   → Quarantined
 //!    - tier=allowed_bundled + source=bundled → AllowedBundled
 //!    - tier=allowed_signed + source=signed:
-//!        • require non-empty signature_b64 in ctx
-//!        • require ctx.publisher_pubkey_b64 == entry.publisher
-//!        • require entry.publisher ∈ config.publishers (allowlist)
+//!      • require non-empty signature_b64 in ctx
+//!      • require ctx.publisher_pubkey_b64 == entry.publisher
+//!      • require entry.publisher ∈ config.publishers (allowlist)
 //!      All three pass → AllowedSigned, else Quarantined
 //!    - any other (tier, source) mismatch → Quarantined (safe default)
 //! 3. If not found:
@@ -38,7 +38,7 @@ pub enum TrustDecision {
 }
 
 /// Tier as declared in the YAML config (string-typed via serde rename).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionTier {
     AllowedBundled,
@@ -48,7 +48,7 @@ pub enum ExtensionTier {
 }
 
 /// Source of an extension as declared in the YAML config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionSource {
     Bundled,
@@ -56,17 +56,17 @@ pub enum ExtensionSource {
 }
 
 /// One row in the YAML config's `extensions:` list.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionEntry {
     pub id: String,
     pub tier: ExtensionTier,
     pub source: ExtensionSource,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<String>,
 }
 
 /// On-disk schema for `config/extension-trust.yaml`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionTrustConfig {
     pub version: u32,
     pub allow_unsigned: bool,
@@ -98,6 +98,13 @@ impl ExtensionTrustConfig {
             publishers: Vec::new(),
             extensions: Vec::new(),
         }
+    }
+
+    /// Persist the trust config to disk as YAML.
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        let raw = serde_yaml::to_string(self)?;
+        std::fs::write(path, raw)?;
+        Ok(())
     }
 }
 

@@ -316,6 +316,22 @@ events:
       - domain.release.handlers
       - ReleaseTab
 
+  # ---- extensions surface ------------------------------------------------
+  - id: extensions.list_response
+    owner: bridge
+    status: implemented
+    producer: translator.extensions_list
+    consumers:
+      - domain.extensions.handlers
+      - ExtensionsList
+  - id: extensions.updated
+    owner: bridge
+    status: implemented
+    producer: translator.extensions_update_trust
+    consumers:
+      - domain.extensions.handlers
+      - ExtensionsList
+
   # ---- legacy / mock-only adapters --------------------------------------
   - id: changeset.updated
     owner: mock

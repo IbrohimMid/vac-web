@@ -217,6 +217,10 @@ pub async fn dispatch_command(
             },
             events,
         ),
+        "extensions.list" => crate::extensions::handlers::handle_list(&cmd, &state).await,
+        "extensions.update_trust" => {
+            crate::extensions::handlers::handle_update_trust(&cmd, &state).await
+        }
         "session.create" => {
             let profile_id = cmd
                 .payload

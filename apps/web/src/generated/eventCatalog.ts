@@ -32,6 +32,8 @@ export type EventId =
   | 'assessment.sweep.started'
   | 'assessment.worker_output_rejected'
   | 'changeset.updated'
+  | 'extensions.list_response'
+  | 'extensions.updated'
   | 'handoff.completed'
   | 'handoff.execution_progress'
   | 'pairing.exchange'
@@ -81,6 +83,8 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'assessment.sweep.started', status: 'implemented', owner: 'bridge', producer: "translator.assessment", consumers: Object.freeze(["capabilities.assessmentIndex"]) }),
   Object.freeze({ id: 'assessment.worker_output_rejected', status: 'implemented', owner: 'bridge', producer: "translator.assessment", consumers: Object.freeze(["capabilities.assessmentIndex"]) }),
   Object.freeze({ id: 'changeset.updated', status: 'legacy_mock_only', owner: 'mock', consumers: Object.freeze(["tools.mock_engine.scenarios"]), replacement: 'review.changeset_updated' }),
+  Object.freeze({ id: 'extensions.list_response', status: 'implemented', owner: 'bridge', producer: "translator.extensions_list", consumers: Object.freeze(["domain.extensions.handlers", "ExtensionsList"]) }),
+  Object.freeze({ id: 'extensions.updated', status: 'implemented', owner: 'bridge', producer: "translator.extensions_update_trust", consumers: Object.freeze(["domain.extensions.handlers", "ExtensionsList"]) }),
   Object.freeze({ id: 'handoff.completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.handoffErrors"]) }),
   Object.freeze({ id: 'handoff.execution_progress', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.handoffErrors"]) }),
   Object.freeze({ id: 'pairing.exchange', status: 'implemented', owner: 'bridge', producer: "auth.exchange_pair", consumers: Object.freeze(["audit.pairing_shard"]) }),

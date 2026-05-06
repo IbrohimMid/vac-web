@@ -8,6 +8,7 @@ pub mod audit;
 pub mod auth;
 pub mod capabilities;
 pub mod config;
+pub mod extensions;
 pub mod generated;
 pub mod handoff;
 pub mod notify;

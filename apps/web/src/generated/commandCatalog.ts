@@ -45,6 +45,8 @@ export type CommandId =
   | 'context.attach_files'
   | 'context.mention_search'
   | 'continuous.write_config'
+  | 'extensions.list'
+  | 'extensions.update_trust'
   | 'gate.evaluate'
   | 'gate.override'
   | 'gate.revoke_override'
@@ -137,6 +139,8 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'context.attach_files', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.read', ui: Object.freeze({ gate: 'disabled', reason: "File attach respects project-root/profile policy; not wired." }) }),
   Object.freeze({ id: 'context.mention_search', status: 'not_wired', scope: 'session', sideEffect: 'read_only', summary: "Mention search is held until local indexes are wired." }),
   Object.freeze({ id: 'continuous.write_config', status: 'not_wired', scope: 'sessionless', sideEffect: 'state', ui: Object.freeze({ gate: 'disabled', reason: "Continuous config write is held until validate+rollback exist." }) }),
+  Object.freeze({ id: 'extensions.list', status: 'implemented', scope: 'sessionless', sideEffect: 'read_only', summary: "List declared extensions with their enforced trust tier." }),
+  Object.freeze({ id: 'extensions.update_trust', status: 'implemented', scope: 'sessionless', sideEffect: 'state', summary: "Mutate the trust tier of a declared extension and persist to disk." }),
   Object.freeze({ id: 'gate.evaluate', status: 'not_wired', scope: 'session', sideEffect: 'read_only' }),
   Object.freeze({ id: 'gate.override', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.override', ui: Object.freeze({ gate: 'disabled', reason: "Gate override requires reason+expiry+audit; not wired." }) }),
   Object.freeze({ id: 'gate.revoke_override', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.override', ui: Object.freeze({ gate: 'disabled' }) }),

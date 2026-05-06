@@ -13,6 +13,7 @@ pub enum ErrorSeverity {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[allow(clippy::enum_variant_names)]
 pub enum ErrorRetryability {
     IdempotentRetry,
     ManualRetry,

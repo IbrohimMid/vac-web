@@ -549,3 +549,15 @@ commands:
     side_effect: none
     scope: session
     summary: Session-internal error signal; not a client command.
+
+  # Extensions ------------------------------------------------------------
+  - id: extensions.list
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+    summary: List declared extensions with their enforced trust tier.
+  - id: extensions.update_trust
+    status: implemented
+    side_effect: state
+    scope: sessionless
+    summary: Mutate the trust tier of a declared extension and persist to disk.

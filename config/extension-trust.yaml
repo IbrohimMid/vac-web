@@ -17,11 +17,22 @@ allow_unsigned: false
 
 # Allowlisted publisher pubkeys (base64). Extensions signed by any of these
 # publishers and matching the entry below get `AllowedSigned`.
-publishers: []
+publishers:
+  - "vac-trusted-pub-1"
 
 # Per-extension entries. Each entry must include:
 #   - id: stable extension id (e.g. `vac.review-tab`)
 #   - tier: one of [allowed_bundled, allowed_signed, quarantined, revoked]
 #   - source: one of [bundled, signed]
 #   - publisher: optional publisher pubkey reference (required when source=signed)
-extensions: []
+extensions:
+  - id: "vac.review-tab"
+    tier: allowed_bundled
+    source: bundled
+  - id: "vac.signed-ext"
+    tier: allowed_signed
+    source: signed
+    publisher: "vac-trusted-pub-1"
+  - id: "vac.experimental"
+    tier: quarantined
+    source: bundled

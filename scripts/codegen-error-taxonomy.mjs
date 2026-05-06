@@ -140,6 +140,7 @@ function renderRust(doc) {
   lines.push('}');
   lines.push('');
   lines.push('#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]');
+  lines.push('#[allow(clippy::enum_variant_names)]');
   lines.push('pub enum ErrorRetryability {');
   lines.push('    IdempotentRetry,');
   lines.push('    ManualRetry,');
