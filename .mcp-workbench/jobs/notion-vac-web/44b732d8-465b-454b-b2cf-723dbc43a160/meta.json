@@ -1,0 +1,21 @@
+{
+  "jobId": "44b732d8-465b-454b-b2cf-723dbc43a160",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '=== docs/plans tree ===' && find docs/plans -type f 2>/dev/null | ",
+  "status": "completed",
+  "createdAt": "2026-05-05T22:46:55.865Z",
+  "startedAt": "2026-05-05T22:46:55.865Z",
+  "finishedAt": "2026-05-05T22:46:55.927Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2717421,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '=== docs/plans tree ===' && find docs/plans -type f 2>/dev/null | sort && echo '' && echo '=== other plan-like files outside docs/plans ===' && find docs -type f -name '*.md' -not -path 'docs/plans/*' | xargs grep -l -iE 'status:.*(draft|wip|in.progress|stale|done|complete|superseded)' 2>/dev/null | sort && echo '' && echo '=== handoff files ===' && find docs -type f -iname '*handoff*' 2>/dev/null | sort && echo '' && echo '=== top-level docs ===' && ls docs/*.md 2>/dev/null | sort",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

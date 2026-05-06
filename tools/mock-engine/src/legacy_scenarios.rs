@@ -404,7 +404,6 @@ pub(crate) enum NotificationParity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     /// Slice 24 parity guard. Every notification method emitted from
     /// scenarios.rs must be declared in `NOTIFICATION_METHOD_CATALOG`.

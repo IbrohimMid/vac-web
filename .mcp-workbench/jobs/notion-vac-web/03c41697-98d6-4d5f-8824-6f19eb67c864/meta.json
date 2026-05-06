@@ -1,0 +1,21 @@
+{
+  "jobId": "03c41697-98d6-4d5f-8824-6f19eb67c864",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### event-catalog.yaml tail (last 30 lines) ###' && tail -30 confi",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:22:51.050Z",
+  "startedAt": "2026-05-05T23:22:51.050Z",
+  "finishedAt": "2026-05-05T23:22:51.095Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2745883,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### event-catalog.yaml tail (last 30 lines) ###' && tail -30 config/control-plane/event-catalog.yaml && echo '' && echo '### docs/dx-tooling.md exists? ###' && ls -la docs/dx-tooling.md 2>/dev/null || echo 'NO docs/dx-tooling.md' && echo '' && echo '### docs/extension-boundaries.md tail ###' && tail -10 docs/extension-boundaries.md && echo '' && echo '### slice 47 outputs frontmatter line ###' && grep -n 'outputs:' docs/plans/wiring/47-extension-plugin-boundaries.md | head -3 && echo '' && echo '### releaseEvents.ts classifications (live source for R2) ###' && find apps/web/src -name 'releaseEvents.ts' -exec sed -n '40,60p' {} \\; && echo '' && echo '### codegen-event-catalog.mjs schema check (does it allow extra fields?) ###' && head -60 scripts/codegen-event-catalog.mjs",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

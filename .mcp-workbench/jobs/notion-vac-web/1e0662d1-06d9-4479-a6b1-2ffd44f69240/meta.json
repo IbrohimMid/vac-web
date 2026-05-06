@@ -1,0 +1,67 @@
+{
+  "jobId": "1e0662d1-06d9-4479-a6b1-2ffd44f69240",
+  "kind": "workflow",
+  "title": "diagnose_create_failed",
+  "status": "completed",
+  "createdAt": "2026-05-05T21:22:58.640Z",
+  "startedAt": "2026-05-05T21:22:58.640Z",
+  "finishedAt": "2026-05-05T21:22:58.643Z",
+  "message": "workflow completed with errors",
+  "error": null,
+  "result": {
+    "trace": [
+      {
+        "tool": "grep",
+        "input": {
+          "-A": 30,
+          "path": "apps/local-bridge/src/handoff",
+          "pattern": "pub enum HandoffCreateOutcome",
+          "outputMode": "content"
+        },
+        "awaited": false,
+        "error": "resolveWorkspacePath is not defined"
+      },
+      {
+        "tool": "grep",
+        "input": {
+          "-A": 80,
+          "path": "apps/local-bridge/src/handoff",
+          "pattern": "fn create_handoff",
+          "outputMode": "content"
+        },
+        "awaited": false,
+        "error": "resolveWorkspacePath is not defined"
+      },
+      {
+        "tool": "grep",
+        "input": {
+          "-A": 20,
+          "path": "apps/local-bridge/src/handoff",
+          "pattern": "HandoffCreateParams",
+          "outputMode": "content"
+        },
+        "awaited": false,
+        "error": "resolveWorkspacePath is not defined"
+      }
+    ]
+  },
+  "exitCode": null,
+  "signal": null,
+  "pid": null,
+  "childJobId": null,
+  "command": null,
+  "presetName": null,
+  "presetPath": null,
+  "permissions": {
+    "filesystem": {
+      "read": true,
+      "write": true
+    },
+    "shell": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    }
+  }
+}

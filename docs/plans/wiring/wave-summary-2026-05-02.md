@@ -1,5 +1,9 @@
 # Wave summary — 2026-05-02 (Wave -1 + Wave -2)
 
+> ⚠️ **STALE — DO NOT USE FOR PLANNING.** Labeled 2026-05-06.
+>
+> **Status:** historical. Superseded by [`wave-summary-2026-05-03.md`](./wave-summary-2026-05-03.md). All slices (31–50) referenced here have since landed and been re-verified by Pass #23–#28 slice audits and the 2026-05-06 enterprise-maturity scorecard closeout (29/0/0 ✓). Retained only for git-archaeology / commit-lineage tracing. New work must NOT cite this file.
+
 Snapshot of slices delivered in this autonomous execution batch. Use this
 as the bridge between the wiring plans and what already landed on disk.
 

@@ -1,0 +1,21 @@
+{
+  "jobId": "b7b4ddfb-92f7-4d75-8e81-46b83b5ecad1",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && grep -n -A2 'Active handoff' docs/plans/README.md | head -30",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:10:46.964Z",
+  "startedAt": "2026-05-05T23:10:46.964Z",
+  "finishedAt": "2026-05-05T23:10:47.014Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2731209,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && grep -n -A2 'Active handoff' docs/plans/README.md | head -30",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

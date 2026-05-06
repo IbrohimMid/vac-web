@@ -64,3 +64,17 @@ modules (e.g. `notifyClass.ts`, `assessmentIndex.ts`).
    `status: shipped` or `in_progress`?
 4. If a public schema changed, did the PR include an ADR?
 5. If a generated file changed, did the source change too?
+
+## PR-body checklist generator (slice 39 step_03)
+
+`scripts/vac-pr-checklist.mjs` emits a markdown TODO checklist suitable for pasting into a PR body, derived from changed files plus the touched wiring slices' acceptance bullets.
+
+Usage:
+
+```
+pnpm pr:checklist                  # diff against origin/main
+pnpm pr:checklist -- --base HEAD~1 # custom base ref
+pnpm pr:checklist -- --help        # show help
+```
+
+The output is advisory — not a CI gate. Paste into your PR description and tick boxes as gates pass.

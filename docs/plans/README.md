@@ -4,11 +4,23 @@ Active implementation plans only. Historical phase/stage docs were removed becau
 
 Use `git log` for archaeology. Use this directory for work that should guide the next code changes.
 
-## Active plan set
+## Plan index
 
-1. [`wiring/00-index.md`](./wiring/00-index.md) — full split-plan index for backend ↔ UI wiring work.
-2. [`wiring/30-product-surface-roadmap.md`](./wiring/30-product-surface-roadmap.md) — implementation waves and recommended ordering.
+All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). The plan set is now reference material — use it to understand current cockpit shape and architectural intent. New work is tracked in dedicated handoff plans (see *Active handoffs* below).
+
+1. [`wiring/00-index.md`](./wiring/00-index.md) — full split-plan index, all slices landed.
+2. [`wiring/30-product-surface-roadmap.md`](./wiring/30-product-surface-roadmap.md) — historical implementation wave ordering.
 3. [`backend-ui-wiring.md`](./backend-ui-wiring.md) — compatibility router that points to the split `wiring/` plan set.
+
+## Active handoffs
+
+- [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md) — Pass E1 (audit) + Pass E2 (`spawn_executor_for_handoff` extraction & integration tests). Status: landed 2026-05-06.
+- [`wiring/remaining-work-execution-plan-2026-05-06.md`](./wiring/remaining-work-execution-plan-2026-05-06.md) — six remaining work items (R1–R6) covering slices 14, 36, 39, 41, 47, 48 follow-ups. Status: active 2026-05-06.
+
+## Stale (do not cite for new work)
+
+- [`wiring/wave-summary-2026-05-02.md`](./wiring/wave-summary-2026-05-02.md) — historical execution diary, superseded.
+- [`wiring/wave-summary-2026-05-03.md`](./wiring/wave-summary-2026-05-03.md) — Passes #1–#16+ execution diary; all work superseded by Pass #37 + 2026-05-06 closeout. Retained only as inbound-link target.
 
 ## Workflow-as-code rule
 
@@ -30,17 +42,13 @@ The YAML does **not** replace runtime enforcement. Rust and TypeScript remain th
 
 ## Current priority
 
-The current priority is to make the cockpit truthful before adding product breadth:
+As of 2026-05-06, all 50 numbered wiring slices (01-50) are landed. The original "make the cockpit truthful before adding product breadth" goal is met. Active focus has shifted to:
 
-1. Command implementation manifest.
-2. Structured `feature.not_wired` fallback.
-3. Protocol/schema/codegen parity.
-4. Declarative config/capability control-plane.
-5. Session model/context telemetry.
-6. Review taxonomy cleanup.
-7. Profile policy enforcement.
-8. Auth/WS security.
-9. CI validation gates.
+1. Executor wiring (handoff dispatch + executor session binding) — see [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md).
+2. Post-Pass-#27 stale-doc remediation and metadata refresh.
+3. New product-surface plans authored as needed; reference the wiring slices for cockpit shape.
+
+_Historical P0 priority order (all landed): command manifest, `feature.not_wired` fallback, protocol/schema/codegen parity, declarative config/capability control-plane, session model/context telemetry, review taxonomy cleanup, profile policy enforcement, auth/WS security, CI validation gates._
 
 ## Declarative pattern adoption
 

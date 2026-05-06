@@ -1,0 +1,35 @@
+# config/capability-coverage.yaml
+#
+# Capability classifier coverage manifest (slice 1.2 + 5.1, 2026-05-06).
+#
+# Every backend code class under apps/local-bridge/src/ MUST appear here with
+# the capability id it implements. The CI gate
+# (scripts/check-capability-coverage.mjs) validates that this manifest is in
+# sync with the filesystem layout.
+#
+# Adding a new backend module: append `<path>: <capability_id>` here, then run
+# `node scripts/check-capability-coverage.mjs` locally to confirm.
+#
+# See docs/capabilities/README.md for the convention.
+
+apps/local-bridge/src/agent_runtime/mod.rs: bridge.agent_runtime
+apps/local-bridge/src/audit/mod.rs: bridge.audit
+apps/local-bridge/src/auth/mod.rs: bridge.auth
+apps/local-bridge/src/config/mod.rs: bridge.config
+apps/local-bridge/src/handoff/mod.rs: bridge.handoff
+apps/local-bridge/src/profile_layer/mod.rs: bridge.profile_enforcement
+apps/local-bridge/src/session/mod.rs: bridge.session
+apps/local-bridge/src/storage/mod.rs: bridge.storage
+apps/local-bridge/src/translator/mod.rs: bridge.translator
+apps/local-bridge/src/workflows/mod.rs: bridge.workflows
+apps/local-bridge/src/ws/mod.rs: bridge.ws
+apps/local-bridge/src/notify.rs: bridge.notify
+apps/local-bridge/src/observability.rs: bridge.observability
+apps/local-bridge/src/server.rs: bridge.server
+apps/local-bridge/src/tunnel.rs: bridge.tunnel
+apps/local-bridge/src/capabilities.rs: bridge.capability_registry
+
+# Exempt (not classified):
+#   apps/local-bridge/src/lib.rs       — module root
+#   apps/local-bridge/src/main.rs      — binary entry
+#   apps/local-bridge/src/generated/   — codegen output

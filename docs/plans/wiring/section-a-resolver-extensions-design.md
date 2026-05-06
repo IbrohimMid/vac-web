@@ -6,7 +6,7 @@ area: tooling
 owners:
   - mock-engine
   - bridge
-status: planned  # design pass; implementation tracked separately
+status: landed  # Pass #37 complete (Section A 8/8) on 2026-05-05; doc retained for design context
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

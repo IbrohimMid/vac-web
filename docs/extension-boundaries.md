@@ -61,6 +61,10 @@ There is no Tier 3 (in-process plugin loading) without an explicit ADR.
 * Schema validation runs in CI for every YAML under `config/` and
   `examples/workflows/`.
 
+## Trust model
+
+This doc defines runtime boundaries — what extensions can do once loaded. The orthogonal question of whether to load a given extension at all is captured in [`docs/extension-trust-model.md`](./extension-trust-model.md), which defines the four-tier trust model (`bundled` / `verified` / `community` / `unsigned`), the sigstore + PGP signing pipeline, the operator allowlist source of truth (`config/extension-trust.yaml`, proposed), and the runtime gate (`profile-core::enforce_extension_trust`, proposed). See [ADR 0003](./adr/0003-extension-trust-model.md) for the design decision record.
+
 ## Anti-patterns to refuse
 
 * In-process plugin loading without an ADR.

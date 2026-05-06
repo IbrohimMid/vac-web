@@ -7,7 +7,7 @@ owners:
   - bridge
   - web
   - protocol
-status: landed  # Pass #25c audit: index file itself; 51 / 53 referenced plans now landed (Pass #20-#25 cumulative); only this index + wave-summary references remain
+status: landed  # Pass #28 audit (2026-05-06): 50 / 50 numbered slices landed (01-50); all referenced wiring plans complete
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

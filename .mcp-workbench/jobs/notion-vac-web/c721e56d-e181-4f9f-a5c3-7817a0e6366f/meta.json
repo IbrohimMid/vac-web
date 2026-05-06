@@ -1,0 +1,21 @@
+{
+  "jobId": "c721e56d-e181-4f9f-a5c3-7817a0e6366f",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== tracker frontmatter status ===' \\\n  && head -15 docs/plans",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:45:18.632Z",
+  "startedAt": "2026-05-05T23:45:18.632Z",
+  "finishedAt": "2026-05-05T23:45:18.668Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2756947,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== tracker frontmatter status ===' \\\n  && head -15 docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md | grep -E '^status:' \\\n  && echo '=== closeout section present ===' \\\n  && grep -c '^## Closeout — 2026-05-06' docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md \\\n  && echo '=== R1–R6 closeout subsections ===' \\\n  && grep -cE '^### R[1-6] —' docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md \\\n  && echo '=== slice frontmatter closeout markers ===' \\\n  && for f in 14-release 36-enterprise-maturity-scorecard 39-dx-tooling-scaffolding 41-observability-slos 47-extension-plugin-boundaries 48-external-best-practice-benchmark; do echo -n \"  $f: \"; grep -c '2026-05-06 R[1-6] closeout' docs/plans/wiring/${f}.md; done \\\n  && echo '=== ALL CLOSEOUT EDITS VERIFIED ==='",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

@@ -1,0 +1,21 @@
+{
+  "jobId": "0f5f673f-e2b0-47f2-9221-b323d1790c85",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### executor-implementation-plan.md (lines 50-229) ###' && sed -n ",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:02:50.387Z",
+  "startedAt": "2026-05-05T23:02:50.387Z",
+  "finishedAt": "2026-05-05T23:02:50.418Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2726292,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### executor-implementation-plan.md (lines 50-229) ###' && sed -n '50,229p' docs/plans/wiring/executor-implementation-plan.md && echo '' && echo '### section-a-resolver-extensions-design.md (lines 380-449) ###' && sed -n '380,449p' docs/plans/wiring/section-a-resolver-extensions-design.md && echo '' && echo '### generated-declarative-adoption-inventory.md (lines 50-73) ###' && sed -n '50,73p' docs/plans/wiring/generated-declarative-adoption-inventory.md && echo '' && echo '### Slice 41 PARTIAL note context ###' && sed -n '1,80p' docs/plans/wiring/41-observability-slos.md && echo '' && echo '### docs/observability.md SLO check ###' && grep -A3 -iE 'slo|budget|p95|p99' docs/observability.md | head -40",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

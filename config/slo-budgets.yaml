@@ -1,0 +1,25 @@
+# Backend SLO budgets — slice 41 (P1 observability).
+# Source of truth for tools/perf measurements + scripts/check-slo-measurements.mjs.
+# Mirrored from docs/plans/wiring/41-observability-slos.md `slos:` block.
+#
+# Format: every entry has `subsystem` (matching tools/perf measurement subsystem
+# names) and `p95_ms` budget. Optional p99_ms / p99_9_ms tiers may be added in
+# Phase 2.
+
+version: 1
+budgets:
+  - subsystem: command_ack
+    p95_ms: 250
+    notes: "Command translator ACK round-trip for non-IO commands."
+  - subsystem: websocket_event_delivery
+    p95_ms: 250
+    notes: "Server-to-client event delivery via WS."
+  - subsystem: persisted_event_write
+    p95_ms: 100
+    notes: "Audit + session persistence write fsync window."
+  - subsystem: topbar_interaction
+    p95_ms: 100
+    notes: "User-perceived topbar control latency (model select, status toggle)."
+  - subsystem: command_manifest_refresh
+    p95_ms: 250
+    notes: "Reload + dispatch of canonical command manifest."

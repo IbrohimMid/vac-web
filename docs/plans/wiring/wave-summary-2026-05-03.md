@@ -1,5 +1,15 @@
 # Wave summary — 2026-05-03 (continuation of Wave -1 / Wave -2)
 
+> ⚠️ **STALE — DO NOT USE FOR PLANNING.** Labeled 2026-05-06.
+>
+> **Status:** historical execution diary covering Passes #1–#16+ landed across 2026-05-03/04/05. All work captured here has been superseded by:
+> - Section A handler ports → **8/8 COMPLETE** as of Pass #37 (see `section-a-resolver-extensions-design.md` head note).
+> - Slice-level status → all 50 slices `landed` per Pass #23–#28 audits in their respective frontmatters.
+> - Executor handoff → Pass E1 + E2 landed 2026-05-06 (see `executor-implementation-plan.md`).
+> - Enterprise maturity → 29/0/0 ✓ closeout 2026-05-06 (`docs/enterprise-maturity-scorecard.md`).
+>
+> Retained only because 12 inbound references (ADR 0002 + 11 wiring slices) cite it as the landing record for specific work items. New work must NOT cite this file; reference the durable contract doc + git log instead.
+
 Delta against `wave-summary-2026-05-02.md`. Builds on the same baseline
 (slices 31-50 doc + partial implementation) and lands the implementation
 follow-ups that the prior wave deferred.

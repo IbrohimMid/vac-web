@@ -7,7 +7,7 @@ owners:
   - dx
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['package.json']
+status: landed  # Pass #25 audit: confirmed via artifact paths ['package.json']; 2026-05-06 R3 closeout: scripts/vac-pr-checklist.mjs + pnpm pr:checklist alias + docs/dx-tooling.md usage section landed (advisory tool, not a CI gate)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

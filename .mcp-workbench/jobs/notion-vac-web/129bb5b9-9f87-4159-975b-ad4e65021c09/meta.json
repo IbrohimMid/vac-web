@@ -1,0 +1,21 @@
+{
+  "jobId": "129bb5b9-9f87-4159-975b-ad4e65021c09",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && cargo test -p local-bridge --test handoff_dispatch dispatch_spawns_executor_sessio",
+  "status": "completed",
+  "createdAt": "2026-05-05T21:53:11.094Z",
+  "startedAt": "2026-05-05T21:53:11.094Z",
+  "finishedAt": "2026-05-05T21:53:22.165Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2681503,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && cargo test -p local-bridge --test handoff_dispatch dispatch_spawns_executor_session_for_approved_packet -- --nocapture 2>&1 | tail -40",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

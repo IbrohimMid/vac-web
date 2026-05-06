@@ -20,7 +20,7 @@ pub struct EventEntry {
 }
 
 #[rustfmt::skip]
-pub const EVENT_CATALOG: [EventEntry; 43] = [
+pub const EVENT_CATALOG: [EventEntry; 47] = [
     EventEntry { id: "activity.appended", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_received", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_rejected", status: EventStatus::Implemented },
@@ -41,6 +41,10 @@ pub const EVENT_CATALOG: [EventEntry; 43] = [
     EventEntry { id: "pairing.exchange", status: EventStatus::Implemented },
     EventEntry { id: "pairing.exchange_denied", status: EventStatus::Implemented },
     EventEntry { id: "pairing.mint", status: EventStatus::Implemented },
+    EventEntry { id: "release.deploy_progress", status: EventStatus::Planned },
+    EventEntry { id: "release.notes_draft", status: EventStatus::Implemented },
+    EventEntry { id: "release.post_deploy_observation", status: EventStatus::Planned },
+    EventEntry { id: "release.targets", status: EventStatus::Implemented },
     EventEntry { id: "review.changeset_updated", status: EventStatus::Implemented },
     EventEntry { id: "review.file_diff_chunk", status: EventStatus::Implemented },
     EventEntry { id: "runtime.job_completed", status: EventStatus::Implemented },

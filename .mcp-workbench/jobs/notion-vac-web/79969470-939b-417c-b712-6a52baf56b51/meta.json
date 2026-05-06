@@ -1,0 +1,21 @@
+{
+  "jobId": "79969470-939b-417c-b712-6a52baf56b51",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== R2: release.* events present in catalog ===' \\\n  && grep -",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:32:39.957Z",
+  "startedAt": "2026-05-05T23:32:39.957Z",
+  "finishedAt": "2026-05-05T23:32:40.236Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2750382,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== R2: release.* events present in catalog ===' \\\n  && grep -c 'release\\.' config/control-plane/event-catalog.yaml \\\n  && echo '=== R2: classification field count (expect 4) ===' \\\n  && grep -c '^    classification:' config/control-plane/event-catalog.yaml \\\n  && echo '=== R3: pr-checklist --help ===' \\\n  && node scripts/vac-pr-checklist.mjs --help | head -3 \\\n  && echo '=== R3: pr-checklist smoke run vs HEAD~1 ===' \\\n  && node scripts/vac-pr-checklist.mjs --base HEAD~1 2>&1 | head -25 \\\n  && echo '=== R3: package.json pr:checklist registered ===' \\\n  && node -e 'const p=require(\"./package.json\");if(!p.scripts[\"pr:checklist\"])throw new Error(\"missing\");console.log(p.scripts[\"pr:checklist\"])' \\\n  && echo '=== R4: adoption stance section present ===' \\\n  && grep -c 'Adoption stance per missing maturity pattern' docs/external-best-practice-benchmark.md \\\n  && echo '=== R4: 8 patterns referenced ===' \\\n  && for pat in 'spec.*status' 'Reconciliation' 'Conditions' 'Admission' 'Dry-run' 'Version conversion' 'Golden examples' 'Provenance'; do count=$(grep -ciE \"$pat\" docs/external-best-practice-benchmark.md); echo \"  $pat: $count\"; done \\\n  && echo '=== R5: trust model + ADR present ===' \\\n  && wc -l docs/extension-trust-model.md docs/adr/0003-extension-trust-model.md \\\n  && echo '=== R5: cross-link in extension-boundaries ===' \\\n  && grep -c 'extension-trust-model.md' docs/extension-boundaries.md \\\n  && echo '=== R5: slice 47 outputs extended ===' \\\n  && grep -c 'extension-trust-model\\|0003-extension-trust' docs/plans/wiring/47-extension-plugin-boundaries.md \\\n  && echo '=== Final git diff --stat ===' \\\n  && git diff --stat | tail -25 \\\n  && echo '=== ALL R2-R5 GATES OK ==='",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

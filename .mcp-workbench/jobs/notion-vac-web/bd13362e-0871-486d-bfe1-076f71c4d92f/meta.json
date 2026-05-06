@@ -1,0 +1,21 @@
+{
+  "jobId": "bd13362e-0871-486d-bfe1-076f71c4d92f",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### docs/plans/README.md ###' && cat docs/plans/README.md && echo ",
+  "status": "completed",
+  "createdAt": "2026-05-05T22:47:30.936Z",
+  "startedAt": "2026-05-05T22:47:30.937Z",
+  "finishedAt": "2026-05-05T22:47:30.974Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2717742,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### docs/plans/README.md ###' && cat docs/plans/README.md && echo '' && echo '### docs/plans/wiring/00-index.md ###' && cat docs/plans/wiring/00-index.md && echo '' && echo '### docs/plans/backend-ui-wiring.md (head 80) ###' && head -80 docs/plans/backend-ui-wiring.md && echo '' && echo '### docs/plans/wiring/wave-summary-2026-05-02.md ###' && cat docs/plans/wiring/wave-summary-2026-05-02.md && echo '' && echo '### docs/plans/wiring/wave-summary-2026-05-03.md ###' && cat docs/plans/wiring/wave-summary-2026-05-03.md",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

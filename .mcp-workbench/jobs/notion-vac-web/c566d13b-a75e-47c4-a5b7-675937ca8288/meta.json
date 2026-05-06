@@ -1,0 +1,21 @@
+{
+  "jobId": "c566d13b-a75e-47c4-a5b7-675937ca8288",
+  "kind": "bash",
+  "title": "Combined context gather (translator + profile + cargo + tests + bind impl + invariant)",
+  "status": "completed",
+  "createdAt": "2026-05-05T14:14:26.255Z",
+  "startedAt": "2026-05-05T14:14:26.255Z",
+  "finishedAt": "2026-05-05T14:14:26.314Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2314860,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && echo '===A: translator dispatch_local arm===' && sed -n '2500,2900p' apps/local-bridge/src/translator/mod.rs && echo '===B: profile yaml===' && (cat 'packages/protocol/v1/profiles/executor.code@1.0.0.yaml' 2>/dev/null || ls packages/protocol/v1/profiles/ ) && echo '===C: Cargo workspace===' && sed -n '1,40p' Cargo.toml && echo '===D: tests dir===' && ls apps/local-bridge/tests 2>/dev/null || echo 'no tests dir' && echo '===E: test grep===' && grep -rn 'fn dispatch\\|spawn_executor\\|handoff' apps/local-bridge/tests/ 2>/dev/null | head -20 && echo '===F: bind_execution_session impl===' && sed -n '1090,1170p' apps/local-bridge/src/handoff/mod.rs && echo '---' && sed -n '2030,2080p' apps/local-bridge/src/handoff/mod.rs && echo '===G: invariant test===' && sed -n '4810,4870p' apps/local-bridge/src/translator/mod.rs",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

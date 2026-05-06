@@ -15,18 +15,20 @@ Use VIL-inspired workflow-as-code patterns for the declarative control plane: YA
 
 The previous monolith mixed command manifest work, frontend affordance gating, workflow engine concerns, protocol/codegen drift, auth/security, persistence, mock-engine parity, and product surface rollout. The split plan set makes each slice independently implementable and testable.
 
-## Current P0 slice order
+## P0 slice order (historical — all landed)
 
-1. [`wiring/01-command-manifest.md`](./wiring/01-command-manifest.md)
-2. [`wiring/02-not-wired-fallback.md`](./wiring/02-not-wired-fallback.md)
-3. [`wiring/19-protocol-schema-parity.md`](./wiring/19-protocol-schema-parity.md)
-4. [`wiring/25-codegen-sdk-drift.md`](./wiring/25-codegen-sdk-drift.md)
-5. [`wiring/27-config-capabilities-control-plane.md`](./wiring/27-config-capabilities-control-plane.md)
-6. [`wiring/03-session-model-context.md`](./wiring/03-session-model-context.md)
-7. [`wiring/05-review-taxonomy.md`](./wiring/05-review-taxonomy.md)
-8. [`wiring/20-profile-policy-enforcement.md`](./wiring/20-profile-policy-enforcement.md)
-9. [`wiring/21-auth-ws-security.md`](./wiring/21-auth-ws-security.md)
-10. [`wiring/28-ci-validation-gates.md`](./wiring/28-ci-validation-gates.md)
+The original P0 ordering below is preserved for archaeology. As of Pass #27 audit (2026-05-04), all 10 entries — and all 50 numbered slices — have landed. New work is tracked in dedicated handoff plans (e.g. [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md)).
+
+1. [`wiring/01-command-manifest.md`](./wiring/01-command-manifest.md) — landed.
+2. [`wiring/02-not-wired-fallback.md`](./wiring/02-not-wired-fallback.md) — landed.
+3. [`wiring/19-protocol-schema-parity.md`](./wiring/19-protocol-schema-parity.md) — landed.
+4. [`wiring/25-codegen-sdk-drift.md`](./wiring/25-codegen-sdk-drift.md) — landed.
+5. [`wiring/27-config-capabilities-control-plane.md`](./wiring/27-config-capabilities-control-plane.md) — landed.
+6. [`wiring/03-session-model-context.md`](./wiring/03-session-model-context.md) — landed.
+7. [`wiring/05-review-taxonomy.md`](./wiring/05-review-taxonomy.md) — landed.
+8. [`wiring/20-profile-policy-enforcement.md`](./wiring/20-profile-policy-enforcement.md) — landed.
+9. [`wiring/21-auth-ws-security.md`](./wiring/21-auth-ws-security.md) — landed.
+10. [`wiring/28-ci-validation-gates.md`](./wiring/28-ci-validation-gates.md) — landed.
 
 ## Declarative pattern adoption
 

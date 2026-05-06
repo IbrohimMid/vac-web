@@ -1,0 +1,21 @@
+{
+  "jobId": "9bd5a37f-645f-4b3a-bc01-0de6c55ce13f",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### Find ALL release.* events references ###' && grep -rn 'release",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:21:09.979Z",
+  "startedAt": "2026-05-05T23:21:09.980Z",
+  "finishedAt": "2026-05-05T23:21:10.025Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2744978,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### Find ALL release.* events references ###' && grep -rn 'release\\.' config/ apps/local-bridge/src/translator/ apps/local-bridge/src/generated/event_catalog.rs apps/web/src/generated/eventCatalog.ts tools/mock-engine/scenarios/ tools/mock-engine/src/legacy_scenarios.rs 2>/dev/null | grep -v 'releases/' | head -50 && echo '' && echo '### event-catalog.yaml structure (first 60 lines) ###' && head -60 config/control-plane/event-catalog.yaml && echo '' && echo '### slice 14 full ###' && cat docs/plans/wiring/14-release.md && echo '' && echo '### Does docs/perf-test-plan.md have a backend section? ###' && grep -n 'backend\\|local.bridge\\|p95.*ms\\|command_ack' docs/perf-test-plan.md | head -10 && echo '' && echo '### scorecard tail (looking for status table) ###' && tail -40 docs/enterprise-maturity-scorecard.md",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

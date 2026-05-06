@@ -11,6 +11,7 @@ members = [
     "tools/codegen",
     "tools/mock-acp",
     "tools/mock-engine",
+    "tools/perf",
 ]
 
 [workspace.package]

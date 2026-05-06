@@ -1,0 +1,21 @@
+{
+  "jobId": "189389e1-185a-48e3-8338-8778dab20134",
+  "kind": "bash",
+  "title": "Locate dispatch_local handler",
+  "status": "completed",
+  "createdAt": "2026-05-05T14:08:06.043Z",
+  "startedAt": "2026-05-05T14:08:06.043Z",
+  "finishedAt": "2026-05-05T14:08:06.101Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2305696,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && grep -rn 'handoff.dispatch_local\\|spawn_executor_for_handoff\\|bind_execution\\|HandoffExecutionBind\\|active_executor_packet' apps/local-bridge/src --include='*.rs' | head -80",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

@@ -1,0 +1,19 @@
+[package]
+name = "perf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Backend SLO measurement harness for slice 41 (P1 observability) — produces JSON output for scripts/check-slo-measurements.mjs"
+
+[[bin]]
+name = "perf"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

@@ -7,6 +7,7 @@ use super::persistence::{
 use crate::agent_runtime::acp::client::LoadSessionError;
 use crate::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry};
 use crate::audit::AuditFacility;
+use crate::handoff::packet::{Packet, PacketStatus};
 use dashmap::DashMap;
 use profile_core::enforce::{enforce_agent_kind, Decision};
 use profile_core::profile::CapabilityProfile;
@@ -127,6 +128,109 @@ impl ResumeValidationFailure {
         }
     }
 }
+
+/// Pass E2 — typed failure modes for [`SessionRegistry::spawn_executor_for_handoff`].
+///
+/// Each variant carries enough context for the WS dispatcher to surface a
+/// `handoff.dispatch_failed { code, reason }` event without re-deriving the
+/// wire reason in two places.
+#[derive(Debug)]
+pub enum ExecutorSpawnError {
+    /// Packet status was not `Approved` when spawn was attempted.
+    NotApproved { actual: String },
+    /// `target.executor_profile_id` was empty / whitespace-only.
+    MissingExecutorProfile,
+    /// Packet had no tasks to execute.
+    EmptyTaskList,
+    /// `project_root` no longer points at a real directory.
+    ProjectRootMissing { path: String },
+    /// Pin was incomplete or expired at spawn time.
+    PinInvalid { reason: String },
+    /// Profile YAML failed to load / parse.
+    ProfileInvalid { profile_id: String, detail: String },
+    /// Profile loaded but its `class` is not `executor`.
+    ProfileNotExecutor {
+        profile_id: String,
+        actual_class: String,
+    },
+    /// Caller supplied an `agent_id` that is not in the live agent registry.
+    AgentNotInRegistry { agent_id: String },
+    /// Live agent's `kind` is not in the profile's `allowed_agent_kinds`.
+    AgentKindNotAllowed { agent_kind: String, reason: String },
+    /// Underlying `SessionRegistry::create_with_agent_and_workflow` failed.
+    SpawnFailed { detail: String },
+}
+
+impl ExecutorSpawnError {
+    /// Stable wire code for `handoff.dispatch_failed.code`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotApproved { .. } => "handoff.not_approved",
+            Self::MissingExecutorProfile => "handoff.missing_executor_profile",
+            Self::EmptyTaskList => "handoff.empty_task_list",
+            Self::ProjectRootMissing { .. } => "handoff.project_root_unavailable",
+            Self::PinInvalid { .. } => "handoff.pin_invalid",
+            Self::ProfileInvalid { .. } => "handoff.profile_invalid",
+            Self::ProfileNotExecutor { .. } => "handoff.profile_not_executor",
+            Self::AgentNotInRegistry { .. } => "handoff.agent_not_in_registry",
+            Self::AgentKindNotAllowed { .. } => "handoff.agent_kind_not_allowed",
+            Self::SpawnFailed { .. } => "handoff.spawn_failed",
+        }
+    }
+
+    /// Short tag for `state_history.reason` and audit logs.
+    pub fn reason_tag(&self) -> &'static str {
+        match self {
+            Self::NotApproved { .. } => "not_approved",
+            Self::MissingExecutorProfile => "missing_executor_profile",
+            Self::EmptyTaskList => "empty_task_list",
+            Self::ProjectRootMissing { .. } => "project_root_unavailable",
+            Self::PinInvalid { .. } => "pin_invalid",
+            Self::ProfileInvalid { .. } => "profile_invalid",
+            Self::ProfileNotExecutor { .. } => "profile_not_executor",
+            Self::AgentNotInRegistry { .. } => "agent_not_in_registry",
+            Self::AgentKindNotAllowed { .. } => "agent_kind_not_allowed",
+            Self::SpawnFailed { .. } => "spawn_failed",
+        }
+    }
+
+    /// Human-readable message for `handoff.dispatch_failed.message`.
+    pub fn message(&self) -> String {
+        match self {
+            Self::NotApproved { actual } => {
+                format!("packet must be approved before spawn, got status={actual}")
+            }
+            Self::MissingExecutorProfile => "target.executor_profile_id is empty".to_string(),
+            Self::EmptyTaskList => "packet has no tasks".to_string(),
+            Self::ProjectRootMissing { path } => {
+                format!("project_root does not exist: {path}")
+            }
+            Self::PinInvalid { reason } => reason.clone(),
+            Self::ProfileInvalid { profile_id, detail } => {
+                format!("profile {profile_id} failed to load: {detail}")
+            }
+            Self::ProfileNotExecutor {
+                profile_id,
+                actual_class,
+            } => format!("profile {profile_id} has class={actual_class}, expected executor"),
+            Self::AgentNotInRegistry { agent_id } => {
+                format!("agent {agent_id} is not in the live registry")
+            }
+            Self::AgentKindNotAllowed { agent_kind, reason } => {
+                format!("agent kind {agent_kind} not allowed by profile: {reason}")
+            }
+            Self::SpawnFailed { detail } => format!("session spawn failed: {detail}"),
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutorSpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code(), self.message())
+    }
+}
+
+impl std::error::Error for ExecutorSpawnError {}
 
 #[derive(Clone)]
 pub struct SessionRegistry {
@@ -564,6 +668,112 @@ impl SessionRegistry {
                 Err(other) => ResumeNativeOutcome::Failed(other.to_string()),
             },
         }
+    }
+
+    /// Pass E2 — spawn an executor session bound to an approved handoff packet.
+    ///
+    /// All validation failures here are pre-spawn — no child process is
+    /// started until every gate passes — so the caller can surface a clean
+    /// `handoff.dispatch_failed` event without leaking a stranded child.
+    pub async fn spawn_executor_for_handoff(
+        &self,
+        packet: &Packet,
+        project_root: PathBuf,
+        agent_id: Option<String>,
+    ) -> Result<SessionHandleRef, ExecutorSpawnError> {
+        // 1. Status gate — only `approved` packets may spawn.
+        if packet.status != PacketStatus::Approved {
+            return Err(ExecutorSpawnError::NotApproved {
+                actual: packet.status.as_str().to_string(),
+            });
+        }
+
+        // 2. Executor profile id must be a non-empty, trimmed string.
+        let executor_profile_id = packet.target.executor_profile_id.trim();
+        if executor_profile_id.is_empty() {
+            return Err(ExecutorSpawnError::MissingExecutorProfile);
+        }
+
+        // 3. Tasks must be non-empty.
+        if packet.tasks.is_empty() {
+            return Err(ExecutorSpawnError::EmptyTaskList);
+        }
+
+        // 4. project_root must be a real directory.
+        if !project_root.exists() {
+            return Err(ExecutorSpawnError::ProjectRootMissing {
+                path: project_root.display().to_string(),
+            });
+        }
+
+        // 5. Pin must be complete and unexpired.
+        if !packet.pin.is_complete() {
+            return Err(ExecutorSpawnError::PinInvalid {
+                reason: "pin is incomplete".to_string(),
+            });
+        }
+        if packet.pin.is_expired() {
+            return Err(ExecutorSpawnError::PinInvalid {
+                reason: "pin has expired".to_string(),
+            });
+        }
+
+        // 6. Load the executor profile. Hard-fail rather than letting
+        //    `spawn_acp` silently fall back to a restrictive default.
+        let profile =
+            CapabilityProfile::load(executor_profile_id, &self.profile_root).map_err(|e| {
+                ExecutorSpawnError::ProfileInvalid {
+                    profile_id: executor_profile_id.to_string(),
+                    detail: e.to_string(),
+                }
+            })?;
+
+        // 7. Profile class must be `executor`. Compared via the serde
+        //    string repr so the gate stays in sync with the wire vocabulary.
+        let live_class = serde_json::to_value(profile.class)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        if live_class != "executor" {
+            return Err(ExecutorSpawnError::ProfileNotExecutor {
+                profile_id: executor_profile_id.to_string(),
+                actual_class: live_class,
+            });
+        }
+
+        // 8. If a specific agent was requested, make sure it's in the
+        //    registry and its kind is allowed by the profile.
+        let snapshot = self.agents();
+        let agent_id_opt: Option<String> = agent_id
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        if let Some(ref id) = agent_id_opt {
+            let agent = snapshot
+                .get(id)
+                .map_err(|_| ExecutorSpawnError::AgentNotInRegistry {
+                    agent_id: id.clone(),
+                })?;
+            if let Decision::Deny { reason, .. } = enforce_agent_kind(&profile, agent.kind.as_str())
+            {
+                return Err(ExecutorSpawnError::AgentKindNotAllowed {
+                    agent_kind: agent.kind.as_str().to_string(),
+                    reason: reason.to_string(),
+                });
+            }
+        }
+
+        // 9. All gates passed — spawn through the existing entry point.
+        self.create_with_agent_and_workflow(
+            executor_profile_id.to_string(),
+            project_root,
+            agent_id_opt.as_deref(),
+            None,
+        )
+        .await
+        .map_err(|e| ExecutorSpawnError::SpawnFailed {
+            detail: e.to_string(),
+        })
     }
 
     pub fn get(&self, session_id: &str) -> Option<SessionHandleRef> {

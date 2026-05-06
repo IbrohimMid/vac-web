@@ -1,0 +1,21 @@
+{
+  "jobId": "05038dc6-d572-4723-aac7-007dc09129d1",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && echo '=== notify/ contents ===' && ls apps/local-bridge/src/notify/ && echo '=== r",
+  "status": "completed",
+  "createdAt": "2026-05-05T22:38:03.970Z",
+  "startedAt": "2026-05-05T22:38:03.970Z",
+  "finishedAt": "2026-05-05T22:38:04.068Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2712977,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && echo '=== notify/ contents ===' && ls apps/local-bridge/src/notify/ && echo '=== rust 2018 module style? ===' && head -5 apps/local-bridge/src/notify.rs && echo '=== similarly check other potentially-affected ===' && for d in agent_runtime audit auth config handoff notify profile_layer session storage translator workflows ws; do if [ -f \"apps/local-bridge/src/$d.rs\" ] && [ ! -f \"apps/local-bridge/src/$d/mod.rs\" ]; then echo \"RUST2018: $d (uses $d.rs as root, no mod.rs)\"; fi; done",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

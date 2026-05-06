@@ -1,0 +1,21 @@
+{
+  "jobId": "f6716cb7-436b-41a5-9b9e-cc99baa9760c",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== R6: tools/perf workspace member ===' \\\n  && grep -c 'tools",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:37:22.954Z",
+  "startedAt": "2026-05-05T23:37:22.954Z",
+  "finishedAt": "2026-05-05T23:37:39.655Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2752644,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== R6: tools/perf workspace member ===' \\\n  && grep -c 'tools/perf' Cargo.toml \\\n  && echo '=== R6: cargo check -p perf ===' \\\n  && cargo check -p perf 2>&1 | tail -8 \\\n  && echo '=== R6: cargo run -p perf produces JSON (release for speed via shared lockfile) ===' \\\n  && cargo run -p perf --quiet -- --duration 1 --output /tmp/perf-smoke.json 2>&1 | tail -3 \\\n  && echo '=== R6: JSON valid + has 5 measurements ===' \\\n  && node -e 'const d=require(\"/tmp/perf-smoke.json\");if(!Array.isArray(d.measurements)||d.measurements.length!==5)throw new Error(\"bad measurements: \"+JSON.stringify(d).slice(0,200));console.log(\"schema_version=\"+d.schema_version+\" measurements=\"+d.measurements.length+\" phase=\"+d.phase)' \\\n  && echo '=== R6: check-slo-measurements --strict on synthetic (should pass since synthetic < budget) ===' \\\n  && node scripts/check-slo-measurements.mjs /tmp/perf-smoke.json --strict 2>&1 | tail -15 \\\n  && echo '=== R6: docs updated ===' \\\n  && grep -c '8. Backend perf harness' docs/perf-test-plan.md \\\n  && grep -c 'Backend SLO measurement harness' docs/observability.md \\\n  && echo '=== R6: CI workflow first 5 lines ===' \\\n  && head -5 .github/workflows/perf.yml \\\n  && echo '=== R6: structural slo-budgets gate still passes (pre-existing) ===' \\\n  && node scripts/check-slo-budgets.mjs 2>&1 | tail -3 \\\n  && echo '=== Final git diff --stat (full) ===' \\\n  && git status --short | head -20 \\\n  && echo '---' \\\n  && git diff --stat | tail -15 \\\n  && echo '=== ALL R6 GATES OK ===' \\\n  && rm -f /tmp/perf-smoke.json",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

@@ -249,3 +249,43 @@ Report filed at `perf/manual-qa/<quarter>.md`.
 - [`frontend-rules.md`](./frontend-rules.md) — architecture rules that produce these budgets.
 - [`architecture.md`](./architecture.md) — system performance factors.
 - [`product-prd.md`](./product-prd.md) §8 — phase exit criteria include perf.
+
+## 8. Backend perf harness (slice 41 R6, added 2026-05-06)
+
+Sections 1–7 above scope **frontend** perf measurement (Playwright traces, Vitest micro-benchmarks, Lighthouse CI, size-limit). The complementary **backend** SLO measurement harness lives in `tools/perf/` and targets the 5 subsystems documented in `docs/plans/wiring/41-observability-slos.md::slos`:
+
+1. Command translator ACK latency
+2. WebSocket event delivery latency
+3. Persisted event write latency (fsync window)
+4. Topbar interaction latency (user-perceived)
+5. Command manifest refresh latency
+
+### Pipeline
+
+1. `cargo run -p perf --release -- --duration 60 --output perf-results.json` produces a JSON measurements document (schema in `tools/perf/src/main.rs::PerfReport`).
+2. `node scripts/check-slo-measurements.mjs perf-results.json` compares each subsystem's p95 against `config/slo-budgets.yaml`.
+3. CI workflow `.github/workflows/perf.yml` runs the pipeline weekly (Mondays 04:00 UTC) and uploads `perf-results.json` as an artifact retained for 30 days.
+
+### Phase 1 (current) — synthetic measurements
+
+The crate currently emits **deterministic synthetic measurements** that are below the SLO budgets. This intentionally validates the end-to-end contract (Rust crate → JSON → Node check script → CI upload) without yet implementing real per-subsystem drivers. The check script runs in `--measurement-only` mode (warn but exit 0).
+
+### Phase 2 (planned) — real per-subsystem drivers
+
+Drivers under `tools/perf/src/scenarios/` will exercise each subsystem against a local-bridge instance:
+
+- `command_ack.rs` — drive `WS::dispatch_command` with no-IO commands, measure ACK round-trip.
+- `websocket_event_delivery.rs` — emit synthetic events from translator, measure server→client delivery.
+- `persisted_event_write.rs` — invoke `audit::log_structured` + session persistence, measure fsync window.
+- `topbar_interaction.rs` — drive Topbar capability handlers, measure end-to-end latency.
+- `command_manifest_refresh.rs` — reload `command-manifest.yaml`, measure dispatcher cold-start.
+
+Phase 2 also flips the check script default from `--measurement-only` to `--strict` once a 2-week baseline establishes the CI-runner noise floor and an appropriate budget margin.
+
+### Cross-references
+
+- Slice 41 SLO budgets: `docs/plans/wiring/41-observability-slos.md::slos`
+- Budget source of truth: `config/slo-budgets.yaml`
+- Structural validator (well-formedness only): `scripts/check-slo-budgets.mjs` (slice 41 closeout, 2026-05-06)
+- Measurement validator (this section): `scripts/check-slo-measurements.mjs`
+- Tracker: `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md::R6`

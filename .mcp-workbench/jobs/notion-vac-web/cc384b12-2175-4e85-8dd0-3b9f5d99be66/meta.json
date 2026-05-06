@@ -1,0 +1,21 @@
+{
+  "jobId": "cc384b12-2175-4e85-8dd0-3b9f5d99be66",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && cat >> docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md <<'EOF'\n\n---\n",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:45:17.617Z",
+  "startedAt": "2026-05-05T23:45:17.617Z",
+  "finishedAt": "2026-05-05T23:45:17.643Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2756922,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && cat >> docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md <<'EOF'\n\n---\n\n## Closeout — 2026-05-06\n\nAll 6 items landed. Closed by the same execution thread that authored this tracker.\n\n### R1 — slice 36 status table verification — DONE (verify-only)\n\nScorecard `docs/enterprise-maturity-scorecard.md` already had the legend at line 5 (`✓ met, ◑ partial, × not met`) and a 29-row self-rating summary table at the tail (29/0/0 ✓). No edit needed.\n\n### R2 — slice 14 release event classification — DONE\n\nAdded `classification:` field to 4 `release.*` events in `config/control-plane/event-catalog.yaml`, mirrored from `apps/web/src/domain/release/releaseEvents.ts`:\n\n- `release.targets` → `implemented`\n- `release.notes_draft` → `draft_only`\n- `release.deploy_progress` → `mock_only`\n- `release.post_deploy_observation` → `mock_only`\n\nCodegen regenerated `apps/local-bridge/src/generated/event_catalog.rs` + `apps/web/src/generated/eventCatalog.ts`. `bash scripts/verify-codegen.sh` green.\n\n### R3 — slice 39 PR-body TODO checklist generator — DONE\n\n- `scripts/vac-pr-checklist.mjs` (advisory tool, ~150 lines)\n- `pnpm pr:checklist` alias registered in `package.json`\n- Usage section appended to `docs/dx-tooling.md`\n\n### R4 — slice 48 maturity patterns adoption stance — DONE\n\nAppended `## Adoption stance per missing maturity pattern` to `docs/external-best-practice-benchmark.md`:\n\n- 8-row matrix (pattern × stance × rationale × durable contract doc)\n- Stance vocabulary glossary (5 stances: adopted, adapted, rejected, deferred, partial)\n- Action item update mapping benchmark items to current trackers\n\n### R5 — slice 47 extension trust model — DONE (Phase 1 design)\n\n- `docs/extension-trust-model.md` — 124 lines, 8 sections (trust tiers / signing pipeline / allowlist / runtime gate sketch / quarantine flow / adoption phases / non-goals / open questions)\n- `docs/adr/0003-extension-trust-model.md` — design decision record\n- Cross-link added in `docs/extension-boundaries.md`\n- Slice 47 frontmatter `outputs:` extended with both new docs\n\n**Phase 2 (deferred):** runtime `profile-core::enforce_extension_trust` + `scripts/check-extension-trust.mjs` drift gate + cockpit UX (list / revoke / quarantine).\n\n### R6 — slice 41 SLO measurement harness — DONE (Phase 1 synthetic)\n\n- `tools/perf/` new Rust crate (Cargo.toml + src/main.rs)\n- `config/slo-budgets.yaml` — 5 subsystems, mirrored from `41-…md::slos`\n- `scripts/check-slo-measurements.mjs` — measurement-only / strict mode toggle\n- `.github/workflows/perf.yml` — weekly cron (Mondays 04:00 UTC), measurement-only mode\n- Section 8 appended to `docs/perf-test-plan.md`\n- Cross-link added in `docs/observability.md`\n- Local smoke: `cargo run -p perf -- --duration 1` produces valid 5-measurement JSON; `--strict` mode passes (all p95s within budget against synthetic data)\n\n**Phase 2 (deferred):** replace synthetic measurements with real per-subsystem drivers under `tools/perf/src/scenarios/`; flip CI default to `--strict` after 2-week baseline establishes runner noise floor.\n\n### Closeout criteria check\n\n1. ✓ All 6 items landed (R1 verify-only, R2–R6 each with file deltas).\n2. ✓ Slices 14 / 36 / 39 / 41 / 47 / 48 frontmatter `status:` lines extended with closeout notes (Pass tradition).\n3. ✓ `docs/plans/README.md` already lists this plan in *Active handoffs*; demote to closed/archived in a follow-up housekeeping pass.\n4. ✓ Enterprise scorecard 29/0/0 ✓ preserved (R1 verify-only; R2 additive YAML field; R3 advisory tool; R4 doc-only; R5 doc-only; R6 adds new crate but does not modify existing modules).\nEOF\necho 'tracker closeout section appended'",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

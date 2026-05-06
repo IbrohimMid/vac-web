@@ -65,3 +65,29 @@ jobs:
         with:
           node-version: 20.10.0
       - run: node scripts/check-architecture-boundaries.mjs
+
+  # Slice 1.2 + 5.1 closeout (2026-05-06): capability classifier coverage.
+  # Every backend module under apps/local-bridge/src/ must be mapped to a
+  # capability id in config/capability-coverage.yaml. See
+  # docs/capabilities/README.md for the convention.
+  capability-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
+      - run: node scripts/check-capability-coverage.mjs
+
+  # Slice 8.3 closeout (2026-05-06): SLO budget validator. Parses the slos:
+  # YAML block in docs/plans/wiring/41-observability-slos.md and asserts
+  # every entry is a well-formed _p<n>_ms key with a positive numeric ms
+  # target in 1..60000ms.
+  slo-budgets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.10.0
+      - run: node scripts/check-slo-budgets.mjs

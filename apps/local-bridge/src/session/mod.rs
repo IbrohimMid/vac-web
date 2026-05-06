@@ -9,4 +9,6 @@ pub use handle::{
     AcpRuntime, ApprovalIntent, ApprovalResolution, ApprovalResolveError, AuthenticateError,
     AuthenticateOutcome, SessionHandle, SessionHandleRef, SpawnOptions,
 };
-pub use registry::{ResumeNativeOutcome, ResumeValidationFailure, SessionRegistry};
+pub use registry::{
+    ExecutorSpawnError, ResumeNativeOutcome, ResumeValidationFailure, SessionRegistry,
+};

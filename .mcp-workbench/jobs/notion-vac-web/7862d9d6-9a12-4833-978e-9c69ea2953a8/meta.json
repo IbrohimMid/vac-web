@@ -1,0 +1,21 @@
+{
+  "jobId": "7862d9d6-9a12-4833-978e-9c69ea2953a8",
+  "kind": "bash",
+  "title": "echo '=== full legacy_scenarios.rs (line counts + first 100) ===' && wc -l tools/mock-engine/src/legacy_scenarios.rs && ",
+  "status": "completed",
+  "createdAt": "2026-05-05T10:10:39.652Z",
+  "startedAt": "2026-05-05T10:10:39.654Z",
+  "finishedAt": "2026-05-05T10:10:43.838Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 1958397,
+  "childJobId": null,
+  "command": "echo '=== full legacy_scenarios.rs (line counts + first 100) ===' && wc -l tools/mock-engine/src/legacy_scenarios.rs && sed -n '1,80p' tools/mock-engine/src/legacy_scenarios.rs && echo '=== usage of bare json! macro outside inner mod ===' && grep -n 'json!' tools/mock-engine/src/legacy_scenarios.rs | head -30 && echo '=== build mock-engine for warnings ===' && cd /home/emp/Documents/VAC/vac-web && cargo build -p mock-engine --color=never 2>&1 | tail -40",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

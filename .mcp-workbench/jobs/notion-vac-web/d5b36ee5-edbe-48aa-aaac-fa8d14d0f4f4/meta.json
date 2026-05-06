@@ -1,0 +1,21 @@
+{
+  "jobId": "d5b36ee5-edbe-48aa-aaac-fa8d14d0f4f4",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && cargo fmt --all && cargo test -p local-bridge --test handoff_dispatch 2>&1 | tail ",
+  "status": "completed",
+  "createdAt": "2026-05-05T21:20:28.042Z",
+  "startedAt": "2026-05-05T21:20:28.042Z",
+  "finishedAt": "2026-05-05T21:20:44.881Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2655495,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && cargo fmt --all && cargo test -p local-bridge --test handoff_dispatch 2>&1 | tail -50 && echo '---tests-done---' && cargo fmt --all -- --check && echo '---fmt-ok---' && git diff --check && echo '---diff-ok---'",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

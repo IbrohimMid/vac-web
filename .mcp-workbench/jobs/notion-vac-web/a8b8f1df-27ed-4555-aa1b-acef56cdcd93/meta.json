@@ -1,0 +1,122 @@
+{
+  "jobId": "a8b8f1df-27ed-4555-aa1b-acef56cdcd93",
+  "kind": "workflow",
+  "title": "closeout-r1-r6-tracker-and-slices",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:45:17.609Z",
+  "startedAt": "2026-05-05T23:45:17.609Z",
+  "finishedAt": "2026-05-05T23:45:19.637Z",
+  "message": "workflow completed",
+  "error": null,
+  "result": {
+    "trace": [
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md",
+          "newString": "status: closed  # authored 2026-05-06; closed 2026-05-06 (all 6 items R1–R6 landed; Phase 2 follow-ups for R5 runtime gate + R6 real per-subsystem drivers tracked separately under tools/perf/src/scenarios/ skeleton + docs/extension-trust-model.md adoption phases table)",
+          "oldString": "status: active  # authored 2026-05-06; supersedes pending markers in 50-slice set"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md (1 match)"
+      },
+      {
+        "tool": "bash",
+        "input": {
+          "command": "cd /home/emp/Documents/VAC/vac-web && cat >> docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md <<'EOF'\n\n---\n\n## Closeout — 2026-05-06\n\nAll 6 items landed. Closed by the same execution thread that authored this tracker.\n\n### R1 — slice 36 status table verification — DONE (verify-only)\n\nScorecard `docs/enterprise-maturity-scorecard.md` already had the legend at line 5 (`✓ met, ◑ partial, × not met`) and a 29-row self-rating summary table at the tail (29/0/0 ✓). No edit needed.\n\n### R2 — slice 14 release event classification — DONE\n\nAdded `classification:` field to 4 `release.*` events in `config/control-plane/event-catalog.yaml`, mirrored from `apps/web/src/domain/release/releaseEvents.ts`:\n\n- `release.targets` → `implemented`\n- `release.notes_draft` → `draft_only`\n- `release.deploy_progress` → `mock_only`\n- `release.post_deploy_observation` → `mock_only`\n\nCodegen regenerated `apps/local-bridge/src/generated/event_catalog.rs` + `apps/web/src/generated/eventCatalog.ts`. `bash scripts/verify-codegen.sh` green.\n\n### R3 — slice 39 PR-body TODO checklist generator — DONE\n\n- `scripts/vac-pr-checklist.mjs` (advisory tool, ~150 lines)\n- `pnpm pr:checklist` alias registered in `package.json`\n- Usage section appended to `docs/dx-tooling.md`\n\n### R4 — slice 48 maturity patterns adoption stance — DONE\n\nAppended `## Adoption stance per missing maturity pattern` to `docs/external-best-practice-benchmark.md`:\n\n- 8-row matrix (pattern × stance × rationale × durable contract doc)\n- Stance vocabulary glossary (5 stances: adopted, adapted, rejected, deferred, partial)\n- Action item update mapping benchmark items to current trackers\n\n### R5 — slice 47 extension trust model — DONE (Phase 1 design)\n\n- `docs/extension-trust-model.md` — 124 lines, 8 sections (trust tiers / signing pipeline / allowlist / runtime gate sketch / quarantine flow / adoption phases / non-goals / open questions)\n- `docs/adr/0003-extension-trust-model.md` — design decision record\n- Cross-link added in `docs/extension-boundaries.md`\n- Slice 47 frontmatter `outputs:` extended with both new docs\n\n**Phase 2 (deferred):** runtime `profile-core::enforce_extension_trust` + `scripts/check-extension-trust.mjs` drift gate + cockpit UX (list / revoke / quarantine).\n\n### R6 — slice 41 SLO measurement harness — DONE (Phase 1 synthetic)\n\n- `tools/perf/` new Rust crate (Cargo.toml + src/main.rs)\n- `config/slo-budgets.yaml` — 5 subsystems, mirrored from `41-…md::slos`\n- `scripts/check-slo-measurements.mjs` — measurement-only / strict mode toggle\n- `.github/workflows/perf.yml` — weekly cron (Mondays 04:00 UTC), measurement-only mode\n- Section 8 appended to `docs/perf-test-plan.md`\n- Cross-link added in `docs/observability.md`\n- Local smoke: `cargo run -p perf -- --duration 1` produces valid 5-measurement JSON; `--strict` mode passes (all p95s within budget against synthetic data)\n\n**Phase 2 (deferred):** replace synthetic measurements with real per-subsystem drivers under `tools/perf/src/scenarios/`; flip CI default to `--strict` after 2-week baseline establishes runner noise floor.\n\n### Closeout criteria check\n\n1. ✓ All 6 items landed (R1 verify-only, R2–R6 each with file deltas).\n2. ✓ Slices 14 / 36 / 39 / 41 / 47 / 48 frontmatter `status:` lines extended with closeout notes (Pass tradition).\n3. ✓ `docs/plans/README.md` already lists this plan in *Active handoffs*; demote to closed/archived in a follow-up housekeeping pass.\n4. ✓ Enterprise scorecard 29/0/0 ✓ preserved (R1 verify-only; R2 additive YAML field; R3 advisory tool; R4 doc-only; R5 doc-only; R6 adds new crate but does not modify existing modules).\nEOF\necho 'tracker closeout section appended'",
+          "timeoutMs": 5000
+        },
+        "awaited": true,
+        "result": "{\n  \"jobId\": \"cc384b12-2175-4e85-8dd0-3b9f5d99be66\",\n  \"status\": \"completed\",\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"stdout\": \"tracker closeout section appended\\n\",\n  \"stderr\": \"\"\n}"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/14-release.md",
+          "newString": "(releaseEvents.ts:43-55, tests at releaseEvents.test.ts:17-22) (see wave-summary-2026-05-03.md); 2026-05-06 R2 closeout: classification field added to 4 release.* events in config/control-plane/event-catalog.yaml (mirrored from releaseEvents.ts); regenerated event_catalog.rs + eventCatalog.ts; verify-codegen drift gate green",
+          "oldString": "(releaseEvents.ts:43-55, tests at releaseEvents.test.ts:17-22) (see wave-summary-2026-05-03.md)"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/14-release.md (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/36-enterprise-maturity-scorecard.md",
+          "newString": "confirmed via artifacts ['docs/enterprise-maturity-scorecard.md']; 2026-05-06 R1 closeout: legend at line 5 + 29-row self-rating summary table verified (29/0/0 ✓)",
+          "oldString": "confirmed via artifacts ['docs/enterprise-maturity-scorecard.md']"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/36-enterprise-maturity-scorecard.md (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/39-dx-tooling-scaffolding.md",
+          "newString": "confirmed via artifact paths ['package.json']; 2026-05-06 R3 closeout: scripts/vac-pr-checklist.mjs + pnpm pr:checklist alias + docs/dx-tooling.md usage section landed (advisory tool, not a CI gate)",
+          "oldString": "confirmed via artifact paths ['package.json']"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/39-dx-tooling-scaffolding.md (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/41-observability-slos.md",
+          "newString": "(PARTIAL: budgets are targets, not actively CI-measured — follow-up tracked) (see wave-summary-2026-05-03.md); 2026-05-06 R6 closeout (Phase 1): tools/perf crate + config/slo-budgets.yaml + scripts/check-slo-measurements.mjs + .github/workflows/perf.yml weekly cron landed; synthetic deterministic measurements pass strict gate; Phase 2 real per-subsystem drivers tracked under tools/perf/src/scenarios/",
+          "oldString": "(PARTIAL: budgets are targets, not actively CI-measured — follow-up tracked) (see wave-summary-2026-05-03.md)"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/41-observability-slos.md (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/47-extension-plugin-boundaries.md",
+          "newString": "confirmed via artifacts ['docs/extension-boundaries.md']; 2026-05-06 R5 closeout (Phase 1 design): docs/extension-trust-model.md (124 lines, 8 sections) + docs/adr/0003-extension-trust-model.md + cross-link in extension-boundaries.md + outputs frontmatter extended; Phase 2 runtime enforce_extension_trust + drift gate tracked separately",
+          "oldString": "confirmed via artifacts ['docs/extension-boundaries.md']"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/47-extension-plugin-boundaries.md (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/plans/wiring/48-external-best-practice-benchmark.md",
+          "newString": "confirmed via artifacts ['docs/external-best-practice-benchmark.md']; 2026-05-06 R4 closeout: 8-pattern × stance matrix (adopted/adapted/rejected/deferred/partial) + vocabulary glossary + action item update appended to docs/external-best-practice-benchmark.md",
+          "oldString": "confirmed via artifacts ['docs/external-best-practice-benchmark.md']"
+        },
+        "awaited": false,
+        "result": "edited docs/plans/wiring/48-external-best-practice-benchmark.md (1 match)"
+      },
+      {
+        "tool": "bash",
+        "input": {
+          "command": "cd /home/emp/Documents/VAC/vac-web && set -e \\\n  && echo '=== tracker frontmatter status ===' \\\n  && head -15 docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md | grep -E '^status:' \\\n  && echo '=== closeout section present ===' \\\n  && grep -c '^## Closeout — 2026-05-06' docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md \\\n  && echo '=== R1–R6 closeout subsections ===' \\\n  && grep -cE '^### R[1-6] —' docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md \\\n  && echo '=== slice frontmatter closeout markers ===' \\\n  && for f in 14-release 36-enterprise-maturity-scorecard 39-dx-tooling-scaffolding 41-observability-slos 47-extension-plugin-boundaries 48-external-best-practice-benchmark; do echo -n \"  $f: \"; grep -c '2026-05-06 R[1-6] closeout' docs/plans/wiring/${f}.md; done \\\n  && echo '=== ALL CLOSEOUT EDITS VERIFIED ==='",
+          "timeoutMs": 10000
+        },
+        "awaited": true,
+        "result": "{\n  \"jobId\": \"c721e56d-e181-4f9f-a5c3-7817a0e6366f\",\n  \"status\": \"completed\",\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"stdout\": \"=== tracker frontmatter status ===\\nstatus: closed  # authored 2026-05-06; closed 2026-05-06 (all 6 items R1–R6 landed; Phase 2 follow-ups for R5 runtime gate + R6 real per-subsystem drivers tracked separately under tools/perf/src/scenarios/ skeleton + docs/extension-trust-model.md adoption phases table)\\n=== closeout section present ===\\n1\\n=== R1–R6 closeout subsections ===\\n6\\n=== slice frontmatter closeout markers ===\\n  14-release: 1\\n  36-enterprise-maturity-scorecard: 1\\n  39-dx-tooling-scaffolding: 1\\n  41-observability-slos: 1\\n  47-extension-plugin-boundaries: 1\\n  48-external-best-practice-benchmark: 1\\n=== ALL CLOSEOUT EDITS VERIFIED ===\\n\",\n  \"stderr\": \"\"\n}"
+      }
+    ]
+  },
+  "exitCode": null,
+  "signal": null,
+  "pid": null,
+  "childJobId": "c721e56d-e181-4f9f-a5c3-7817a0e6366f",
+  "command": null,
+  "presetName": null,
+  "presetPath": null,
+  "permissions": {
+    "filesystem": {
+      "read": true,
+      "write": true
+    },
+    "shell": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    }
+  }
+}

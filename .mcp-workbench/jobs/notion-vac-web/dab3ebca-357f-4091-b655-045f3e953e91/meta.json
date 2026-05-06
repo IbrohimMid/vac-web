@@ -1,0 +1,21 @@
+{
+  "jobId": "dab3ebca-357f-4091-b655-045f3e953e91",
+  "kind": "bash",
+  "title": "echo '[VAC_TASK_COMPLETED:task_e1_b]' && echo '[VAC_TASK_STARTED:task_e2_a]' && echo '[VAC_TASK_COMPLETED:task_e2_a]' &&",
+  "status": "completed",
+  "createdAt": "2026-05-05T21:55:43.627Z",
+  "startedAt": "2026-05-05T21:55:43.627Z",
+  "finishedAt": "2026-05-05T21:55:43.654Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2683551,
+  "childJobId": null,
+  "command": "echo '[VAC_TASK_COMPLETED:task_e1_b]' && echo '[VAC_TASK_STARTED:task_e2_a]' && echo '[VAC_TASK_COMPLETED:task_e2_a]' && echo '[VAC_TASK_STARTED:task_e2_b]' && echo '[VAC_TASK_COMPLETED:task_e2_b]' && echo '[VAC_HANDOFF_COMPLETE]'",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

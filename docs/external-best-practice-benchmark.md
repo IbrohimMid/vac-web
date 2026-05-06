@@ -49,3 +49,30 @@ production systems we admire (and where we deliberately differ).
 
 * Re-run this benchmark at the start of each release cycle.
 * Add new reference systems only with an ADR explaining why.
+
+## Adoption stance per missing maturity pattern
+
+Per slice 48 step_05 ("Define which practices are adopted, adapted, rejected, or deferred") and the closing summary of this benchmark which flagged 8 patterns missing from VAC's plan set, here is the explicit stance per pattern.
+
+| Pattern | Stance | Rationale | Durable contract doc |
+| --- | --- | --- | --- |
+| `spec`/`status` separation | adapted | VAC uses `status:` frontmatter on each slice + per-event `status:` in the canonical catalog. Not Kubernetes-style live status reconciliation; static at-rest state suffices for a local-first cockpit. | `docs/plans/wiring/00-index.md`, `config/control-plane/event-catalog.yaml` |
+| Reconciliation loops | rejected | Local-first cockpit; no continuous reconciler. State changes are command-driven, not desired-state-driven. ADR will be authored if/when the first reconciler need surfaces. | n/a |
+| Conditions | adapted | Capability classifiers in `apps/web/src/domain/capabilities/*.ts` carry condition-equivalent gates (`canDeploy`, `canApprove`, `gateReady`, etc.). Not a generic boolean DSL. | `apps/web/src/domain/capabilities/`, slice 33 |
+| Admission / defaulting | adapted | `enforce_*` functions in `packages/profile-core` provide admission. `command-manifest.yaml` provides defaults via codegen. Not Kubernetes-style mutating webhooks. | `packages/profile-core/src/lib.rs`, slice 20 |
+| Dry-run / diff | deferred | Useful for handoff dispatch + workflow apply; no concrete user surface needs it yet. Tracked as a follow-up under `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md`. | follow-up |
+| Version conversion | adopted | `docs/data-contract-versioning.md` + `schema/migrations/` define versioned schemas with codegen. | `docs/data-contract-versioning.md`, slice 44 |
+| Golden examples | adopted | `examples/workflows/*.yaml` + `tools/mock-engine/scenarios/*.yaml` + golden test fixtures in `tools/mock-engine/tests/`. | `examples/workflows/`, `tools/mock-engine/scenarios/`, slice 35 |
+| Provenance | partial | SBOM (slice 43) covers supply-chain provenance. Per-event provenance (who emitted, with what auth) is captured in audit logs (slice 29) but not a first-class field on every event. Tracked as a follow-up. | `.github/workflows/security.yml` (sbom job), `apps/local-bridge/src/audit/`, slice 29 + slice 43 |
+
+### Stance vocabulary
+
+- **adopted** — pattern implemented in VAC's preferred shape; durable contract doc exists.
+- **adapted** — pattern's intent is met but the mechanism is intentionally different from the reference systems (smaller scope, no remote dependency, etc.).
+- **rejected** — pattern is intentionally not adopted; ADR will be authored if/when reconsideration is needed.
+- **deferred** — pattern is acknowledged as valuable but no concrete user surface needs it yet; tracked as a follow-up.
+- **partial** — pattern is adopted in some scope but missing in others; expansion plan tracked.
+
+### Action item update
+
+Action item #4 of this benchmark ("Adopt sigstore/cosign signing for release artifacts") feeds into the trust-model design captured in `docs/extension-trust-model.md` (slice 47 follow-up, 2026-05-06) and ADR `docs/adr/0003-extension-trust-model.md`. Action item #3 ("Adopt SLSA L1 in CI") is pending; tracked under `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md` if release-cycle planning surfaces it.

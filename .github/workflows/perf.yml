@@ -1,0 +1,43 @@
+name: Perf measurements (slice 41 R6)
+
+on:
+  schedule:
+    # Weekly: every Monday at 04:00 UTC.
+    - cron: '0 4 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  perf:
+    name: Backend SLO perf harness (measurement-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install Node deps
+        run: pnpm install --frozen-lockfile
+      - name: Build perf harness
+        run: cargo build -p perf --release
+      - name: Run perf harness (measurement-only)
+        run: cargo run -p perf --release -- --duration 60 --output perf-results.json
+      - name: Check measurements vs budgets (measurement-only)
+        run: node scripts/check-slo-measurements.mjs perf-results.json --measurement-only
+      - name: Upload measurements artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: perf-results.json
+          retention-days: 30

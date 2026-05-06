@@ -1,0 +1,17 @@
+{
+  "name": "notion-vac-web",
+  "updatedAt": "2026-05-05T21:18:32.238Z",
+  "tunnel": {
+    "status": "running",
+    "stoppedAt": "2026-05-05T21:18:32.219Z",
+    "pid": 2654267,
+    "pidPath": ".mcp-workbench/runtime/workers/notion-vac-web/tunnel.pid",
+    "logPath": ".mcp-workbench/runtime/workers/notion-vac-web/tunnel.log",
+    "startedAt": "2026-05-05T21:18:32.237Z",
+    "command": "worker-tunnel.sh notion-vac-web",
+    "envFile": "/home/emp/Documents/mcpno1/.mcp-workbench/workers/notion-vac-web.env",
+    "publicUrl": "https://column-television-sealed-ali.trycloudflare.com",
+    "publicConnectorUrl": "https://column-television-sealed-ali.trycloudflare.com/mcp",
+    "publicUrlDetectedAt": "2026-05-05T21:18:38.930Z"
+  }
+}

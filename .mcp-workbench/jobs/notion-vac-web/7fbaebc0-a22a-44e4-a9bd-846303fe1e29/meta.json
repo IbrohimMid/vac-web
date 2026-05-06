@@ -1,0 +1,21 @@
+{
+  "jobId": "7fbaebc0-a22a-44e4-a9bd-846303fe1e29",
+  "kind": "bash",
+  "title": "Inspect workspace + BE health",
+  "status": "completed",
+  "createdAt": "2026-05-05T14:05:18.395Z",
+  "startedAt": "2026-05-05T14:05:18.395Z",
+  "finishedAt": "2026-05-05T14:05:18.877Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2301268,
+  "childJobId": null,
+  "command": "pwd && ls -la && echo '---HEALTH---' && curl -sS -o /dev/null -w 'http_code=%{http_code}\\n' http://localhost:8080/health || true && echo '---PROC---' && ps -fp 805285 2>/dev/null || ps aux | grep -E 'edusync|api-server' | grep -v grep | head -20",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

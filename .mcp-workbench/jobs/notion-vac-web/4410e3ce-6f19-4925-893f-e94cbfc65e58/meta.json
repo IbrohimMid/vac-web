@@ -1,0 +1,21 @@
+{
+  "jobId": "4410e3ce-6f19-4925-893f-e94cbfc65e58",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && echo '=== capability-related files ===' && find . -path ./node_modules -prune -o -",
+  "status": "completed",
+  "createdAt": "2026-05-05T22:18:06.181Z",
+  "startedAt": "2026-05-05T22:18:06.181Z",
+  "finishedAt": "2026-05-05T22:18:06.264Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2700379,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && echo '=== capability-related files ===' && find . -path ./node_modules -prune -o -path ./target -prune -o -path ./.git -prune -o -type f \\( -iname '*capabilit*' -o -iname '*classif*' \\) -print 2>/dev/null | head -40 && echo '=== capabilities config dir ===' && ls config/ && echo '=== look at capabilities config ===' && find config -type f | head -30 && echo '=== vac-capability-new.mjs ===' && head -60 scripts/vac-capability-new.mjs && echo '=== local-bridge src layout ===' && ls apps/local-bridge/src/ && echo '=== bridge module roots ===' && find apps/local-bridge/src -maxdepth 2 -name 'mod.rs' -o -name 'lib.rs' -o -name 'main.rs' | head -30 && echo '=== existing capability registry in code? ===' && grep -rn 'capability' apps/local-bridge/src/ --include='*.rs' -l 2>/dev/null | head -20 && echo '=== ui capability modules ===' && find apps/web/src -type d -name 'capabilit*' 2>/dev/null | head -10 && echo '=== docs governance for AGENTS.md ===' && grep -l 'AGENTS' docs/ -r 2>/dev/null | head -10",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

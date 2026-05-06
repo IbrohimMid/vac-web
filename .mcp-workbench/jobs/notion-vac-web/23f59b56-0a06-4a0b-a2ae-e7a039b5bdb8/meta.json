@@ -1,0 +1,21 @@
+{
+  "jobId": "23f59b56-0a06-4a0b-a2ae-e7a039b5bdb8",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && echo '=== TREE docs/ ===' && find docs -type f \\( -name '*.md' -o -name '*.mdx' -o",
+  "status": "completed",
+  "createdAt": "2026-05-05T21:58:25.459Z",
+  "startedAt": "2026-05-05T21:58:25.459Z",
+  "finishedAt": "2026-05-05T21:58:26.921Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2685460,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && echo '=== TREE docs/ ===' && find docs -type f \\( -name '*.md' -o -name '*.mdx' -o -name '*.yaml' -o -name '*.yml' \\) | sort && echo '=== STATUS / FRONT-MATTER (first 25 lines per file) ===' && for f in $(find docs -type f \\( -name '*.md' -o -name '*.mdx' \\) | sort); do echo \"--- $f ---\"; head -25 \"$f\" | sed -n '1,25p'; echo; done && echo '=== GIT LAST-COMMIT PER DOC FILE ===' && for f in $(find docs -type f \\( -name '*.md' -o -name '*.mdx' \\) | sort); do d=$(git log -1 --format='%cI %h %s' -- \"$f\" 2>/dev/null); echo \"$d  | $f\"; done | sort -r && echo '=== ACTIVE PLAN (most recent) ===' && ls -lt docs/plans/wiring/ 2>/dev/null | head -20",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

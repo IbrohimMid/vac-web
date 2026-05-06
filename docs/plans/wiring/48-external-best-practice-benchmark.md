@@ -8,7 +8,7 @@ owners:
   - bridge
   - web
   - protocol
-status: landed  # Pass #25b audit: confirmed via artifacts ['docs/external-best-practice-benchmark.md']
+status: landed  # Pass #25b audit: confirmed via artifacts ['docs/external-best-practice-benchmark.md']; 2026-05-06 R4 closeout: 8-pattern × stance matrix (adopted/adapted/rejected/deferred/partial) + vocabulary glossary + action item update appended to docs/external-best-practice-benchmark.md
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

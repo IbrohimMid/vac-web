@@ -1,0 +1,21 @@
+{
+  "jobId": "84e2474e-9ccf-4ce1-a4fc-67370aa9228b",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### scorecard head ###' && head -60 docs/enterprise-maturity-score",
+  "status": "completed",
+  "createdAt": "2026-05-05T23:17:52.567Z",
+  "startedAt": "2026-05-05T23:17:52.567Z",
+  "finishedAt": "2026-05-05T23:17:52.663Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2743452,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '### scorecard head ###' && head -60 docs/enterprise-maturity-scorecard.md && echo '' && echo '### scorecard legend search ###' && grep -niE 'legend|✓|◑|verified|partial' docs/enterprise-maturity-scorecard.md | head -10 && echo '' && echo '### event-catalog release.* entries ###' && grep -nE 'release\\.' config/control-plane/event-catalog.yaml | head -30 && echo '' && echo '### event-catalog structure (sample release entry full block) ###' && sed -n '/release\\.start/,/^[a-z]/p' config/control-plane/event-catalog.yaml | head -30 && echo '' && echo '### package.json scripts ###' && node -e 'const p=require(\"./package.json\");console.log(JSON.stringify(p.scripts,null,2))' && echo '' && echo '### external-best-practice-benchmark tail ###' && tail -40 docs/external-best-practice-benchmark.md && echo '' && echo '### slice 47 head ###' && head -25 docs/plans/wiring/47-extension-plugin-boundaries.md && echo '' && echo '### extension-boundaries existence ###' && ls -la docs/extension*.md 2>/dev/null || echo 'NO extension-*.md docs' && echo '' && echo '### tools/perf existence ###' && ls -la tools/perf 2>/dev/null || echo 'tools/perf does NOT exist' && echo '' && echo '### root Cargo.toml members ###' && grep -A30 'members' Cargo.toml | head -40 && echo '' && echo '### docs/perf-test-plan.md head ###' && head -30 docs/perf-test-plan.md && echo '' && echo '### docs/observability.md SLO section line numbers ###' && grep -nE 'SLO|p95|p99|budget' docs/observability.md | head -15 && echo '' && echo '### existing ADRs ###' && ls docs/adr/",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

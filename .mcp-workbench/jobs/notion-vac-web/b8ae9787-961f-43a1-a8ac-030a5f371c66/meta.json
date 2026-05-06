@@ -1,0 +1,21 @@
+{
+  "jobId": "b8ae9787-961f-43a1-a8ac-030a5f371c66",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && echo '=== ci.yml ===' && cat .github/workflows/ci.yml && echo '=== security.yml ==",
+  "status": "completed",
+  "createdAt": "2026-05-05T22:16:25.420Z",
+  "startedAt": "2026-05-05T22:16:25.420Z",
+  "finishedAt": "2026-05-05T22:16:25.461Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2699209,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && echo '=== ci.yml ===' && cat .github/workflows/ci.yml && echo '=== security.yml ===' && cat .github/workflows/security.yml && echo '=== observability.md (top 80 lines) ===' && sed -n '1,80p' docs/observability.md && echo '=== slice 41 SLO doc (top 100) ===' && sed -n '1,100p' docs/plans/wiring/41-observability-slos.md && echo '=== look for SLO budgets in any config ===' && grep -rn 'slo' config/ 2>/dev/null | head -30 && echo '=== capability infra ===' && ls config/capabilities 2>/dev/null && find . -path ./node_modules -prune -o -path ./target -prune -o -name 'capabilit*' -print 2>/dev/null | grep -v node_modules | grep -v target | head -30 && echo '=== existing release workflow? ===' && ls .github/workflows/release* 2>/dev/null || echo 'no release workflow' && echo '=== root README top ===' && head -30 README.md",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

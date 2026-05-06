@@ -1,0 +1,53 @@
+{
+  "jobId": "20b982e6-8486-4939-b80c-a9caf63a4a26",
+  "kind": "workflow",
+  "title": "diag_create_failed",
+  "status": "completed",
+  "createdAt": "2026-05-05T21:53:11.089Z",
+  "startedAt": "2026-05-05T21:53:11.089Z",
+  "finishedAt": "2026-05-05T21:53:23.109Z",
+  "message": "workflow completed",
+  "error": null,
+  "result": {
+    "trace": [
+      {
+        "tool": "edit",
+        "input": {
+          "path": "apps/local-bridge/tests/handoff_dispatch.rs",
+          "newString": "fn create_and_approve(svc: &HandoffService, root: &Path) -> Packet {\n    let outcome = svc.create_handoff(HandoffCreateParams {\n        payload: &sample_payload(),\n        project_root: root,\n        session_id: \"sess_test\",\n        author: \"alice\",\n        now: Utc::now(),\n    });\n    let packet = match outcome {\n        HandoffCreateOutcome::Ok { packet, .. } => packet,\n        HandoffCreateOutcome::Err { code, message } => {\n            panic!(\"create failed: code={code} message={message}\")\n        }\n    };",
+          "oldString": "fn create_and_approve(svc: &HandoffService, root: &Path) -> Packet {\n    let HandoffCreateOutcome::Ok { packet, .. } = svc.create_handoff(HandoffCreateParams {\n        payload: &sample_payload(),\n        project_root: root,\n        session_id: \"sess_test\",\n        author: \"alice\",\n        now: Utc::now(),\n    }) else {\n        panic!(\"create failed\");\n    };"
+        },
+        "awaited": false,
+        "result": "edited apps/local-bridge/tests/handoff_dispatch.rs (1 match)"
+      },
+      {
+        "tool": "bash",
+        "input": {
+          "command": "cd /home/emp/Documents/VAC/vac-web && cargo test -p local-bridge --test handoff_dispatch dispatch_spawns_executor_session_for_approved_packet -- --nocapture 2>&1 | tail -40",
+          "timeoutMs": 600000
+        },
+        "awaited": true,
+        "result": "{\n  \"jobId\": \"129bb5b9-9f87-4159-975b-ad4e65021c09\",\n  \"status\": \"completed\",\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"stdout\": \"   Compiling local-bridge v0.1.0 (/home/emp/Documents/VAC/vac-web/apps/local-bridge)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.90s\\n     Running tests/handoff_dispatch.rs (target/debug/deps/handoff_dispatch-cdb1ce8a811ef088)\\n\\nrunning 1 test\\n\\nthread 'dispatch_spawns_executor_session_for_approved_packet' panicked at apps/local-bridge/tests/handoff_dispatch.rs:118:13:\\ncreate failed: code=handoff.invalid_payload message=task 1 must have at least one evidence_ref\\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\\ntest dispatch_spawns_executor_session_for_approved_packet ... FAILED\\n\\nfailures:\\n\\nfailures:\\n    dispatch_spawns_executor_session_for_approved_packet\\n\\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.02s\\n\\nerror: test failed, to rerun pass `-p local-bridge --test handoff_dispatch`\\n\",\n  \"stderr\": \"\"\n}"
+      }
+    ]
+  },
+  "exitCode": null,
+  "signal": null,
+  "pid": null,
+  "childJobId": "129bb5b9-9f87-4159-975b-ad4e65021c09",
+  "command": null,
+  "presetName": null,
+  "presetPath": null,
+  "permissions": {
+    "filesystem": {
+      "read": true,
+      "write": true
+    },
+    "shell": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    }
+  }
+}

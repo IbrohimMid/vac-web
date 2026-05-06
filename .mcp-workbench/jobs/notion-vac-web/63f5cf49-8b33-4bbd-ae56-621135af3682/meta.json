@@ -1,0 +1,83 @@
+{
+  "jobId": "63f5cf49-8b33-4bbd-ae56-621135af3682",
+  "kind": "workflow",
+  "title": "fix_capability_manifest",
+  "status": "completed",
+  "createdAt": "2026-05-05T22:39:43.712Z",
+  "startedAt": "2026-05-05T22:39:43.712Z",
+  "finishedAt": "2026-05-05T22:39:44.726Z",
+  "message": "workflow completed",
+  "error": null,
+  "result": {
+    "trace": [
+      {
+        "tool": "edit",
+        "input": {
+          "path": "config/capability-coverage.yaml",
+          "newString": "apps/local-bridge/src/profile_layer/mod.rs: bridge.profile_enforcement",
+          "oldString": "apps/local-bridge/src/notify/mod.rs: bridge.notify\napps/local-bridge/src/profile_layer/mod.rs: bridge.profile_enforcement"
+        },
+        "awaited": false,
+        "result": "edited config/capability-coverage.yaml (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "config/capability-coverage.yaml",
+          "newString": "apps/local-bridge/src/notify.rs: bridge.notify",
+          "oldString": "apps/local-bridge/src/notify.rs: bridge.notify_legacy"
+        },
+        "awaited": false,
+        "result": "edited config/capability-coverage.yaml (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/enterprise-maturity-scorecard.md",
+          "newString": "* Every backend code class has a capability classifier module. ✓ (16 backend modules mapped in `config/capability-coverage.yaml`; CI gate `capability-coverage` enforces sync)",
+          "oldString": "* Every backend code class has a capability classifier module. ✓ (17 backend modules mapped in `config/capability-coverage.yaml`; CI gate `capability-coverage` enforces sync)"
+        },
+        "awaited": false,
+        "result": "edited docs/enterprise-maturity-scorecard.md (1 match)"
+      },
+      {
+        "tool": "edit",
+        "input": {
+          "path": "docs/enterprise-maturity-scorecard.md",
+          "newString": "2. **Capability classifier coverage** — `config/capability-coverage.yaml` maps 16 backend modules; CI gate `capability-coverage` enforces sync with the filesystem.",
+          "oldString": "2. **Capability classifier coverage** — `config/capability-coverage.yaml` maps 17 backend modules; CI gate `capability-coverage` enforces sync with the filesystem."
+        },
+        "awaited": false,
+        "result": "edited docs/enterprise-maturity-scorecard.md (1 match)"
+      },
+      {
+        "tool": "bash",
+        "input": {
+          "command": "cd /home/emp/Documents/VAC/vac-web && set -e && echo '=== run capability-coverage ===' && node scripts/check-capability-coverage.mjs && echo '' && echo '=== run slo-budgets ===' && node scripts/check-slo-budgets.mjs && echo '' && echo '=== verify scorecard summary ===' && grep -A6 '^## Self-rating summary' docs/enterprise-maturity-scorecard.md && echo '' && echo '=== count AGENTS.md ===' && find apps packages tools tests -name 'AGENTS.md' 2>/dev/null | sort && echo '' && echo '=== root AGENTS.md exists? ===' && ls -la AGENTS.md && echo '' && echo '=== git diff stat ===' && git diff --stat && echo '' && echo '=== untracked new files ===' && git status --short | head -30",
+          "timeoutMs": 60000
+        },
+        "awaited": true,
+        "result": "{\n  \"jobId\": \"07fd6662-1af5-4a87-aea9-00033d581df2\",\n  \"status\": \"completed\",\n  \"exitCode\": 0,\n  \"signal\": null,\n  \"stdout\": \"=== run capability-coverage ===\\n  apps/local-bridge/src/agent_runtime/mod.rs → bridge.agent_runtime\\n  apps/local-bridge/src/audit/mod.rs → bridge.audit\\n✓ Capability coverage: 16 backend modules tagged across 16 discovered units\\n  apps/local-bridge/src/auth/mod.rs → bridge.auth\\n  apps/local-bridge/src/config/mod.rs → bridge.config\\n  apps/local-bridge/src/handoff/mod.rs → bridge.handoff\\n  apps/local-bridge/src/profile_layer/mod.rs → bridge.profile_enforcement\\n  apps/local-bridge/src/session/mod.rs → bridge.session\\n  apps/local-bridge/src/storage/mod.rs → bridge.storage\\n  apps/local-bridge/src/translator/mod.rs → bridge.translator\\n  apps/local-bridge/src/workflows/mod.rs → bridge.workflows\\n  apps/local-bridge/src/ws/mod.rs → bridge.ws\\n  apps/local-bridge/src/notify.rs → bridge.notify\\n  apps/local-bridge/src/observability.rs → bridge.observability\\n  apps/local-bridge/src/server.rs → bridge.server\\n  apps/local-bridge/src/tunnel.rs → bridge.tunnel\\n  apps/local-bridge/src/capabilities.rs → bridge.capability_registry\\n\\n=== run slo-budgets ===\\n✓ SLO budgets: 5 entries validated\\n  command_ack_p95_ms = 250ms\\n  websocket_event_delivery_p95_ms = 250ms\\n  persisted_event_write_p95_ms = 100ms\\n  topbar_interaction_p95_ms = 100ms\\n  command_manifest_refresh_p95_ms = 250ms\\n\\n=== verify scorecard summary ===\\n## Self-rating summary\\n\\n_Closed 2026-05-06 after full gap-remediation pass. All 29 dimension entries are now ✓._\\n\\n* ✓ met: 29\\n* ◑ partial: 0\\n* × not met: 0\\n\\n=== count AGENTS.md ===\\napps/local-bridge/AGENTS.md\\napps/relay-service/AGENTS.md\\napps/web/AGENTS.md\\npackages/bridge-core/AGENTS.md\\npackages/profile-core/AGENTS.md\\npackages/protocol-rs/AGENTS.md\\npackages/protocol-ts/AGENTS.md\\ntests/integration/AGENTS.md\\ntests/red-team/AGENTS.md\\ntools/codegen/AGENTS.md\\ntools/mock-acp/AGENTS.md\\ntools/mock-engine/AGENTS.md\\n\\n=== root AGENTS.md exists? ===\\n-rw-rw-r-- 1 emp emp 2669 May  6 05:31 AGENTS.md\\n\\n=== git diff stat ===\\n .github/workflows/ci.yml                           |  26 +++\\n apps/local-bridge/src/session/mod.rs               |   4 +-\\n apps/local-bridge/src/session/registry.rs          | 210 +++++++++++++++++++++\\n docs/enterprise-maturity-scorecard.md              |  58 +++---\\n docs/plans/README.md                               |  30 +--\\n docs/plans/backend-ui-wiring.md                    |  26 +--\\n docs/plans/wiring/00-index.md                      |   2 +-\\n .../wiring/section-a-resolver-extensions-design.md |   2 +-\\n docs/plans/wiring/wave-summary-2026-05-02.md       |   2 +\\n tools/mock-engine/src/legacy_scenarios.rs          |   1 -\\n 10 files changed, 303 insertions(+), 58 deletions(-)\\n\\n=== untracked new files ===\\n M .github/workflows/ci.yml\\n M apps/local-bridge/src/session/mod.rs\\n M apps/local-bridge/src/session/registry.rs\\n M docs/enterprise-maturity-scorecard.md\\n M docs/plans/README.md\\n M docs/plans/backend-ui-wiring.md\\n M docs/plans/wiring/00-index.md\\n M docs/plans/wiring/section-a-resolver-extensions-design.md\\n M docs/plans/wiring/wave-summary-2026-05-02.md\\n M tools/mock-engine/src/legacy_scenarios.rs\\n?? .mcp-workbench/\\n?? AGENTS.md\\n?? apps/local-bridge/AGENTS.md\\n?? apps/local-bridge/tests/handoff_dispatch.rs\\n?? apps/relay-service/AGENTS.md\\n?? apps/web/AGENTS.md\\n?? config/capability-coverage.yaml\\n?? docs/capabilities/\\n?? docs/plans/wiring/executor-implementation-plan.md\\n?? packages/bridge-core/AGENTS.md\\n?? packages/profile-core/AGENTS.md\\n?? packages/protocol-rs/AGENTS.md\\n?? packages/protocol-ts/AGENTS.md\\n?? scripts/check-capability-coverage.mjs\\n?? scripts/check-slo-budgets.mjs\\n?? tests/integration/AGENTS.md\\n?? tests/red-team/AGENTS.md\\n?? tools/codegen/AGENTS.md\\n?? tools/mock-acp/AGENTS.md\\n?? tools/mock-engine/AGENTS.md\\n\",\n  \"stderr\": \"\"\n}"
+      }
+    ]
+  },
+  "exitCode": null,
+  "signal": null,
+  "pid": null,
+  "childJobId": "07fd6662-1af5-4a87-aea9-00033d581df2",
+  "command": null,
+  "presetName": null,
+  "presetPath": null,
+  "permissions": {
+    "filesystem": {
+      "read": true,
+      "write": true
+    },
+    "shell": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    }
+  }
+}

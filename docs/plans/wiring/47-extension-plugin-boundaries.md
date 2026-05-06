@@ -7,7 +7,7 @@ owners:
   - architecture
   - bridge
   - security
-status: landed  # Pass #25b audit: confirmed via artifacts ['docs/extension-boundaries.md']
+status: landed  # Pass #25b audit: confirmed via artifacts ['docs/extension-boundaries.md']; 2026-05-06 R5 closeout (Phase 1 design): docs/extension-trust-model.md (124 lines, 8 sections) + docs/adr/0003-extension-trust-model.md + cross-link in extension-boundaries.md + outputs frontmatter extended; Phase 2 runtime enforce_extension_trust + drift gate tracked separately
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---
@@ -38,6 +38,8 @@ sources:
   - docs/connectors.md
 outputs:
   - docs/extension-boundaries.md
+  - docs/extension-trust-model.md
+  - docs/adr/0003-extension-trust-model.md
   - schema/plugin-capabilities.schema.json
 steps:
   - id: step_01

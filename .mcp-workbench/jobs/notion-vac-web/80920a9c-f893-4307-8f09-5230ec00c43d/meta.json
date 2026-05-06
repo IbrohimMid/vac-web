@@ -1,0 +1,21 @@
+{
+  "jobId": "80920a9c-f893-4307-8f09-5230ec00c43d",
+  "kind": "bash",
+  "title": "ls apps/local-bridge/tests/handoff_dispatch.rs 2>&1; echo '---'; cat apps/local-bridge/Cargo.toml | grep -A3 '\\[dev-depe",
+  "status": "completed",
+  "createdAt": "2026-05-05T14:51:49.771Z",
+  "startedAt": "2026-05-05T14:51:49.771Z",
+  "finishedAt": "2026-05-05T14:51:49.801Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2367735,
+  "childJobId": null,
+  "command": "ls apps/local-bridge/tests/handoff_dispatch.rs 2>&1; echo '---'; cat apps/local-bridge/Cargo.toml | grep -A3 '\\[dev-dependencies\\]'",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

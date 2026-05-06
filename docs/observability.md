@@ -78,3 +78,15 @@ SLOs are validated by:
 * Audit writes that are not append-only.
 * SLO-tracking that depends on external services (this is a local-first
   cockpit).
+
+## Backend SLO measurement harness (slice 41 R6, added 2026-05-06)
+
+The structural budget validator `scripts/check-slo-budgets.mjs` (added in the 2026-05-06 closeout) ensures the `slos:` block in the slice plan is well-formed. The complementary measurement harness ships in `tools/perf/`:
+
+- Run locally: `cargo run -p perf --release -- --duration 60 --output perf-results.json`
+- Check against budgets: `node scripts/check-slo-measurements.mjs perf-results.json`
+- CI: weekly cron in `.github/workflows/perf.yml` uploads results as artifacts.
+
+Phase 1 ships with synthetic deterministic measurements (always within budget) to validate the contract end-to-end. Phase 2 replaces them with real per-subsystem drivers; see `docs/perf-test-plan.md` section 8 for the full plan.
+
+Budgets live in `config/slo-budgets.yaml` (mirrored from `docs/plans/wiring/41-observability-slos.md::slos`).

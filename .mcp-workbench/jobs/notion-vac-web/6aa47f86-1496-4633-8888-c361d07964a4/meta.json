@@ -1,0 +1,21 @@
+{
+  "jobId": "6aa47f86-1496-4633-8888-c361d07964a4",
+  "kind": "bash",
+  "title": "pwd && ls -la | head -20",
+  "status": "completed",
+  "createdAt": "2026-05-05T09:59:38.584Z",
+  "startedAt": "2026-05-05T09:59:38.584Z",
+  "finishedAt": "2026-05-05T09:59:38.633Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 1941615,
+  "childJobId": null,
+  "command": "pwd && ls -la | head -20",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

@@ -275,6 +275,47 @@ events:
     consumers:
       - audit.ws_shard
 
+  # ---- release ----------------------------------------------------------
+  # Slice 14 step_01 classification (Pass #27 verification, mirrored from
+  # apps/web/src/domain/release/releaseEvents.ts). The `classification` field
+  # is metadata-only; codegen treats it as opaque. Values:
+  #   implemented  — backend wired + safe for production usage
+  #   draft_only   — emitted but explicitly labeled draft in UX
+  #   mock_only    — only mock-engine emits; backend disabled until gates land
+  #   future       — reserved id; not yet emitted anywhere
+  - id: release.targets
+    owner: bridge
+    status: implemented
+    classification: implemented
+    producer: translator.release_targets
+    consumers:
+      - domain.release.handlers
+      - ReleaseTab
+  - id: release.notes_draft
+    owner: bridge
+    status: implemented
+    classification: draft_only
+    producer: translator.release_notes_draft
+    consumers:
+      - domain.release.handlers
+      - ReleaseTab
+  - id: release.deploy_progress
+    owner: bridge
+    status: planned
+    classification: mock_only
+    producer: mock-engine.release-deploy
+    consumers:
+      - domain.release.handlers
+      - ReleaseTab
+  - id: release.post_deploy_observation
+    owner: bridge
+    status: planned
+    classification: mock_only
+    producer: mock-engine.release-deploy
+    consumers:
+      - domain.release.handlers
+      - ReleaseTab
+
   # ---- legacy / mock-only adapters --------------------------------------
   - id: changeset.updated
     owner: mock
