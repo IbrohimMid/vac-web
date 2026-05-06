@@ -12,5 +12,8 @@ pub mod hash;
 pub mod profile;
 
 pub use enforce::{Decision, EnforceResult};
-pub use extension_trust::{enforce_extension_trust, EnforceContext, TrustDecision};
+pub use extension_trust::{
+    enforce_extension_trust, EnforceContext, ExtensionEntry, ExtensionSource, ExtensionTier,
+    ExtensionTrustConfig, TrustDecision,
+};
 pub use profile::{CapabilityProfile, Class, FsConfig, GitConfig, NetworkEgress, ShellAllowEntry};

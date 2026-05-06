@@ -14,8 +14,12 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 
 ## Active handoffs
 
+- [`wiring/post-r1-r6-followups-plan-2026-05-07.md`](./wiring/post-r1-r6-followups-plan-2026-05-07.md) — Phase 2 follow-ups after R1–R6 closeout: F1 (trust real classification, closed), F2 (perf real drivers, planned), F3 (baseline watch, closed), F4 (flip CI strict, deferred), F5 (cockpit UX, planned), F6 (ADR refresh, planned). Status: active 2026-05-07.
+
+## Closed handoffs
+
 - [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md) — Pass E1 (audit) + Pass E2 (`spawn_executor_for_handoff` extraction & integration tests). Status: landed 2026-05-06.
-- [`wiring/remaining-work-execution-plan-2026-05-06.md`](./wiring/remaining-work-execution-plan-2026-05-06.md) — six remaining work items (R1–R6) covering slices 14, 36, 39, 41, 47, 48 follow-ups. Status: active 2026-05-06.
+- [`wiring/remaining-work-execution-plan-2026-05-06.md`](./wiring/remaining-work-execution-plan-2026-05-06.md) — six remaining work items (R1–R6) covering slices 14, 36, 39, 41, 47, 48 follow-ups. Status: closed 2026-05-06 (all R1–R6 landed).
 
 ## Stale (do not cite for new work)
 

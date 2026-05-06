@@ -1,0 +1,21 @@
+{
+  "jobId": "4ae6fee1-0077-4cb4-89a7-d37555bb2be6",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && \\\n  echo '=== fmt diff before fix ===' && \\\n  cargo fmt --all -- --check",
+  "status": "running",
+  "createdAt": "2026-05-06T01:35:42.962Z",
+  "startedAt": "2026-05-06T01:35:42.962Z",
+  "finishedAt": null,
+  "message": "running",
+  "error": null,
+  "result": null,
+  "exitCode": null,
+  "signal": null,
+  "pid": 2817190,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && \\\n  echo '=== fmt diff before fix ===' && \\\n  cargo fmt --all -- --check 2>&1 | head -40 || true && \\\n  echo '=== applying fmt ===' && \\\n  cargo fmt --all && \\\n  echo '=== fmt verify after ===' && \\\n  cargo fmt --all -- --check && echo 'fmt OK' && \\\n  echo '=== git status ===' && \\\n  git status --short && \\\n  if [ -n \"$(git status --short)\" ]; then \\\n    echo '=== amending commit with fmt ===' && \\\n    git add -A && \\\n    git -c user.name='vac-web-agent' -c user.email='agent@vac-web.local' commit --amend --no-edit 2>&1 | tail -3 && \\\n    git log -1 --oneline; \\\n  else \\\n    echo 'no changes needed; commit already clean' && git log -1 --oneline; \\\n  fi",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

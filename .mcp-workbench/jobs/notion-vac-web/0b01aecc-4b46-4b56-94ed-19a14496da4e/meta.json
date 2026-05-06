@@ -1,0 +1,21 @@
+{
+  "jobId": "0b01aecc-4b46-4b56-94ed-19a14496da4e",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && git add -A && git -c user.name='vac-web-agent' -c user.email='agent@vac-web.local'",
+  "status": "completed",
+  "createdAt": "2026-05-06T01:27:05.612Z",
+  "startedAt": "2026-05-06T01:27:05.612Z",
+  "finishedAt": "2026-05-06T01:27:05.680Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2811876,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && git add -A && git -c user.name='vac-web-agent' -c user.email='agent@vac-web.local' commit -m 'feat(post-r1-r6): F1 trust real classification + F3 baseline watch + plan' -m 'F1 — Phase 2 trust real classification:' -m '- packages/profile-core/src/extension_trust.rs upgraded from stub to real impl' -m '- ExtensionTrustConfig + ExtensionEntry + ExtensionTier + ExtensionSource serde types' -m '- ExtensionTrustConfig::load(path) with schema version validation' -m '- enforce_extension_trust(ctx, config) classifies against YAML allowlist' -m '- 10 unit tests covering 4 trust tiers + yaml load round-trip + version mismatch' -m '' -m 'F3 — Baseline watch infrastructure:' -m '- scripts/perf-baseline-archive.mjs (append run to JSONL history)' -m '- scripts/perf-baseline-compare.mjs (compare vs rolling N-day p95-of-p95)' -m '- .perf-baseline/README.md' -m '' -m 'Plan:' -m '- docs/plans/wiring/post-r1-r6-followups-plan-2026-05-07.md (F1–F6 tracker)' -m '- docs/plans/README.md updated with active + closed sections' -m '' -m 'F2 (perf real drivers), F4 (flip --strict), F5 (cockpit UX), F6 (ADR refresh): planned/deferred with concrete acceptance.' 2>&1 | tail -5 && git log -1 --oneline",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

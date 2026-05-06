@@ -1,0 +1,21 @@
+{
+  "jobId": "e060a2b4-78b7-4daa-a6d5-1a9139ac7f2e",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && cargo check -p profile-core 2>&1 | tail -3 && echo '--- tests ---' && cargo test -",
+  "status": "completed",
+  "createdAt": "2026-05-06T01:26:44.568Z",
+  "startedAt": "2026-05-06T01:26:44.568Z",
+  "finishedAt": "2026-05-06T01:26:48.548Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2810869,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && cargo check -p profile-core 2>&1 | tail -3 && echo '--- tests ---' && cargo test -p profile-core --quiet 2>&1 | tail -10",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}

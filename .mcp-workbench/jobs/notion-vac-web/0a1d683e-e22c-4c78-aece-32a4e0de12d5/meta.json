@@ -1,0 +1,21 @@
+{
+  "jobId": "0a1d683e-e22c-4c78-aece-32a4e0de12d5",
+  "kind": "bash",
+  "title": "cd /home/emp/Documents/VAC/vac-web && set -e && rm -f /tmp/perf-smoke.json /tmp/baseline.jsonl && \\\n  echo '=== run perf",
+  "status": "completed",
+  "createdAt": "2026-05-06T01:26:48.573Z",
+  "startedAt": "2026-05-06T01:26:48.573Z",
+  "finishedAt": "2026-05-06T01:26:50.151Z",
+  "message": "completed",
+  "error": null,
+  "result": null,
+  "exitCode": 0,
+  "signal": null,
+  "pid": 2811353,
+  "childJobId": null,
+  "command": "cd /home/emp/Documents/VAC/vac-web && set -e && rm -f /tmp/perf-smoke.json /tmp/baseline.jsonl && \\\n  echo '=== run perf harness ===' && \\\n  cargo run -p perf --quiet -- --duration 1 --output /tmp/perf-smoke.json 2>&1 | tail -3 && \\\n  echo '=== archive run 1 ===' && \\\n  node scripts/perf-baseline-archive.mjs /tmp/perf-smoke.json --history /tmp/baseline.jsonl && \\\n  echo '=== archive run 2 (test append) ===' && \\\n  node scripts/perf-baseline-archive.mjs /tmp/perf-smoke.json --history /tmp/baseline.jsonl && \\\n  echo '=== history file ===' && \\\n  wc -l /tmp/baseline.jsonl && \\\n  echo '=== compare with empty history (no file) ===' && \\\n  node scripts/perf-baseline-compare.mjs /tmp/perf-smoke.json --history /tmp/baseline-missing.jsonl --window 14 && \\\n  echo '=== compare with 2-entry history ===' && \\\n  node scripts/perf-baseline-compare.mjs /tmp/perf-smoke.json --history /tmp/baseline.jsonl --window 14",
+  "cwd": "/home/emp/Documents/VAC/vac-web",
+  "presetName": null,
+  "presetPath": null,
+  "permissions": null
+}
