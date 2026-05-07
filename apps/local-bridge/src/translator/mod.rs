@@ -221,6 +221,16 @@ pub async fn dispatch_command(
         "extensions.update_trust" => {
             crate::extensions::handlers::handle_update_trust(&cmd, &state).await
         }
+        "extensions.request_promotion" => {
+            crate::extensions::handlers::handle_request_promotion(&cmd, &state).await
+        }
+        "extensions.approve_promotion" => {
+            crate::extensions::handlers::handle_approve_promotion(&cmd, &state).await
+        }
+        "extensions.list_approvals" => {
+            crate::extensions::handlers::handle_list_approvals(&cmd, &state).await
+        }
+        "perf.latest_run" => crate::perf::handle_latest_run(&cmd, &state).await,
         "session.create" => {
             let profile_id = cmd
                 .payload

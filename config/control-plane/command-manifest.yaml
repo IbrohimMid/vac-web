@@ -550,6 +550,13 @@ commands:
     scope: session
     summary: Session-internal error signal; not a client command.
 
+  # Perf ------------------------------------------------------------------
+  - id: perf.latest_run
+    status: implemented
+    side_effect: read_only
+    scope: sessionless
+    summary: Slice #5 — read .perf-baseline/history.jsonl, return latest measurement + simple regression check.
+
   # Extensions ------------------------------------------------------------
   - id: extensions.list
     status: implemented
@@ -559,5 +566,20 @@ commands:
   - id: extensions.update_trust
     status: implemented
     side_effect: state
-    scope: sessionless
-    summary: Mutate the trust tier of a declared extension and persist to disk.
+    scope: session
+    summary: Mutate the trust tier of a declared extension and persist to disk. Session-bound; profile-layer enforces tool 'extensions.update_trust' (Slice #4).
+  - id: extensions.request_promotion
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Slice #6 — request a promotion from `revoked` to `allowed_*`. Persists a pending ApprovalRequest; profile-layer enforces tool `extensions.request_promotion`.
+  - id: extensions.approve_promotion
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Slice #6 — approve (or deny) a pending promotion. Approver session must have a different profile_id than the requester. On approve, the trust transition is applied and persisted.
+  - id: extensions.list_approvals
+    status: implemented
+    side_effect: read_only
+    scope: session
+    summary: Slice #6 — list pending + recently-decided promotion approval requests.

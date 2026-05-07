@@ -332,6 +332,61 @@ events:
       - domain.extensions.handlers
       - ExtensionsList
 
+  - id: extensions.update_trust.allowed
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_update_trust
+    consumers:
+      - audit
+  - id: extensions.update_trust.denied
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_update_trust
+    consumers:
+      - audit
+  - id: extensions.update_trust.save_failed
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_update_trust
+    consumers:
+      - audit
+
+  - id: extensions.promotion_requested
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_request_promotion
+    consumers:
+      - audit
+      - ExtensionsList
+  - id: extensions.promotion_approved
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_approve_promotion
+    consumers:
+      - audit
+      - ExtensionsList
+  - id: extensions.promotion_denied
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_approve_promotion
+    consumers:
+      - audit
+      - ExtensionsList
+  - id: extensions.approvals_list_response
+    owner: bridge
+    status: implemented
+    producer: extensions.handlers.handle_list_approvals
+    consumers:
+      - ExtensionsList
+
+  # ---- perf surface ------------------------------------------------------
+  - id: perf.run_completed
+    owner: bridge
+    status: implemented
+    producer: perf.handle_latest_run
+    consumers:
+      - PerfBadge
+
   # ---- legacy / mock-only adapters --------------------------------------
   - id: changeset.updated
     owner: mock

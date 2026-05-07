@@ -1,21 +1,39 @@
 //! `extensions.list` + `extensions.update_trust` handlers.
 //!
 //! Hardening 2026-05-06 (audit BLOCKER-1):
-//! - `handle_update_trust` is gated by an admin token (see
-//!   [`crate::extensions::admin_gate`]).
+//!
+//! - `handle_update_trust` runs only after the profile-layer admits the
+//!   command. As of Slice #4 (2026-05-07) `extensions.update_trust` is
+//!   `scope: session` and routes through `profile_layer::enforce_action`,
+//!   which requires the session profile's `tool_allow` to contain
+//!   `extensions.update_trust`. The legacy `VAC_EXTENSIONS_ADMIN`
+//!   env-var gate has been retired.
 //! - Unknown extension ids return `extensions.unknown_id` instead of
 //!   silently registering a new entry at the caller-supplied tier.
 //! - `revoked` -> `allowed_*` transitions are rejected as
 //!   `extensions.permission_denied` until a two-party approval flow
 //!   ships.
-//! - Every accepted or denied call writes a structured audit record
-//!   with actor / extension_id / prev_tier / next_tier / decision /
-//!   ts / cmd_id.
-
-use crate::extensions::{admin_gate, store};
+//!
+//! Round 2 follow-up 2026-05-07 (WARNING-B): every accepted or denied
+//! call routes through [`crate::audit::log_structured`] so the audit
+//! shard receives the same JSON shape the observability sink validates
+//! against `schema/observability-events.yaml`.
+//!
+//! Catalog event ids:
+//!
+//! - `extensions.update_trust.allowed` (success)
+//! - `extensions.update_trust.denied` (admin gate / payload / id /
+//!   transition rejections)
+//! - `extensions.update_trust.save_failed` (persist failure)
+//!
+//! All entries carry `extensions.extension_id`, `extensions.decision`,
+//! and (when known) `extensions.prev_tier` / `extensions.next_tier` in
+//! the namespaced section.
+use crate::audit::log_structured;
+use crate::extensions::store;
+use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};
 use crate::server::AppStateHandle;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
-use bridge_core::AuditSeverity;
 use profile_core::extension_trust::{
     enforce_extension_trust, EnforceContext, ExtensionEntry, ExtensionSource, ExtensionTier,
     ExtensionTrustConfig, TrustDecision,
@@ -71,42 +89,125 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn audit_actor(cmd: &ClientCommand) -> &str {
-    let s = cmd.session_id.as_str();
-    if s.is_empty() {
-        "anonymous"
-    } else {
-        s
+/// Outcome bucket for `extensions.update_trust` audit events. Determines
+/// the catalog event id, severity, and the `decision` namespaced field.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateOutcome {
+    Allowed,
+    Denied,
+    SaveFailed,
+}
+
+impl UpdateOutcome {
+    fn event_id(self) -> &'static str {
+        match self {
+            Self::Allowed => "extensions.update_trust.allowed",
+            Self::Denied => "extensions.update_trust.denied",
+            Self::SaveFailed => "extensions.update_trust.save_failed",
+        }
+    }
+    fn severity(self) -> LogSeverity {
+        match self {
+            Self::Allowed => LogSeverity::Info,
+            Self::Denied => LogSeverity::Warning,
+            Self::SaveFailed => LogSeverity::Error,
+        }
+    }
+    fn decision_label(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Denied => "denied",
+            Self::SaveFailed => "save_failed",
+        }
     }
 }
 
-/// Build the audit fields recorded for every `extensions.update_trust`
-/// call (success or denial). Required by audit 2026-05-06 BLOCKER-1
-/// fix #3 -- ensures actor / extension_id / prev_tier / next_tier /
-/// decision / ts / cmd_id are present so red-team review can detect
-/// unauthorized attempts.
-pub(crate) fn build_update_trust_audit(
+/// Build the structured-log entry for an `extensions.update_trust`
+/// outcome. Public for testing so the shape can be asserted without
+/// spinning up the bridge state.
+#[cfg(test)]
+pub(crate) fn build_update_trust_entry(
     cmd: &ClientCommand,
+    outcome: UpdateOutcome,
+    code: &str,
     extension_id: &str,
     prev_tier: Option<ExtensionTier>,
     next_tier: Option<ExtensionTier>,
-    decision: &str,
-) -> Value {
-    json!({
-        "actor": audit_actor(cmd),
-        "extension_id": extension_id,
-        "prev_tier": prev_tier.map(tier_str),
-        "next_tier": next_tier.map(tier_str),
-        "decision": decision,
-        "ts": now_iso(),
-        "cmd_id": cmd.id,
-    })
+) -> Result<Value, crate::observability::LogValidationError> {
+    let actor = if cmd.session_id.is_empty() {
+        LogActor::System
+    } else {
+        LogActor::User
+    };
+    let mut b = StructuredLogBuilder::new(outcome.event_id(), actor, outcome.severity())
+        .code(code)
+        .command_id(cmd.id.clone());
+    if !cmd.session_id.is_empty() {
+        b = b.session_id(cmd.session_id.clone());
+    }
+    let b = b.namespaced("extensions.extension_id", extension_id.to_string())?;
+    let b = b.namespaced("extensions.decision", outcome.decision_label().to_string())?;
+    let b = if let Some(p) = prev_tier {
+        b.namespaced("extensions.prev_tier", tier_str(p).to_string())?
+    } else {
+        b
+    };
+    let b = if let Some(n) = next_tier {
+        b.namespaced("extensions.next_tier", tier_str(n).to_string())?
+    } else {
+        b
+    };
+    b.build()
 }
 
-fn audit_log(state: &AppStateHandle, cmd: &ClientCommand, severity: AuditSeverity, fields: Value) {
-    state
-        .audit
-        .log(&cmd.session_id, "extensions", severity, fields);
+/// Emit the structured audit entry. On schema-validation failure the
+/// entry is dropped (mirrors the policy of every other
+/// `log_structured` callsite in the bridge).
+fn audit_update_trust(
+    state: &AppStateHandle,
+    cmd: &ClientCommand,
+    outcome: UpdateOutcome,
+    code: &str,
+    extension_id: &str,
+    prev_tier: Option<ExtensionTier>,
+    next_tier: Option<ExtensionTier>,
+) {
+    let actor = if cmd.session_id.is_empty() {
+        LogActor::System
+    } else {
+        LogActor::User
+    };
+    let mut b = StructuredLogBuilder::new(outcome.event_id(), actor, outcome.severity())
+        .code(code)
+        .command_id(cmd.id.clone());
+    if !cmd.session_id.is_empty() {
+        b = b.session_id(cmd.session_id.clone());
+    }
+    let b = match b.namespaced("extensions.extension_id", extension_id.to_string()) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let b = match b.namespaced("extensions.decision", outcome.decision_label().to_string()) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let b = if let Some(p) = prev_tier {
+        match b.namespaced("extensions.prev_tier", tier_str(p).to_string()) {
+            Ok(b) => b,
+            Err(_) => return,
+        }
+    } else {
+        b
+    };
+    let b = if let Some(n) = next_tier {
+        match b.namespaced("extensions.next_tier", tier_str(n).to_string()) {
+            Ok(b) => b,
+            Err(_) => return,
+        }
+    } else {
+        b
+    };
+    let _ = log_structured(state, "extensions", b);
 }
 
 fn permission_denied_ack(cmd: &ClientCommand, message: impl Into<String>) -> ServerAck {
@@ -157,12 +258,7 @@ pub(crate) enum UpdateTrustError {
 /// Apply an `extensions.update_trust` payload to a mutable
 /// [`ExtensionTrustConfig`].
 ///
-/// Pure function (no I/O, no env access). Hardening notes:
-/// - Auto-insert is REMOVED; unknown ids surface as
-///   [`UpdateTrustError::UnknownId`].
-/// - `revoked` -> `allowed_bundled` / `allowed_signed` transitions are
-///   rejected. Promoting a revoked extension requires a manual config
-///   edit (and, in a future slice, two-party approval).
+/// Pure function (no I/O, no env access).
 pub(crate) fn apply_update_trust(
     cfg: &mut ExtensionTrustConfig,
     payload: &Value,
@@ -273,28 +369,9 @@ pub async fn handle_update_trust(
     state: &AppStateHandle,
 ) -> (ServerAck, Vec<ServerEvent>) {
     // 1. Admin gate (audit on denial).
-    if let Err(err) = admin_gate::check(&cmd.payload) {
-        let extension_id = cmd
-            .payload
-            .get("extension_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<unknown>");
-        let next_tier = cmd
-            .payload
-            .get("tier")
-            .and_then(|v| v.as_str())
-            .and_then(parse_tier);
-        audit_log(
-            state,
-            cmd,
-            AuditSeverity::Warn,
-            build_update_trust_audit(cmd, extension_id, None, next_tier, "denied"),
-        );
-        return (permission_denied_ack(cmd, err.message()), vec![]);
-    }
-    // 2. Load config.
-    let mut cfg = match store::load() {
-        Ok(c) => c,
+    // 2. Acquire exclusive lock + load config (Slice #1: TOCTOU fix).
+    let mut locked = match store::LockedConfig::acquire() {
+        Ok(l) => l,
         Err(e) => {
             return (
                 ServerAck {
@@ -310,23 +387,20 @@ pub async fn handle_update_trust(
         }
     };
     // 3. Apply pure update-trust logic.
-    let outcome = match apply_update_trust(&mut cfg, &cmd.payload) {
+    let outcome = match apply_update_trust(&mut locked.config, &cmd.payload) {
         Ok(o) => o,
         Err(UpdateTrustError::BadPayload(msg)) => {
-            audit_log(
+            audit_update_trust(
                 state,
                 cmd,
-                AuditSeverity::Warn,
-                build_update_trust_audit(
-                    cmd,
-                    cmd.payload
-                        .get("extension_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("<missing>"),
-                    None,
-                    None,
-                    "denied",
-                ),
+                UpdateOutcome::Denied,
+                "extensions.bad_payload",
+                cmd.payload
+                    .get("extension_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<missing>"),
+                None,
+                None,
             );
             return (
                 ServerAck {
@@ -341,11 +415,14 @@ pub async fn handle_update_trust(
             );
         }
         Err(UpdateTrustError::UnknownId(id)) => {
-            audit_log(
+            audit_update_trust(
                 state,
                 cmd,
-                AuditSeverity::Warn,
-                build_update_trust_audit(cmd, &id, None, None, "denied"),
+                UpdateOutcome::Denied,
+                "extensions.unknown_id",
+                &id,
+                None,
+                None,
             );
             return (unknown_id_ack(cmd, &id), vec![]);
         }
@@ -354,11 +431,14 @@ pub async fn handle_update_trust(
             prev,
             next,
         }) => {
-            audit_log(
+            audit_update_trust(
                 state,
                 cmd,
-                AuditSeverity::Warn,
-                build_update_trust_audit(cmd, &extension_id, Some(prev), Some(next), "denied"),
+                UpdateOutcome::Denied,
+                "extensions.permission_denied",
+                &extension_id,
+                Some(prev),
+                Some(next),
             );
             return (
                 permission_denied_ack(
@@ -374,19 +454,24 @@ pub async fn handle_update_trust(
             );
         }
     };
-    // 4. Persist.
-    if let Err(e) = store::save(&cfg) {
-        audit_log(
+    // 4. Compute decision against the locked snapshot before commit.
+    let entry = outcome.entry.clone();
+    let ctx = EnforceContext {
+        extension_id: &entry.id,
+        signature_b64: None,
+        publisher_pubkey_b64: entry.publisher.as_deref(),
+    };
+    let decision = enforce_extension_trust(&ctx, &locked.config);
+    // 5. Persist atomically (consumes the lock guard).
+    if let Err(e) = locked.commit() {
+        audit_update_trust(
             state,
             cmd,
-            AuditSeverity::Error,
-            build_update_trust_audit(
-                cmd,
-                &outcome.entry.id,
-                Some(outcome.prev_tier),
-                Some(outcome.next_tier),
-                "save_failed",
-            ),
+            UpdateOutcome::SaveFailed,
+            "extensions.config_save_failed",
+            &outcome.entry.id,
+            Some(outcome.prev_tier),
+            Some(outcome.next_tier),
         );
         return (
             ServerAck {
@@ -400,26 +485,15 @@ pub async fn handle_update_trust(
             vec![],
         );
     }
-    // 5. Compute decision after mutation.
-    let entry = outcome.entry;
-    let ctx = EnforceContext {
-        extension_id: &entry.id,
-        signature_b64: None,
-        publisher_pubkey_b64: entry.publisher.as_deref(),
-    };
-    let decision = enforce_extension_trust(&ctx, &cfg);
     // 6. Audit success + emit event.
-    audit_log(
+    audit_update_trust(
         state,
         cmd,
-        AuditSeverity::Info,
-        build_update_trust_audit(
-            cmd,
-            &entry.id,
-            Some(outcome.prev_tier),
-            Some(outcome.next_tier),
-            "allowed",
-        ),
+        UpdateOutcome::Allowed,
+        "",
+        &entry.id,
+        Some(outcome.prev_tier),
+        Some(outcome.next_tier),
     );
     let event = ServerEvent {
         seq: 0,
@@ -439,6 +513,512 @@ pub async fn handle_update_trust(
         },
         vec![event],
     )
+}
+
+// ============================================================
+// Slice #6 — two-party promotion approval flow
+// ============================================================
+
+use crate::extensions::approvals;
+
+fn approval_payload(req: &approvals::ApprovalRequest) -> Value {
+    let status = match req.status {
+        approvals::ApprovalStatus::Pending => "pending",
+        approvals::ApprovalStatus::Approved => "approved",
+        approvals::ApprovalStatus::Denied => "denied",
+    };
+    json!({
+        "request_id": req.request_id,
+        "extension_id": req.extension_id,
+        "requested_tier": req.requested_tier,
+        "requested_by_session_id": req.requested_by_session_id,
+        "requested_by_profile_id": req.requested_by_profile_id,
+        "created_at": req.created_at,
+        "status": status,
+        "decided_at": req.decided_at,
+        "decided_by_session_id": req.decided_by_session_id,
+        "decided_by_profile_id": req.decided_by_profile_id,
+    })
+}
+
+fn ack_err(cmd: &ClientCommand, code: &str, message: impl Into<String>) -> ServerAck {
+    ServerAck {
+        ack_of: cmd.id.clone(),
+        ok: false,
+        error: Some(ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        }),
+    }
+}
+
+fn ack_ok(cmd: &ClientCommand) -> ServerAck {
+    ServerAck {
+        ack_of: cmd.id.clone(),
+        ok: true,
+        error: None,
+    }
+}
+
+fn approval_audit(
+    state: &AppStateHandle,
+    cmd: &ClientCommand,
+    event_id: &str,
+    code: &str,
+    severity: LogSeverity,
+    namespaced: &[(&str, String)],
+) {
+    let actor = if cmd.session_id.is_empty() {
+        LogActor::System
+    } else {
+        LogActor::User
+    };
+    let mut b = StructuredLogBuilder::new(event_id, actor, severity)
+        .code(code)
+        .command_id(cmd.id.clone());
+    if !cmd.session_id.is_empty() {
+        b = b.session_id(cmd.session_id.clone());
+    }
+    for (k, v) in namespaced {
+        b = match b.namespaced(*k, v.clone()) {
+            Ok(nb) => nb,
+            Err(_) => return,
+        };
+    }
+    let _ = log_structured(state, "extensions", b);
+}
+
+fn session_profile_id(state: &AppStateHandle, session_id: &str) -> Option<String> {
+    if session_id.is_empty() {
+        return None;
+    }
+    state.sessions.get(session_id).map(|h| h.profile_id.clone())
+}
+
+/// Pure helper: apply a promotion (`revoked` -> `allowed_*`) bypassing the
+/// transition rejection in [`apply_update_trust`]. Used by the approve
+/// path after two-party validation.
+pub(crate) fn apply_promotion_with_approval(
+    cfg: &mut ExtensionTrustConfig,
+    extension_id: &str,
+    next_tier: ExtensionTier,
+) -> Result<UpdateTrustOutcome, UpdateTrustError> {
+    let idx = cfg
+        .extensions
+        .iter()
+        .position(|e| e.id == extension_id)
+        .ok_or_else(|| UpdateTrustError::UnknownId(extension_id.to_string()))?;
+    let prev_tier = cfg.extensions[idx].tier;
+    cfg.extensions[idx].tier = next_tier;
+    Ok(UpdateTrustOutcome {
+        entry: cfg.extensions[idx].clone(),
+        prev_tier,
+        next_tier,
+    })
+}
+
+pub async fn handle_request_promotion(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let extension_id = match cmd.payload.get("extension_id").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            approval_audit(
+                state,
+                cmd,
+                "extensions.promotion_requested",
+                "extensions.bad_payload",
+                LogSeverity::Warning,
+                &[("extensions.decision", "denied".into())],
+            );
+            return (
+                ack_err(cmd, "extensions.bad_payload", "extension_id is required"),
+                vec![],
+            );
+        }
+    };
+    let target_tier_str = match cmd.payload.get("target_tier").and_then(|v| v.as_str()) {
+        Some(s) if matches!(s, "allowed_bundled" | "allowed_signed") => s.to_string(),
+        _ => {
+            approval_audit(
+                state,
+                cmd,
+                "extensions.promotion_requested",
+                "extensions.bad_payload",
+                LogSeverity::Warning,
+                &[
+                    ("extensions.extension_id", extension_id.clone()),
+                    ("extensions.decision", "denied".into()),
+                ],
+            );
+            return (
+                ack_err(
+                    cmd,
+                    "extensions.bad_payload",
+                    "target_tier must be allowed_bundled|allowed_signed",
+                ),
+                vec![],
+            );
+        }
+    };
+    let cfg = match store::load() {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                ack_err(cmd, "extensions.config_load_failed", e.to_string()),
+                vec![],
+            );
+        }
+    };
+    let entry = match cfg.extensions.iter().find(|e| e.id == extension_id) {
+        Some(e) => e.clone(),
+        None => {
+            approval_audit(
+                state,
+                cmd,
+                "extensions.promotion_requested",
+                "extensions.unknown_id",
+                LogSeverity::Warning,
+                &[
+                    ("extensions.extension_id", extension_id.clone()),
+                    ("extensions.decision", "denied".into()),
+                ],
+            );
+            return (unknown_id_ack(cmd, &extension_id), vec![]);
+        }
+    };
+    if !matches!(entry.tier, ExtensionTier::Revoked) {
+        approval_audit(
+            state,
+            cmd,
+            "extensions.promotion_requested",
+            "extensions.target_not_revoked",
+            LogSeverity::Warning,
+            &[
+                ("extensions.extension_id", extension_id.clone()),
+                ("extensions.decision", "denied".into()),
+                ("extensions.prev_tier", tier_str(entry.tier).into()),
+            ],
+        );
+        return (
+            ack_err(
+                cmd,
+                "extensions.target_not_revoked",
+                format!(
+                    "extension '{extension_id}' is currently {} (only revoked extensions can be promoted)",
+                    tier_str(entry.tier)
+                ),
+            ),
+            vec![],
+        );
+    }
+    let requester_profile_id = match session_profile_id(state, &cmd.session_id) {
+        Some(p) => p,
+        None => {
+            return (
+                ack_err(
+                    cmd,
+                    "extensions.permission_denied",
+                    "no active session for requester",
+                ),
+                vec![],
+            );
+        }
+    };
+    let mut locked = match approvals::LockedApprovals::acquire() {
+        Ok(l) => l,
+        Err(e) => {
+            return (
+                ack_err(cmd, "extensions.config_load_failed", e.to_string()),
+                vec![],
+            )
+        }
+    };
+    let req = approvals::ApprovalRequest {
+        request_id: approvals::new_request_id(),
+        extension_id: extension_id.clone(),
+        requested_tier: target_tier_str.clone(),
+        requested_by_session_id: cmd.session_id.clone(),
+        requested_by_profile_id: requester_profile_id.clone(),
+        created_at: now_iso(),
+        status: approvals::ApprovalStatus::Pending,
+        decided_at: None,
+        decided_by_session_id: None,
+        decided_by_profile_id: None,
+    };
+    locked.config.requests.push(req.clone());
+    if let Err(e) = locked.commit() {
+        approval_audit(
+            state,
+            cmd,
+            "extensions.promotion_requested",
+            "extensions.config_save_failed",
+            LogSeverity::Error,
+            &[
+                ("extensions.extension_id", extension_id.clone()),
+                ("extensions.decision", "save_failed".into()),
+            ],
+        );
+        return (
+            ack_err(cmd, "extensions.config_save_failed", e.to_string()),
+            vec![],
+        );
+    }
+    approval_audit(
+        state,
+        cmd,
+        "extensions.promotion_requested",
+        "",
+        LogSeverity::Info,
+        &[
+            ("extensions.extension_id", extension_id.clone()),
+            ("extensions.decision", "pending".into()),
+            ("extensions.request_id", req.request_id.clone()),
+            ("extensions.requested_tier", target_tier_str.clone()),
+            ("extensions.prev_tier", tier_str(entry.tier).into()),
+        ],
+    );
+    let event = ServerEvent {
+        seq: 0,
+        session_id: cmd.session_id.clone(),
+        event_type: "extensions.promotion_requested".into(),
+        payload: json!({ "request": approval_payload(&req) }),
+        v: 1,
+        ts: now_iso(),
+    };
+    (ack_ok(cmd), vec![event])
+}
+
+pub async fn handle_approve_promotion(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let request_id = match cmd.payload.get("request_id").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return (
+                ack_err(cmd, "extensions.bad_payload", "request_id is required"),
+                vec![],
+            )
+        }
+    };
+    let approver_profile_id = match session_profile_id(state, &cmd.session_id) {
+        Some(p) => p,
+        None => {
+            return (
+                ack_err(
+                    cmd,
+                    "extensions.permission_denied",
+                    "no active session for approver",
+                ),
+                vec![],
+            )
+        }
+    };
+    let mut locked_appr = match approvals::LockedApprovals::acquire() {
+        Ok(l) => l,
+        Err(e) => {
+            return (
+                ack_err(cmd, "extensions.config_load_failed", e.to_string()),
+                vec![],
+            )
+        }
+    };
+    let idx = match locked_appr
+        .config
+        .requests
+        .iter()
+        .position(|r| r.request_id == request_id)
+    {
+        Some(i) => i,
+        None => {
+            approval_audit(
+                state,
+                cmd,
+                "extensions.promotion_denied",
+                "extensions.approval_not_found",
+                LogSeverity::Warning,
+                &[
+                    ("extensions.decision", "denied".into()),
+                    ("extensions.request_id", request_id.clone()),
+                ],
+            );
+            return (
+                ack_err(
+                    cmd,
+                    "extensions.approval_not_found",
+                    format!("approval '{request_id}' not found"),
+                ),
+                vec![],
+            );
+        }
+    };
+    let req_snapshot = locked_appr.config.requests[idx].clone();
+    if !matches!(req_snapshot.status, approvals::ApprovalStatus::Pending) {
+        return (
+            ack_err(cmd, "extensions.bad_payload", "request is not pending"),
+            vec![],
+        );
+    }
+    if approver_profile_id == req_snapshot.requested_by_profile_id {
+        approval_audit(
+            state,
+            cmd,
+            "extensions.promotion_denied",
+            "extensions.approver_is_requester",
+            LogSeverity::Warning,
+            &[
+                ("extensions.decision", "denied".into()),
+                ("extensions.request_id", request_id.clone()),
+                ("extensions.extension_id", req_snapshot.extension_id.clone()),
+            ],
+        );
+        return (
+            ack_err(
+                cmd,
+                "extensions.approver_is_requester",
+                "approver must have a different profile than the requester",
+            ),
+            vec![],
+        );
+    }
+    let next_tier = match parse_tier(&req_snapshot.requested_tier) {
+        Some(t) => t,
+        None => {
+            return (
+                ack_err(
+                    cmd,
+                    "extensions.bad_payload",
+                    "stored requested_tier is invalid",
+                ),
+                vec![],
+            )
+        }
+    };
+    let mut locked_trust = match store::LockedConfig::acquire() {
+        Ok(l) => l,
+        Err(e) => {
+            return (
+                ack_err(cmd, "extensions.config_load_failed", e.to_string()),
+                vec![],
+            )
+        }
+    };
+    let outcome = match apply_promotion_with_approval(
+        &mut locked_trust.config,
+        &req_snapshot.extension_id,
+        next_tier,
+    ) {
+        Ok(o) => o,
+        Err(UpdateTrustError::UnknownId(id)) => {
+            return (unknown_id_ack(cmd, &id), vec![]);
+        }
+        Err(_) => {
+            return (
+                ack_err(
+                    cmd,
+                    "extensions.bad_payload",
+                    "internal: unexpected promotion error",
+                ),
+                vec![],
+            );
+        }
+    };
+    let entry = outcome.entry.clone();
+    let ctx = EnforceContext {
+        extension_id: &entry.id,
+        signature_b64: None,
+        publisher_pubkey_b64: entry.publisher.as_deref(),
+    };
+    let decision = enforce_extension_trust(&ctx, &locked_trust.config);
+    if let Err(e) = locked_trust.commit() {
+        approval_audit(
+            state,
+            cmd,
+            "extensions.promotion_approved",
+            "extensions.config_save_failed",
+            LogSeverity::Error,
+            &[
+                ("extensions.extension_id", entry.id.clone()),
+                ("extensions.request_id", request_id.clone()),
+                ("extensions.decision", "save_failed".into()),
+            ],
+        );
+        return (
+            ack_err(cmd, "extensions.config_save_failed", e.to_string()),
+            vec![],
+        );
+    }
+    locked_appr.config.requests[idx].status = approvals::ApprovalStatus::Approved;
+    locked_appr.config.requests[idx].decided_at = Some(now_iso());
+    locked_appr.config.requests[idx].decided_by_session_id = Some(cmd.session_id.clone());
+    locked_appr.config.requests[idx].decided_by_profile_id = Some(approver_profile_id.clone());
+    let approved_req = locked_appr.config.requests[idx].clone();
+    if let Err(e) = locked_appr.commit() {
+        return (
+            ack_err(cmd, "extensions.config_save_failed", e.to_string()),
+            vec![],
+        );
+    }
+    approval_audit(
+        state,
+        cmd,
+        "extensions.promotion_approved",
+        "",
+        LogSeverity::Info,
+        &[
+            ("extensions.extension_id", entry.id.clone()),
+            ("extensions.request_id", request_id.clone()),
+            ("extensions.decision", "allowed".into()),
+            ("extensions.prev_tier", tier_str(outcome.prev_tier).into()),
+            ("extensions.next_tier", tier_str(outcome.next_tier).into()),
+        ],
+    );
+    let approved_event = ServerEvent {
+        seq: 0,
+        session_id: cmd.session_id.clone(),
+        event_type: "extensions.promotion_approved".into(),
+        payload: json!({ "request": approval_payload(&approved_req) }),
+        v: 1,
+        ts: now_iso(),
+    };
+    let updated_event = ServerEvent {
+        seq: 0,
+        session_id: cmd.session_id.clone(),
+        event_type: "extensions.updated".into(),
+        payload: json!({ "entry": entry_payload(&entry, decision) }),
+        v: 1,
+        ts: now_iso(),
+    };
+    (ack_ok(cmd), vec![approved_event, updated_event])
+}
+
+pub async fn handle_list_approvals(
+    cmd: &ClientCommand,
+    _state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let cfg = match approvals::load() {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                ack_err(cmd, "extensions.config_load_failed", e.to_string()),
+                vec![],
+            )
+        }
+    };
+    let payload = json!({
+        "requests": cfg.requests.iter().map(approval_payload).collect::<Vec<_>>()
+    });
+    let event = ServerEvent {
+        seq: 0,
+        session_id: cmd.session_id.clone(),
+        event_type: "extensions.approvals_list_response".into(),
+        payload,
+        v: 1,
+        ts: now_iso(),
+    };
+    (ack_ok(cmd), vec![event])
 }
 
 #[cfg(test)]
@@ -472,10 +1052,6 @@ mod tests {
 
     #[test]
     fn extensions_update_trust_rejects_unknown_id_in_strict_mode() {
-        // Pre-fix: missing ids were silently auto-inserted at the
-        // caller-supplied tier with `source=bundled` / `publisher=None`.
-        // Post-fix: the caller gets `extensions.unknown_id` and the
-        // config is left untouched.
         let mut cfg = cfg_with(vec![entry(
             "real-ext",
             ExtensionTier::AllowedBundled,
@@ -496,37 +1072,12 @@ mod tests {
     }
 
     #[test]
-    fn extensions_update_trust_rejects_unauthorized_profile() {
-        // Admin gate is default-deny when VAC_EXTENSIONS_ADMIN is unset
-        // OR when admin_token is missing/mismatched. Exercises the
-        // primitive the sessionless dispatcher relies on.
-        let _g = admin_gate::testing::env_lock();
-        admin_gate::testing::clear_secret();
-        let payload = json!({"extension_id": "x", "tier": "allowed_signed"});
-        let err = admin_gate::check(&payload).unwrap_err();
-        assert!(matches!(err, admin_gate::AdminGateError::NotConfigured));
-        admin_gate::testing::set_secret("super-secret");
-        let payload = json!({"extension_id": "x", "tier": "allowed_signed"});
-        let err = admin_gate::check(&payload).unwrap_err();
-        assert!(matches!(err, admin_gate::AdminGateError::TokenMissing));
-        let payload =
-            json!({"extension_id": "x", "tier": "allowed_signed", "admin_token": "wrong"});
-        let err = admin_gate::check(&payload).unwrap_err();
-        assert!(matches!(err, admin_gate::AdminGateError::TokenMismatch));
-        let payload = json!({
-            "extension_id": "x",
-            "tier": "allowed_signed",
-            "admin_token": "super-secret"
-        });
-        admin_gate::check(&payload).expect("matching token");
-        admin_gate::testing::clear_secret();
-    }
-
-    #[test]
-    fn extensions_update_trust_emits_audit_record() {
-        // Verify the audit fields shape recorded for every accepted
-        // update_trust call: actor / extension_id / prev_tier /
-        // next_tier / decision / ts / cmd_id (audit BLOCKER-1 fix #3).
+    fn extensions_update_trust_emits_structured_audit_record() {
+        // Round 2 follow-up: verify the structured-log entry shape
+        // recorded for every accepted update_trust call. The entry is
+        // built via `crate::observability::StructuredLogBuilder` and
+        // routed through `crate::audit::log_structured`, so the JSON
+        // shape is what the audit shard sees.
         let cmd = ClientCommand {
             id: "cmd-42".into(),
             session_id: "session-7".into(),
@@ -534,35 +1085,47 @@ mod tests {
             payload: json!({}),
             v: 1,
         };
-        let value = build_update_trust_audit(
+        let value = build_update_trust_entry(
             &cmd,
+            UpdateOutcome::Allowed,
+            "",
             "ext-1",
             Some(ExtensionTier::Quarantined),
             Some(ExtensionTier::AllowedSigned),
-            "allowed",
-        );
-        assert_eq!(value["actor"], "session-7");
-        assert_eq!(value["extension_id"], "ext-1");
-        assert_eq!(value["prev_tier"], "quarantined");
-        assert_eq!(value["next_tier"], "allowed_signed");
-        assert_eq!(value["decision"], "allowed");
-        assert_eq!(value["cmd_id"], "cmd-42");
-        let ts = value["ts"].as_str().expect("ts must be a string");
-        assert!(ts.len() >= 20, "ts must be RFC3339-ish, got {ts}");
-        // Sessionless callers fall back to "anonymous".
+        )
+        .expect("build ok");
+        assert_eq!(value["event"], "extensions.update_trust.allowed");
+        assert_eq!(value["actor"], "user");
+        assert_eq!(value["severity"], "info");
+        assert_eq!(value["session_id"], "session-7");
+        assert_eq!(value["command_id"], "cmd-42");
+        assert_eq!(value["extensions.extension_id"], "ext-1");
+        assert_eq!(value["extensions.decision"], "allowed");
+        assert_eq!(value["extensions.prev_tier"], "quarantined");
+        assert_eq!(value["extensions.next_tier"], "allowed_signed");
+        // Sessionless callers fall back to system actor + null session_id.
         let cmd2 = fake_cmd(json!({}));
-        let value = build_update_trust_audit(&cmd2, "ext-1", None, None, "denied");
-        assert_eq!(value["actor"], "anonymous");
-        assert!(value["prev_tier"].is_null());
-        assert!(value["next_tier"].is_null());
+        let value = build_update_trust_entry(
+            &cmd2,
+            UpdateOutcome::Denied,
+            "extensions.permission_denied",
+            "ext-1",
+            None,
+            None,
+        )
+        .expect("build ok");
+        assert_eq!(value["event"], "extensions.update_trust.denied");
+        assert_eq!(value["actor"], "system");
+        assert_eq!(value["severity"], "warning");
+        assert!(value["session_id"].is_null());
+        assert_eq!(value["code"], "extensions.permission_denied");
+        assert_eq!(value["extensions.decision"], "denied");
+        assert!(value.get("extensions.prev_tier").is_none());
+        assert!(value.get("extensions.next_tier").is_none());
     }
 
     #[test]
     fn extensions_update_trust_revoked_to_allowed_requires_approval() {
-        // Auto-promoting a revoked extension back to allowed_* without
-        // two-party review is the silent-rehabilitation vector the
-        // auditor flagged. Reject at the pure layer; require a manual
-        // config edit (or, in a future slice, an approval queue).
         let mut cfg = cfg_with(vec![entry(
             "evil",
             ExtensionTier::Revoked,

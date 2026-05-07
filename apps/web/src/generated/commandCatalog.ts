@@ -45,7 +45,10 @@ export type CommandId =
   | 'context.attach_files'
   | 'context.mention_search'
   | 'continuous.write_config'
+  | 'extensions.approve_promotion'
   | 'extensions.list'
+  | 'extensions.list_approvals'
+  | 'extensions.request_promotion'
   | 'extensions.update_trust'
   | 'gate.evaluate'
   | 'gate.override'
@@ -71,6 +74,7 @@ export type CommandId =
   | 'overlay.dismiss_all'
   | 'overlay.open'
   | 'palette.invoke_action'
+  | 'perf.latest_run'
   | 'plan.approve'
   | 'plan.edit'
   | 'plan.open'
@@ -139,8 +143,11 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'context.attach_files', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.read', ui: Object.freeze({ gate: 'disabled', reason: "File attach respects project-root/profile policy; not wired." }) }),
   Object.freeze({ id: 'context.mention_search', status: 'not_wired', scope: 'session', sideEffect: 'read_only', summary: "Mention search is held until local indexes are wired." }),
   Object.freeze({ id: 'continuous.write_config', status: 'not_wired', scope: 'sessionless', sideEffect: 'state', ui: Object.freeze({ gate: 'disabled', reason: "Continuous config write is held until validate+rollback exist." }) }),
+  Object.freeze({ id: 'extensions.approve_promotion', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Slice" }),
   Object.freeze({ id: 'extensions.list', status: 'implemented', scope: 'sessionless', sideEffect: 'read_only', summary: "List declared extensions with their enforced trust tier." }),
-  Object.freeze({ id: 'extensions.update_trust', status: 'implemented', scope: 'sessionless', sideEffect: 'state', summary: "Mutate the trust tier of a declared extension and persist to disk." }),
+  Object.freeze({ id: 'extensions.list_approvals', status: 'implemented', scope: 'session', sideEffect: 'read_only', summary: "Slice" }),
+  Object.freeze({ id: 'extensions.request_promotion', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Slice" }),
+  Object.freeze({ id: 'extensions.update_trust', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Mutate the trust tier of a declared extension and persist to disk. Session-bound; profile-layer enforces tool 'extensions.update_trust' (Slice" }),
   Object.freeze({ id: 'gate.evaluate', status: 'not_wired', scope: 'session', sideEffect: 'read_only' }),
   Object.freeze({ id: 'gate.override', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.override', ui: Object.freeze({ gate: 'disabled', reason: "Gate override requires reason+expiry+audit; not wired." }) }),
   Object.freeze({ id: 'gate.revoke_override', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.override', ui: Object.freeze({ gate: 'disabled' }) }),
@@ -165,6 +172,7 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'overlay.dismiss_all', status: 'frontend_owned', scope: 'session', sideEffect: 'none' }),
   Object.freeze({ id: 'overlay.open', status: 'frontend_owned', scope: 'session', sideEffect: 'none' }),
   Object.freeze({ id: 'palette.invoke_action', status: 'not_wired', scope: 'session', sideEffect: 'state', summary: "Generic palette invoke must map to a concrete command before execution.", ui: Object.freeze({ gate: 'disabled', reason: "Palette actions must be classified before they execute." }) }),
+  Object.freeze({ id: 'perf.latest_run', status: 'implemented', scope: 'sessionless', sideEffect: 'read_only', summary: "Slice" }),
   Object.freeze({ id: 'plan.approve', status: 'not_wired', scope: 'session', sideEffect: 'state', ui: Object.freeze({ gate: 'disabled' }) }),
   Object.freeze({ id: 'plan.edit', status: 'not_wired', scope: 'session', sideEffect: 'state', ui: Object.freeze({ gate: 'disabled', reason: "Plan editing requires bridge plan state; not wired." }) }),
   Object.freeze({ id: 'plan.open', status: 'frontend_owned', scope: 'session', sideEffect: 'none' }),

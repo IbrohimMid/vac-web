@@ -20,7 +20,7 @@ pub struct EventEntry {
 }
 
 #[rustfmt::skip]
-pub const EVENT_CATALOG: [EventEntry; 49] = [
+pub const EVENT_CATALOG: [EventEntry; 57] = [
     EventEntry { id: "activity.appended", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_received", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_rejected", status: EventStatus::Implemented },
@@ -36,13 +36,21 @@ pub const EVENT_CATALOG: [EventEntry; 49] = [
     EventEntry { id: "assessment.sweep.started", status: EventStatus::Implemented },
     EventEntry { id: "assessment.worker_output_rejected", status: EventStatus::Implemented },
     EventEntry { id: "changeset.updated", status: EventStatus::LegacyMockOnly },
+    EventEntry { id: "extensions.approvals_list_response", status: EventStatus::Implemented },
     EventEntry { id: "extensions.list_response", status: EventStatus::Implemented },
+    EventEntry { id: "extensions.promotion_approved", status: EventStatus::Implemented },
+    EventEntry { id: "extensions.promotion_denied", status: EventStatus::Implemented },
+    EventEntry { id: "extensions.promotion_requested", status: EventStatus::Implemented },
+    EventEntry { id: "extensions.update_trust.allowed", status: EventStatus::Implemented },
+    EventEntry { id: "extensions.update_trust.denied", status: EventStatus::Implemented },
+    EventEntry { id: "extensions.update_trust.save_failed", status: EventStatus::Implemented },
     EventEntry { id: "extensions.updated", status: EventStatus::Implemented },
     EventEntry { id: "handoff.completed", status: EventStatus::Implemented },
     EventEntry { id: "handoff.execution_progress", status: EventStatus::Implemented },
     EventEntry { id: "pairing.exchange", status: EventStatus::Implemented },
     EventEntry { id: "pairing.exchange_denied", status: EventStatus::Implemented },
     EventEntry { id: "pairing.mint", status: EventStatus::Implemented },
+    EventEntry { id: "perf.run_completed", status: EventStatus::Implemented },
     EventEntry { id: "release.deploy_progress", status: EventStatus::Planned },
     EventEntry { id: "release.notes_draft", status: EventStatus::Implemented },
     EventEntry { id: "release.post_deploy_observation", status: EventStatus::Planned },
