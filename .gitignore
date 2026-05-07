@@ -66,3 +66,6 @@ logs/
 .webrest.done
 .web-build.pid
 .web-build.log
+
+# MCP workbench (runtime job traces + worker state; not part of repo)
+.mcp-workbench/
