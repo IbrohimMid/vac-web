@@ -129,6 +129,7 @@ const ALLOWED_NAMESPACE_PREFIXES: &[&str] = &[
     "approval.",
     "agent.",
     "session.",
+    "extensions.",
 ];
 
 /// Required + optional keys are reserved at the top level. Namespaced

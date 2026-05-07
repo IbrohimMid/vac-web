@@ -12,7 +12,7 @@
 import { readFileSync, existsSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import YAML from "yaml"
+import yaml from "js-yaml";
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, "..")
@@ -39,7 +39,7 @@ function main() {
 	const raw = readFileSync(CONFIG_PATH, "utf8")
 	let doc
 	try {
-		doc = YAML.parse(raw)
+		doc = yaml.load(raw)
 	} catch (e) {
 		fail(`yaml parse error: ${e.message}`)
 	}

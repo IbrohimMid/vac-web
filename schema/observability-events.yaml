@@ -65,6 +65,7 @@ allowed_namespace_prefixes:
   - approval.
   - agent.
   - session.
+  - extensions.
 
 # Health states reported by durable subsystems.
 health_states:
