@@ -54,6 +54,11 @@
 | `connector.unavailable` | Connector disconnected or unhealthy |
 | `connector.rate_limited` | Backoff required |
 | `evidence.stale_hard_expire` | Cannot proceed with stale hard-expire evidence |
+| `extensions.permission_denied` | **Audit hardening 2026-05-06** — `extensions.update_trust` was denied because the admin gate is not configured (`VAC_EXTENSIONS_ADMIN` unset), the caller did not supply `admin_token`, the token did not match, or the requested transition is forbidden (e.g. `revoked` → `allowed_*`). |
+| `extensions.unknown_id` | **Audit hardening 2026-05-06** — `extensions.update_trust` referenced an extension id that is not registered in `config/extension-trust.yaml`. Auto-insert was removed; add the entry to the YAML file first. |
+| `extensions.bad_payload` | `extensions.update_trust` payload missing `extension_id` or has an invalid `tier`. |
+| `extensions.config_load_failed` | Bridge could not read `config/extension-trust.yaml`. |
+| `extensions.config_save_failed` | Bridge could not persist `config/extension-trust.yaml` after applying an update. |
 | `agent.not_registered` | **Stage X.4** — `session.create` payload `agent_id` does not match any agent in the runtime registry |
 | `agent.disabled` | **Stage X.4** — selected `agent_id` exists but is `enabled = false` |
 | `agent.kind_not_allowed` | **Stage X.2** — resolved agent kind is not in the profile's `allowed_agent_kinds` list (default-deny) |
@@ -226,6 +231,15 @@ Authentication: JWT in `Sec-WebSocket-Protocol` header (or first frame) — see 
 | `connector.capabilities` | `{ id }` |
 | `connector.health` | `{ id }` |
 
+### 3.17 Extension
+
+`extensions.list` and `extensions.update_trust` are **sessionless** commands (`session_id` field is empty); they target the bridge-level extension trust config rather than a per-session profile. `extensions.update_trust` mutates `config/extension-trust.yaml` and is **gated by an operator-managed admin token** (audit hardening 2026-05-06).
+
+| Command | Payload | Notes |
+|---|---|---|
+| `extensions.list` | `{}` | Sessionless. Read-only. Returns `extensions.list_response` event with the trust config + per-entry runtime decision. |
+| `extensions.update_trust` | `{ extension_id, tier, admin_token? }` | Sessionless. **State-mutating.** `tier` ∈ `allowed_bundled` \| `allowed_signed` \| `quarantined` \| `revoked`. **Auth:** the bridge env var `VAC_EXTENSIONS_ADMIN` must be set to a non-empty secret; the caller MUST echo it as `admin_token`. With env unset, every call returns `extensions.permission_denied`. **No auto-insert:** unknown `extension_id` returns `extensions.unknown_id`; add the entry to `config/extension-trust.yaml` first. **Restricted transitions:** `revoked` → `allowed_bundled` and `revoked` → `allowed_signed` are rejected with `extensions.permission_denied` (require manual config edit / future two-party approval); `revoked` → `quarantined` is allowed as a cleanup path. Every accepted or denied call writes a structured audit record to subsystem `extensions` with `actor` / `extension_id` / `prev_tier` / `next_tier` / `decision` / `ts` / `cmd_id`. On success, emits `extensions.updated`. Implemented at `apps/local-bridge/src/extensions/handlers.rs`. |
+
 ---
 
 ## 4. Event catalog
@@ -342,6 +356,13 @@ Authentication: JWT in `Sec-WebSocket-Protocol` header (or first frame) — see 
 | `connector.disconnected` | `{ id }` |
 | `connector.health` | `{ id, ok, latencyMs }` |
 | `connector.rate_limited` | `{ id, retryAfterMs }` |
+
+### 4.14 Extension
+
+| Event | Payload |
+|---|---|
+| `extensions.list_response` | `{ version, allow_unsigned, publishers[], entries[] }` — `entries[]` items are `{ id, tier, source, publisher, decision }` where `decision` is the live runtime trust decision (`allowed_bundled` \| `allowed_signed` \| `quarantined` \| `revoked`) recomputed by `enforce_extension_trust`. |
+| `extensions.updated` | `{ entry: { id, tier, source, publisher, decision } }` — emitted after a successful `extensions.update_trust` mutation. |
 
 ---
 

@@ -45,8 +45,12 @@ The full design lives in `docs/extension-trust-model.md`.
 
 ## References
 
-- `docs/extension-trust-model.md` — full design.
+- `docs/extension-trust-model.md` — full design (see §9 Runtime API for the handler contract added by audit hardening 2026-05-06).
 - `docs/extension-boundaries.md` — runtime boundary doc this trust model layers onto.
 - `docs/plans/wiring/47-extension-plugin-boundaries.md` — parent slice.
 - `docs/plans/wiring/43-security-supply-chain.md` — supply-chain hygiene.
+- `apps/local-bridge/src/extensions/handlers.rs` — Phase 3 runtime handler implementation (`extensions.list`, `extensions.update_trust`).
+- `apps/local-bridge/src/extensions/admin_gate.rs` — admin-token gate for the sessionless `extensions.update_trust` command.
+- `docs/protocol.md` §3.17 / §4.14 — wire shapes for the extensions command + event catalog.
+- `docs/red-team-test-plan.md` §3.13 — adversarial coverage for the trust handler.
 - [Sigstore](https://www.sigstore.dev/), [SLSA](https://slsa.dev/), [in-toto](https://in-toto.io/) — referenced ecosystems.

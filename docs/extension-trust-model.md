@@ -112,9 +112,32 @@ Operator UX (cockpit-side, slice 47 Phase 4):
 2. How are publisher key rotations handled? (Initial design: add new fingerprint, leave old as `tier: verified` until `valid_until` expires.)
 3. Should there be an operator "panic-revoke-all-community" command? (Probably yes; tracked as Phase 4 follow-up.)
 
+## 9. Runtime API
+
+Phase 3 (audit hardening 2026-05-06) wires the runtime gate behind two sessionless commands handled at `apps/local-bridge/src/extensions/handlers.rs`. See `docs/protocol.md` §3.17 / §4.14 for the wire shapes.
+
+### `extensions.list`
+
+Read-only. Loads `config/extension-trust.yaml`, computes `enforce_extension_trust` for each entry, and emits `extensions.list_response` with the live decision per entry. Cockpit Settings → Extensions consumes this to render the list view described in §5.
+
+### `extensions.update_trust`
+
+State-mutating. Updates a single entry's `tier` in `config/extension-trust.yaml`. Defense-in-depth invariants enforced at the handler layer:
+
+- **Admin gate** (`apps/local-bridge/src/extensions/admin_gate.rs`): the bridge env var `VAC_EXTENSIONS_ADMIN` must be set to a non-empty secret; the command payload must echo it as `admin_token`. Default-deny — leaving the env unset disables the command for all callers. This is the substitute for session-bound profile-class gating until `extensions.update_trust` becomes session-bound (tracked as a future slice).
+- **No auto-insert.** Unknown `extension_id` values surface as `extensions.unknown_id`; the YAML is left untouched. Operators must add new extensions to the config file out-of-band.
+- **Restricted transitions.** `revoked` → `allowed_bundled` / `revoked` → `allowed_signed` are rejected with `extensions.permission_denied`. Promoting a revoked extension requires a manual config edit (and, in a future slice, two-party approval). The lateral `revoked` → `quarantined` transition is permitted as a cleanup path.
+- **Structured audit.** Every call (accepted or denied) writes a record to subsystem `extensions` with the fields `actor` / `extension_id` / `prev_tier` / `next_tier` / `decision` / `ts` / `cmd_id`. Denials use `AuditSeverity::Warn`; persistence failures use `Error`; success uses `Info`.
+
+The pure decision logic lives in `apply_update_trust` (no I/O, no env access) so red-team and unit tests can exercise it without booting the bridge. Acceptance tests cover all four invariants (`extensions_update_trust_rejects_unknown_id_in_strict_mode`, `extensions_update_trust_rejects_unauthorized_profile`, `extensions_update_trust_emits_audit_record`, `extensions_update_trust_revoked_to_allowed_requires_approval`).
+
+Follow-up work tracked under §6 Phase 4 (Cockpit UX): replace the env-var admin gate with proper session-bound profile-class enforcement once `extensions.update_trust` is migrated to a session-bound command, and add the two-party approval flow for `revoked` → `allowed_*` promotions.
+
 ## References
 
 - `docs/extension-boundaries.md` — runtime boundaries this trust model layers on top of.
+- `apps/local-bridge/src/extensions/handlers.rs` — runtime handlers for `extensions.list` / `extensions.update_trust`.
+- `apps/local-bridge/src/extensions/admin_gate.rs` — admin-token gate for sessionless mutations.
 - `docs/plans/wiring/47-extension-plugin-boundaries.md` — the parent slice.
 - `docs/plans/wiring/43-security-supply-chain.md` — supply-chain hygiene that signing inherits from.
 - `docs/plans/wiring/26-agent-registry-mcp.md` — first concrete consumer (MCP server registry).

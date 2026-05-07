@@ -150,6 +150,16 @@ We do not trust agent discipline. We do not trust bridge alone. We do not trust 
 | 66 | Malicious OAuth redirect | state parameter mismatch → bridge rejects |
 | 67 | Rate limit evasion (many parallel calls) | adapter rate limiter enforces in-process |
 
+### 3.13 Extension trust handler
+
+Added by audit hardening 2026-05-06 (BLOCKER-1 on commit `0dca68f`). Targets `extensions.update_trust` at `apps/local-bridge/src/extensions/handlers.rs`. Pure `apply_update_trust` and `admin_gate::check` are exercised by Rust unit tests; integration cases below cover the wire path.
+
+| # | Attack | Layer(s) that MUST deny | Audit entry expected |
+|---|---|---|---|
+| 68 | Unauthenticated client sends `extensions.update_trust { extension_id: "vac.review-tab", tier: "allowed_signed" }` to a bridge with `VAC_EXTENSIONS_ADMIN` unset | bridge admin gate | `extensions` subsystem, `decision: "denied"`, `next_tier: "allowed_signed"`, severity `warn`, ack code `extensions.permission_denied` |
+| 69 | Client sends `extensions.update_trust { extension_id: "vac.attacker-ext", tier: "allowed_signed", admin_token: "<correct>" }` for an `extension_id` that is not in `config/extension-trust.yaml` (silent registration vector) | bridge handler (`apply_update_trust`) | `extensions` subsystem, `decision: "denied"`, `prev_tier: null`, severity `warn`, ack code `extensions.unknown_id`; YAML untouched |
+| 70 | Client sends `extensions.update_trust { extension_id: "<previously-revoked>", tier: "allowed_signed", admin_token: "<correct>" }` to silently rehabilitate a revoked extension (TOCTOU race / unauthorized profile class promotion) | bridge handler (`apply_update_trust`) | `extensions` subsystem, `decision: "denied"`, `prev_tier: "revoked"`, `next_tier: "allowed_signed"`, severity `warn`, ack code `extensions.permission_denied`; YAML untouched. Cleanup transition `revoked` → `quarantined` MUST still succeed under the same auth context. |
+
 ---
 
 ## 4. Fuzzing
