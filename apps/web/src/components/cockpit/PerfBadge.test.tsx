@@ -2,24 +2,71 @@
 
 import { cleanup, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TransportHandle } from '../../transport';
+import { usePerf } from '../../stores/perf';
 import { PerfBadge } from './PerfBadge';
 
-describe('PerfBadge', () => {
-  afterEach(() => cleanup());
+function mockTransport(send: TransportHandle['send']): TransportHandle {
+  return {
+    send,
+    on: () => () => undefined,
+    close: () => undefined,
+  };
+}
 
-  it('renders default ok state with perf: ok label', () => {
+describe('PerfBadge', () => {
+  beforeEach(() => {
+    usePerf.getState().clear();
+  });
+  afterEach(() => {
+    cleanup();
+    usePerf.getState().clear();
+  });
+
+  it('renders unknown placeholder when no snapshot has landed', () => {
+    render(<PerfBadge />);
+    const badge = screen.getByTestId('perf-badge');
+    expect(badge).toHaveTextContent('perf:');
+    expect(badge).toHaveAttribute('data-perf-state', 'ok');
+    expect(badge).toHaveAttribute('data-perf-status', 'unknown');
+    expect(badge).toHaveAttribute('role', 'status');
+  });
+
+  it('reflects ok status from store', () => {
+    usePerf.getState().setSnapshot({
+      status: 'ok',
+      latest: null,
+      regressions: [],
+    });
     render(<PerfBadge />);
     const badge = screen.getByTestId('perf-badge');
     expect(badge).toHaveTextContent('perf: ok');
     expect(badge).toHaveAttribute('data-perf-state', 'ok');
-    expect(badge).toHaveAttribute('role', 'status');
+    expect(badge).toHaveAttribute('data-perf-status', 'ok');
   });
 
-  it('honors state and custom label props', () => {
-    render(<PerfBadge state='warn' label='perf drift' />);
+  it('reflects warn status from store', () => {
+    usePerf.getState().setSnapshot({
+      status: 'warn',
+      latest: null,
+      regressions: [],
+    });
+    render(<PerfBadge />);
     const badge = screen.getByTestId('perf-badge');
-    expect(badge).toHaveTextContent('perf drift');
+    expect(badge).toHaveTextContent('perf: warn');
     expect(badge).toHaveAttribute('data-perf-state', 'warn');
+  });
+
+  it('dispatches perf.latest_run on mount when transport is provided and requestStatus is idle', () => {
+    const send = vi.fn(async () => ({ ackOf: 'x', ok: true }));
+    const transport = mockTransport(send as unknown as TransportHandle['send']);
+    render(<PerfBadge transport={transport} />);
+    expect(send).toHaveBeenCalledWith('', 'perf.latest_run', {});
+  });
+
+  it('does not dispatch when transport is null', () => {
+    render(<PerfBadge transport={null} />);
+    expect(screen.getByTestId('perf-badge')).toBeInTheDocument();
   });
 });

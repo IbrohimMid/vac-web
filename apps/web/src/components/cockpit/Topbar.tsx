@@ -340,7 +340,7 @@ export function Topbar({ onCmdK, onTweaks, onSettings, transport }: Props) {
           <Icon name="shield" size={15} />
         </button>
       )}
-      <PerfBadge />
+      <PerfBadge transport={transport} />
       <button
         className="icon-btn"
         onClick={onTweaks}

@@ -13,6 +13,7 @@ pub mod generated;
 pub mod handoff;
 pub mod notify;
 pub mod observability;
+pub mod perf;
 pub mod profile_layer;
 pub mod server;
 pub mod session;

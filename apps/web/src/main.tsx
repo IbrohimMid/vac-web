@@ -45,6 +45,7 @@ import { registerAgentSessionHandlers } from './domain/agentSession/handlers';
 import { registerToolActivityHandlers } from './domain/toolActivity/handlers';
 import { registerWorkflowHandlers } from './domain/workflow/handlers';
 import { registerExtensionsHandlers } from './domain/extensions/handlers';
+import { registerPerfHandlers } from './domain/perf/handlers';
 import { registerAssessmentHandlers } from './domain/assessment/handlers';
 import { registerCapabilitiesHandlers } from './domain/capabilities/handlers';
 import { registerConnectorHandlers } from './domain/connectors/handlers';
@@ -165,6 +166,7 @@ function App() {
         offs.push(registerToolActivityHandlers(t));
         offs.push(registerWorkflowHandlers(t));
         offs.push(registerExtensionsHandlers(t));
+        offs.push(registerPerfHandlers(t));
         setTransport(t);
       } catch (e) {
         setError(String(e));
