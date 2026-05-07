@@ -34,6 +34,7 @@ pub fn try_measure(subsystem: &str) -> anyhow::Result<Option<Measurement>> {
     match subsystem {
         "persisted_event_write" => Ok(Some(persisted_event_write::measure()?)),
         "command_manifest_refresh" => Ok(Some(command_manifest_refresh::measure()?)),
+        "command_ack" => Ok(Some(command_ack::measure()?)),
         // Other drivers still ship as stubs; fall back to synthetic.
         _ => Ok(None),
     }
