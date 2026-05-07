@@ -39,10 +39,11 @@ futures = { workspace = true }
 tokio-tungstenite = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
+fs2 = { workspace = true }
+tempfile = { workspace = true }
 bridge-core = { path = "../../packages/bridge-core" }
 profile-core = { path = "../../packages/profile-core" }
 protocol-rs = { path = "../../packages/protocol-rs" }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 reqwest = { workspace = true }
