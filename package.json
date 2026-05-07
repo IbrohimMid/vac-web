@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "End-to-end software delivery cockpit for VAC",
-  "license": "MIT OR Apache-2.0",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=20.10.0",

@@ -136,4 +136,4 @@ See [`CONTRIBUTING.md` § Testing](./CONTRIBUTING.md#testing) for the recommende
 
 ## License
 
-Dual-licensed under [`MIT`](./LICENSE) or Apache-2.0, at your option.
+Licensed under the [Apache License, Version 2.0](./LICENSE).
