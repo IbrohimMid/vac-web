@@ -1,8 +1,9 @@
 [features]
 # When enabled, replaces Phase 1 synthetic measurements with real per-subsystem
-# drivers under `src/scenarios/`. Off by default until Phase 2 lands and we have
-# 2 weeks of real baseline data.
-real_scenarios = []
+# drivers under `src/scenarios/`. Off by default; enable locally with
+# `--features real_scenarios` to capture real measurements. Drivers land
+# incrementally — see `src/scenarios/mod.rs` for the current dispatch table.
+real_scenarios = ["dep:local-bridge", "dep:tempfile", "dep:chrono"]
 
 [package]
 name = "perf"
@@ -23,3 +24,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+
+# Real-scenario drivers (`--features real_scenarios`). Optional so default
+# builds stay tiny and CI keeps the synthetic contract until baseline data
+# stabilises.
+local-bridge = { path = "../../apps/local-bridge", optional = true }
+tempfile = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }

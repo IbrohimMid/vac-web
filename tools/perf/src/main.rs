@@ -1,17 +1,24 @@
 //! VAC backend perf harness — slice 41 follow-up (R6, 2026-05-06).
 //!
-//! Phase 1 SCOPE: produce a JSON measurement document with the same shape
-//! `scripts/check-slo-measurements.mjs` expects to compare against
-//! `config/slo-budgets.yaml`. Current measurements are SYNTHETIC (deterministic
-//! placeholder values intentionally below budgets) so the contract end-to-end
-//! works in CI and locally. Real measurement implementations land in Phase 2
-//! (per-subsystem drivers in `src/scenarios/`).
+//! Default mode (no features): produce a JSON measurement document with the
+//! shape `scripts/check-slo-measurements.mjs` expects to compare against
+//! `config/slo-budgets.yaml`. Measurements are SYNTHETIC (deterministic
+//! placeholder values intentionally below budgets) so the contract works
+//! end-to-end in CI and locally.
+//!
+//! `--features real_scenarios`: per-subsystem real drivers under
+//! `src/scenarios/` are dispatched via [`scenarios::try_measure`]. Drivers
+//! land incrementally — any subsystem without a real driver yet keeps its
+//! synthetic placeholder. The `phase` field in the report is bumped to
+//! `phase_2_partial` whenever at least one real driver fires so consumers
+//! can tell the run was hybrid.
 //!
 //! Acceptance from `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md`:
-//! - `cargo run -p perf -- --duration 60 --output perf-results.json` runs locally
-//!   and produces valid JSON.
-//! - `node scripts/check-slo-measurements.mjs perf-results.json` exits 0 when all
-//!   p95s are within budget; exits 1 with diagnostic when any exceeds (strict mode).
+//! - `cargo run -p perf -- --duration 60 --output perf-results.json` runs
+//!   locally and produces valid JSON.
+//! - `node scripts/check-slo-measurements.mjs perf-results.json` exits 0 when
+//!   all p95s are within budget; exits 1 with diagnostic when any exceeds
+//!   (strict mode).
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,8 +26,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-// Phase 2 real per-subsystem drivers. Gated behind the `real_scenarios` feature
-// so Phase 1 synthetic measurements remain the default until Phase 2 lands.
+// Phase 2 real per-subsystem drivers. Gated behind the `real_scenarios`
+// feature so Phase 1 synthetic measurements remain the default until each
+// driver has landed and stabilised.
 #[cfg(feature = "real_scenarios")]
 pub mod scenarios;
 
@@ -41,12 +49,12 @@ struct Args {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Measurement {
-    subsystem: String,
-    p50_ms: f64,
-    p95_ms: f64,
-    p99_ms: f64,
-    sample_count: u64,
+pub struct Measurement {
+    pub subsystem: String,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub sample_count: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,14 +68,16 @@ struct PerfReport {
     measurements: Vec<Measurement>,
 }
 
-fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+const SYNTHETIC_PHASE: &str = "phase_1_synthetic";
+const SYNTHETIC_NOTE: &str = "Phase 1 ships synthetic deterministic measurements. Phase 2 replaces these with real per-subsystem drivers under tools/perf/src/scenarios/.";
 
-    // Phase 1 synthetic measurements. Each value is deterministically below the
-    // corresponding budget in `config/slo-budgets.yaml` to demonstrate a passing
-    // contract end-to-end. Phase 2 replaces these with real per-subsystem drivers
-    // under `src/scenarios/`.
-    let measurements = vec![
+#[cfg(feature = "real_scenarios")]
+const HYBRID_PHASE: &str = "phase_2_partial";
+#[cfg(feature = "real_scenarios")]
+const HYBRID_NOTE: &str = "Phase 2 partial: real drivers replace synthetic placeholders for the subsystems registered in tools/perf/src/scenarios/mod.rs::try_measure; remaining rows stay synthetic until their drivers land.";
+
+fn synthetic_measurements() -> Vec<Measurement> {
+    vec![
         Measurement {
             subsystem: "command_ack".to_string(),
             p50_ms: 80.0,
@@ -103,7 +113,33 @@ fn main() -> anyhow::Result<()> {
             p99_ms: 240.0,
             sample_count: 1_000,
         },
-    ];
+    ]
+}
+
+fn build_measurements() -> anyhow::Result<(Vec<Measurement>, &'static str, &'static str)> {
+    #[allow(unused_mut)]
+    let mut measurements = synthetic_measurements();
+
+    #[cfg(feature = "real_scenarios")]
+    {
+        let mut any_real = false;
+        for m in measurements.iter_mut() {
+            if let Some(real) = scenarios::try_measure(&m.subsystem)? {
+                *m = real;
+                any_real = true;
+            }
+        }
+        if any_real {
+            return Ok((measurements, HYBRID_PHASE, HYBRID_NOTE));
+        }
+    }
+
+    Ok((measurements, SYNTHETIC_PHASE, SYNTHETIC_NOTE))
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let (measurements, phase, note) = build_measurements()?;
 
     let captured_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -115,8 +151,8 @@ fn main() -> anyhow::Result<()> {
         captured_at_unix_seconds: captured_at,
         duration_seconds: args.duration,
         measurement_only: args.measurement_only,
-        phase: "phase_1_synthetic",
-        note: "Phase 1 ships synthetic deterministic measurements. Phase 2 replaces these with real per-subsystem drivers under tools/perf/src/scenarios/.",
+        phase,
+        note,
         measurements,
     };
 
@@ -124,9 +160,10 @@ fn main() -> anyhow::Result<()> {
     std::fs::write(&args.output, json)?;
 
     println!(
-        "perf: wrote {} measurements to {} (phase=phase_1_synthetic, duration={}s)",
+        "perf: wrote {} measurements to {} (phase={}, duration={}s)",
         report.measurements.len(),
         args.output.display(),
+        phase,
         args.duration
     );
 
