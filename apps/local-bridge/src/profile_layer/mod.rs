@@ -35,6 +35,10 @@ fn required_tool_for(cmd: &str, payload: &serde_json::Value) -> Option<String> {
             .get("action")
             .and_then(|v| v.as_str())
             .map(String::from),
+        "extensions.update_trust" => Some("extensions.update_trust".into()),
+        "extensions.request_promotion" => Some("extensions.request_promotion".into()),
+        "extensions.approve_promotion" => Some("extensions.approve_promotion".into()),
+        "extensions.list_approvals" => Some("extensions.list_approvals".into()),
         "handoff.dispatch_local" | "handoff.dispatch_web_cli" => Some("handoff.dispatch".into()),
         "gate.override" | "gate.revoke_override" => Some("gate.override".into()),
         _ => None,

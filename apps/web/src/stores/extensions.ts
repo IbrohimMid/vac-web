@@ -3,9 +3,13 @@
 // Driven by extensions.list_response / extensions.updated frames
 // (see apps/web/src/domain/extensions/handlers.ts). UI calls
 // requestList / updateTrust which dispatch ClientCommand frames
-// via the transport. The list/update_trust commands are
-// sessionless (scope: 'sessionless' in the catalog), so we send
-// the empty string for session id.
+// via the transport.
+//
+// Slice #4 (2026-05-07): extensions.update_trust is now scope: session
+// and is gated by the profile-layer (`enforce_action`). The session
+// profile must list `extensions.update_trust` in its `tool_allow`. We
+// read the active sessionId from useSession when dispatching
+// update_trust; extensions.list remains sessionless.
 
 import { create } from 'zustand';
 import type {
@@ -14,6 +18,7 @@ import type {
   ExtensionsListPayload,
 } from '../domain/extensions/types';
 import type { TransportHandle } from '../transport';
+import { useSession } from './session';
 
 export type RequestStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -123,7 +128,12 @@ export const useExtensions = create<ExtensionsSlice>((set, get) => ({
       get().setStatus('error', 'no transport');
       return false;
     }
-    const ack = await transport.send('', 'extensions.update_trust', {
+    const sessionId = useSession.getState().sessionId;
+    if (!sessionId) {
+      get().setStatus('error', 'no active session');
+      return false;
+    }
+    const ack = await transport.send(sessionId, 'extensions.update_trust', {
       extension_id: extensionId,
       tier,
     });

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TransportHandle } from '../transport';
 import { useExtensions } from './extensions';
+import { useSession } from './session';
 
 function reset() {
   useExtensions.getState().clear();
+  useSession.getState().clear();
 }
 
 function mockTransport(send: TransportHandle['send']): TransportHandle {
@@ -75,15 +77,26 @@ describe('extensions store', () => {
     expect(s.order).toEqual(['ext-a']);
   });
 
-  it('updateTrust dispatches extensions.update_trust on the transport', async () => {
+  it('updateTrust dispatches extensions.update_trust with active sessionId', async () => {
+    useSession.getState().setSession('sess-123', 'executor.release@1.0.0', '/tmp');
     const send = vi.fn(async () => ({ ackOf: 'cmd', ok: true }));
     const ok = await useExtensions
       .getState()
       .updateTrust(mockTransport(send), 'ext-x', 'revoked');
     expect(ok).toBe(true);
-    expect(send).toHaveBeenCalledWith('', 'extensions.update_trust', {
+    expect(send).toHaveBeenCalledWith('sess-123', 'extensions.update_trust', {
       extension_id: 'ext-x',
       tier: 'revoked',
     });
+  });
+
+  it('updateTrust fails fast when no active session', async () => {
+    const send = vi.fn(async () => ({ ackOf: 'cmd', ok: true }));
+    const ok = await useExtensions
+      .getState()
+      .updateTrust(mockTransport(send), 'ext-x', 'revoked');
+    expect(ok).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+    expect(useExtensions.getState().error).toBe('no active session');
   });
 });

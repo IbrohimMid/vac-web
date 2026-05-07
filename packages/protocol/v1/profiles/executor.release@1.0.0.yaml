@@ -24,6 +24,10 @@ tool_allow:
   - connector.read.*
   - connector.write.github
   - connector.write.notion
+  - extensions.update_trust
+  - extensions.request_promotion
+  - extensions.approve_promotion
+  - extensions.list_approvals
 
 tool_deny:
   - edit_file

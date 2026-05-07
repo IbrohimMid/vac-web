@@ -11,6 +11,6 @@
 //! The on-disk path is overridable via `VAC_EXTENSION_TRUST_PATH` env;
 //! default is `<cwd>/config/extension-trust.yaml`.
 
-pub mod admin_gate;
+pub mod approvals;
 pub mod handlers;
 pub mod store;
