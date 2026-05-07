@@ -35,6 +35,7 @@ pub fn try_measure(subsystem: &str) -> anyhow::Result<Option<Measurement>> {
         "persisted_event_write" => Ok(Some(persisted_event_write::measure()?)),
         "command_manifest_refresh" => Ok(Some(command_manifest_refresh::measure()?)),
         "command_ack" => Ok(Some(command_ack::measure()?)),
+        "websocket_event_delivery" => Ok(Some(websocket_event_delivery::measure()?)),
         // Other drivers still ship as stubs; fall back to synthetic.
         _ => Ok(None),
     }

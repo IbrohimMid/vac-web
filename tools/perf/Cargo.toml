@@ -3,7 +3,7 @@
 # drivers under `src/scenarios/`. Off by default; enable locally with
 # `--features real_scenarios` to capture real measurements. Drivers land
 # incrementally — see `src/scenarios/mod.rs` for the current dispatch table.
-real_scenarios = ["dep:local-bridge", "dep:tempfile", "dep:chrono"]
+real_scenarios = ["dep:local-bridge", "dep:tempfile", "dep:chrono", "dep:axum", "dep:tokio-tungstenite", "dep:futures"]
 
 [package]
 name = "perf"
@@ -31,3 +31,6 @@ anyhow = "1"
 local-bridge = { path = "../../apps/local-bridge", optional = true }
 tempfile = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
