@@ -28,6 +28,8 @@ apps/local-bridge/src/observability.rs: bridge.observability
 apps/local-bridge/src/server.rs: bridge.server
 apps/local-bridge/src/tunnel.rs: bridge.tunnel
 apps/local-bridge/src/capabilities.rs: bridge.capability_registry
+apps/local-bridge/src/extensions/mod.rs: bridge.extensions
+apps/local-bridge/src/perf.rs: bridge.perf
 
 # Exempt (not classified):
 #   apps/local-bridge/src/lib.rs       — module root
