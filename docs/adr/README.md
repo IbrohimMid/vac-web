@@ -21,3 +21,6 @@ ADR; they should still reference the relevant wiring slice in the PR.
 ## Index
 
 - [ADR-0001: Declarative control plane, runtime authority in Rust + TypeScript](0001-declarative-control-plane.md)
+- [ADR-0002: Observability namespace extension](0002-observability-namespace-extension.md)
+- [ADR-0003: Extension trust model — tier-based with sigstore + manifest allowlist](0003-extension-trust-model.md)
+- [ADR-0004: Extension trust mutation controls — session-bound admin gate + two-party promotion approval](0004-extension-trust-mutation-controls.md)
