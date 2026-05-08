@@ -33,6 +33,11 @@
     "pr:checklist": "node scripts/vac-pr-checklist.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,json,md,yaml,yml}\" --ignore-path .gitignore"
   },
+  "pnpm": {
+    "overrides": {
+      "html-encoding-sniffer": "^4.0.0"
+    }
+  },
   "devDependencies": {
     "prettier": "^3.3.3",
     "typescript": "^5.6.3",

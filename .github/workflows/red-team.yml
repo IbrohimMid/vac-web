@@ -14,6 +14,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Generate protocol code
         run: bash scripts/codegen.sh
+      - name: Build mock-engine binary
+        run: cargo build -p mock-engine
       - run: cargo test -p red-team --features redteam --no-fail-fast
       - name: Summary report
         if: always()
