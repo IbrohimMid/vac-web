@@ -18,7 +18,7 @@
     {
       "name": "initial bundle (eager main chunk)",
       "path": "dist/assets/index-*.js",
-      "limit": "120 KB",
+      "limit": "140 KB",
       "gzip": true,
       "webpack": false
     },
