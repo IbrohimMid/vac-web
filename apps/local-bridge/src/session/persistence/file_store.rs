@@ -168,7 +168,7 @@ impl SessionPersistence for FilePersistence {
             }
             out.push(meta);
         }
-        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        out.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
         if let Some(limit) = filter.limit {
             out.truncate(limit);
         }
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(only_a.len(), 2);
         assert!(only_a
             .iter()
-            .all(|m| m.project_root == PathBuf::from("/proj/a")));
+            .all(|m| m.project_root == Path::new("/proj/a")));
 
         let limited = store
             .list(&SessionHistoryFilter {

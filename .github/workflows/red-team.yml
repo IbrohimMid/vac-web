@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Generate protocol code
+        run: bash scripts/codegen.sh
       - run: cargo test -p red-team --features redteam --no-fail-fast
       - name: Summary report
         if: always()

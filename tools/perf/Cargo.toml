@@ -6,6 +6,7 @@
 real_scenarios = ["dep:local-bridge", "dep:tempfile", "dep:chrono", "dep:axum", "dep:tokio-tungstenite", "dep:futures"]
 
 [package]
+publish = false
 name = "perf"
 version.workspace = true
 edition.workspace = true

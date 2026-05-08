@@ -82,7 +82,7 @@ jobs:
       - name: Install cargo-cyclonedx
         run: cargo install --locked cargo-cyclonedx
       - name: Generate Rust SBOM
-        run: cargo cyclonedx --format json --output-pattern bom --target-in-filename
+        run: cargo cyclonedx --format json --target-in-filename
       - name: Generate Node SBOM
         run: pnpm dlx @cyclonedx/cdxgen@^10 -o sbom-node.cdx.json -p
       - name: Upload SBOM artifacts

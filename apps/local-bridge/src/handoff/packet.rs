@@ -16,17 +16,12 @@ pub fn canonical_signer_id(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PinPolicy {
+    #[default]
     Strict,
     Lenient,
-}
-
-impl Default for PinPolicy {
-    fn default() -> Self {
-        Self::Strict
-    }
 }
 
 impl PinPolicy {
@@ -185,9 +180,10 @@ pub fn execution_outcome_payload(outcome: &ExecutionOutcome) -> serde_json::Valu
     serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PacketStatus {
+    #[default]
     Draft,
     PendingApproval,
     Approved,
@@ -198,12 +194,6 @@ pub enum PacketStatus {
     Failed,
     Invalidated,
     Expired,
-}
-
-impl Default for PacketStatus {
-    fn default() -> Self {
-        Self::Draft
-    }
 }
 
 impl PacketStatus {

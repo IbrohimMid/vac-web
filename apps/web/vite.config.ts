@@ -8,6 +8,7 @@ export default defineConfig({
   // e2e suite so `pnpm -C apps/web test` (which is `vitest run`) does not
   // try to load specs that import @playwright/test.
   test: {
+    environment: 'happy-dom',
     exclude: ['node_modules', 'dist', 'tests/e2e/**'],
   },
   server: {

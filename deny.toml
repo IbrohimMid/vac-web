@@ -19,12 +19,16 @@ allow = [
   "Unicode-DFS-2016",
   "CC0-1.0",
   "MPL-2.0",
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Allow path-based deps in this workspace; they are private path crates
+# and Cargo treats path-only entries as wildcard versions.
+allow-wildcard-paths = true
 
 [advisories]
 version = 2

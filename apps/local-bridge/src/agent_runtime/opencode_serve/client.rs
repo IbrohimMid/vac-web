@@ -208,10 +208,8 @@ async fn open_get(
             let name = name.trim().to_ascii_lowercase();
             let value = value.trim();
             match name.as_str() {
-                "transfer-encoding" => {
-                    if value.eq_ignore_ascii_case("chunked") {
-                        chunked = true;
-                    }
+                "transfer-encoding" if value.eq_ignore_ascii_case("chunked") => {
+                    chunked = true;
                 }
                 "content-length" => {
                     content_length = value.parse().ok();
