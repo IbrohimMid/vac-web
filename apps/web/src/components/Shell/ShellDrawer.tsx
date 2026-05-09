@@ -54,15 +54,15 @@ export function ShellDrawer({ transport }: Props) {
 
     (async () => {
       const [{ Terminal }, { FitAddon }] = await Promise.all([
-        import('xterm'),
-        import('xterm-addon-fit'),
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
       ]);
       // CSS loaded via a standard <link> the first time — avoids ?inline query typing.
       if (!document.getElementById('xterm-css')) {
         const link = document.createElement('link');
         link.id = 'xterm-css';
         link.rel = 'stylesheet';
-        link.href = new URL('xterm/css/xterm.css', import.meta.url).href;
+        link.href = new URL('@xterm/xterm/css/xterm.css', import.meta.url).href;
         document.head.appendChild(link);
       }
       if (disposed || !hostRef.current) return;
