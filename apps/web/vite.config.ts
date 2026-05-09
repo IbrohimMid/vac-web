@@ -9,7 +9,7 @@ export default defineConfig({
   // try to load specs that import @playwright/test.
   test: {
     environment: 'happy-dom',
-    exclude: ['node_modules', 'dist', 'tests/e2e/**'],
+    exclude: ['node_modules', 'dist', 'tests/e2e/**', 'tests/perf/**'],
   },
   server: {
     port: 5173,

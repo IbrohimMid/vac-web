@@ -36,7 +36,9 @@ pub fn try_measure(subsystem: &str) -> anyhow::Result<Option<Measurement>> {
         "command_manifest_refresh" => Ok(Some(command_manifest_refresh::measure()?)),
         "command_ack" => Ok(Some(command_ack::measure()?)),
         "websocket_event_delivery" => Ok(Some(websocket_event_delivery::measure()?)),
-        // Other drivers still ship as stubs; fall back to synthetic.
+        "topbar_interaction" => Ok(Some(topbar_interaction::measure()?)),
+        // All Phase 2 drivers ship real now; unknown subsystems still fall
+        // back to synthetic so a new SLO entry can land before its driver.
         _ => Ok(None),
     }
 }

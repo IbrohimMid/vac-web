@@ -266,21 +266,21 @@ Sections 1–7 above scope **frontend** perf measurement (Playwright traces, Vit
 2. `node scripts/check-slo-measurements.mjs perf-results.json` compares each subsystem's p95 against `config/slo-budgets.yaml`.
 3. CI workflow `.github/workflows/perf.yml` runs the pipeline weekly (Mondays 04:00 UTC) and uploads `perf-results.json` as an artifact retained for 30 days.
 
-### Phase 1 (current) — synthetic measurements
+### Phase 1 — synthetic baseline (closed)
 
-The crate currently emits **deterministic synthetic measurements** that are below the SLO budgets. This intentionally validates the end-to-end contract (Rust crate → JSON → Node check script → CI upload) without yet implementing real per-subsystem drivers. The check script runs in `--measurement-only` mode (warn but exit 0).
+The crate originally emitted **deterministic synthetic measurements** below the SLO budgets to validate the end-to-end contract (Rust crate → JSON → Node check script → CI upload) without real per-subsystem drivers. Synthetic placeholders survive in `tools/perf/src/main.rs::synthetic_measurements()` as fallbacks for any subsystem that has not yet shipped a real driver. The check script still runs in `--measurement-only` mode (warn but exit 0) until F4 strict flip lands (date-locked until 2026-05-21).
 
-### Phase 2 (planned) — real per-subsystem drivers
+### Phase 2 — real per-subsystem drivers (landed 2026-05-09)
 
-Drivers under `tools/perf/src/scenarios/` will exercise each subsystem against a local-bridge instance:
+All five drivers under `tools/perf/src/scenarios/` now exercise their respective subsystems against real code paths. The CI perf workflow runs `cargo run -p perf --release --features real_scenarios` so the rolling baseline at `.perf-baseline/history.jsonl` captures real measurements on every cron run.
 
-- `command_ack.rs` — drive `WS::dispatch_command` with no-IO commands, measure ACK round-trip.
-- `websocket_event_delivery.rs` — emit synthetic events from translator, measure server→client delivery.
-- `persisted_event_write.rs` — invoke `audit::log_structured` + session persistence, measure fsync window.
-- `topbar_interaction.rs` — drive Topbar capability handlers, measure end-to-end latency.
-- `command_manifest_refresh.rs` — reload `command-manifest.yaml`, measure dispatcher cold-start.
+- `command_ack.rs` — drives `WS::dispatch_command` with no-IO commands; measures ACK round-trip.
+- `websocket_event_delivery.rs` — emits synthetic events from translator; measures server→client delivery.
+- `persisted_event_write.rs` — invokes `audit::log_structured` + session persistence; measures fsync window.
+- `command_manifest_refresh.rs` — reloads `command-manifest.yaml`; measures dispatcher cold-start.
+- `topbar_interaction.rs` — F2.5 (landed 2026-05-09 via [`plans/wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./plans/wiring/topbar-interaction-playwright-plan-2026-05-07.md)). Spawns the dedicated Playwright `perf` project (config: `apps/web/playwright.config.ts`; spec: `apps/web/tests/perf/topbar_interaction.spec.ts`) which boots `vite preview` + a `MockBridge`, performs 5 warmup iterations followed by 50 timed iterations bracketing `topbar-settings-button` click → `settings-overlay` visible (in-page `performance.now()` + `requestAnimationFrame` poll), and writes `{subsystem, samples_ms}` to the path passed via `VAC_PERF_OUTPUT`. The Rust driver converts ms→ns and reuses the shared `summarize()` helper. Budget: `topbar_interaction_p95_ms = 100` (`config/slo-budgets.yaml`).
 
-Phase 2 also flips the check script default from `--measurement-only` to `--strict` once a 2-week baseline establishes the CI-runner noise floor and an appropriate budget margin.
+The check script default flip from `--measurement-only` to `--strict` is gated on F4 (date-locked until 2026-05-21 per [`plans/f4-baseline-alarm-date-lock-2026-05-09.md`](./plans/f4-baseline-alarm-date-lock-2026-05-09.md)) — at least 14 days of rolling baseline history must accumulate before strict gating is safe.
 
 ### Cross-references
 

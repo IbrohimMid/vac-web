@@ -41,6 +41,16 @@ export default defineConfig({
 			name: 'chromium',
 			use: { ...devices['Desktop Chrome'] },
 		},
+		{
+			// F2.5 perf driver project — runs `tests/perf/*.spec.ts` only.
+			// Driven by `tools/perf/src/scenarios/topbar_interaction.rs`,
+			// which spawns `pnpm -F web exec playwright test --project=perf`
+			// and reads the JSON payload written via `VAC_PERF_OUTPUT`.
+			name: 'perf',
+			testDir: './tests/perf',
+			timeout: 180_000,
+			use: { ...devices['Desktop Chrome'] },
+		},
 	],
 	webServer: {
 		// Build first so we exercise the production bundle (matches what

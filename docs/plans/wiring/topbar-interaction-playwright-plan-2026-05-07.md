@@ -3,7 +3,7 @@ id: wiring.topbar-interaction-playwright-2026-05-07
 title: 'Topbar interaction Playwright driver plan (F2.5)'
 priority: P2
 area: perf-tooling
-status: planned  # last remaining real driver per post-r1-r6-followups-plan-2026-05-07 F2
+status: closed  # landed 2026-05-09 via branch f2-5/topbar-interaction-playwright-driver-2026-05-09
 owners:
   - tools
   - web
@@ -15,11 +15,18 @@ depends_on:
 
 # Topbar interaction Playwright driver plan (F2.5)
 
-**Status**: planned
+**Status**: closed (2026-05-09)
 **Created**: 2026-05-07
 **Estimated**: 6–10h focused single session
 **Predecessor**: `docs/plans/wiring/post-r1-r6-followups-plan-2026-05-07.md` (F2)
 **Budget**: `topbar_interaction_p95_ms = 100` (`config/slo-budgets.yaml`)
+
+> **Closeout 2026-05-09**: All four slices landed. Implementation diverges from the original plan in two minor ways, both better-aligned with the actual codebase:
+>
+> 1. **Settings overlay testid**: plan §4.1 step 4 referenced `[data-testid="settings-panel"]`; the actual testid in `apps/web/src/components/Settings/SettingsPage.tsx:39` is `settings-overlay`. Spec uses the actual testid.
+> 2. **Spec output shape**: plan §4.1 step 6 specified the spec emits `{subsystem, p95_ms, samples_n}` (pre-aggregated). Spec instead emits `{subsystem, samples_ms}` (raw per-iteration ms array) so the Rust driver can convert ms→ns and reuse the shared `summarize()` helper that the other four drivers already use; percentile computation stays in one place. Rust driver also uses the actual `pub fn measure() -> anyhow::Result<Measurement>` shape (matching the other drivers) rather than the plan §4.2 `pub fn run(samples: usize) -> anyhow::Result<crate::PerfSample>` signature, which referred to a type that does not exist in the codebase.
+>
+> Files landed: `apps/web/tests/perf/topbar_interaction.spec.ts` (new), `tools/perf/src/scenarios/topbar_interaction.rs` (replaces bail), `tools/perf/src/scenarios/mod.rs` (dispatch arm), `apps/web/playwright.config.ts` (perf project), `apps/web/package.json` (`e2e` scoped to chromium project, `perf:driver` script added), `.github/workflows/perf.yml` (Chromium cache + install + `--features real_scenarios`), `docs/perf-test-plan.md` (Phase 2 marked landed). F2 marked closed in [`post-r1-r6-followups-plan-2026-05-07.md`](./post-r1-r6-followups-plan-2026-05-07.md); only F4 (date-locked until 2026-05-21) remains in the post-r1-r6 plan.
 
 ---
 

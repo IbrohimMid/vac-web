@@ -29,10 +29,17 @@ jobs:
           cache: 'pnpm'
       - name: Install Node deps
         run: pnpm install --frozen-lockfile
-      - name: Build perf harness
-        run: cargo build -p perf --release
-      - name: Run perf harness (measurement-only)
-        run: cargo run -p perf --release -- --duration 60 --output perf-results.json
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml', 'pnpm-lock.yaml') }}
+      - name: Install Playwright Chromium
+        run: pnpm -F web exec playwright install --with-deps chromium
+      - name: Build perf harness (real scenarios)
+        run: cargo build -p perf --release --features real_scenarios
+      - name: Run perf harness (real scenarios, measurement-only)
+        run: cargo run -p perf --release --features real_scenarios -- --duration 60 --output perf-results.json
       - name: Check measurements vs budgets (measurement-only)
         run: node scripts/check-slo-measurements.mjs perf-results.json --measurement-only
       - name: Archive perf baseline
