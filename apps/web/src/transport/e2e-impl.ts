@@ -19,10 +19,10 @@
 // as 'drop frame' so a relay-injected/forged ciphertext cannot crash the
 // session loop.
 
-import { x25519 } from '@noble/curves/ed25519';
-import { xchacha20poly1305 } from '@noble/ciphers/chacha';
-import { hkdf } from '@noble/hashes/hkdf';
-import { sha256 } from '@noble/hashes/sha256';
+import { x25519 } from '@noble/curves/ed25519.js';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 import type { SealContext, Sealer } from './e2e';
 
@@ -94,7 +94,7 @@ export function createX25519Sealer(ctx: SealContext): Sealer {
  * for the pairing handshake when the bridge has not yet pinned a key.
  */
 export function generateKeypair(): { privateKey: Uint8Array; publicKey: Uint8Array } {
-  const privateKey = x25519.utils.randomPrivateKey();
+  const privateKey = x25519.utils.randomSecretKey();
   const publicKey = x25519.getPublicKey(privateKey);
   return { privateKey, publicKey };
 }
