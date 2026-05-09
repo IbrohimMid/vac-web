@@ -411,6 +411,12 @@ function GateRibbon() {
           key={g.id}
           className={`gate-pill ${activeId === g.id ? 'active' : ''}`}
           onClick={() => setActive(activeId === g.id ? null : g.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              setActive(activeId === g.id ? null : g.id);
+            }
+          }}
           title={g.summary}
           role="button"
           tabIndex={0}

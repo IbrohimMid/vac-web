@@ -67,6 +67,12 @@ import { useShell } from './stores/shell';
 import { createTransport, type TransportHandle } from './transport';
 import { createRelayTransport, parseRelayParamsFromLocation } from './transport/relay';
 
+declare global {
+  interface Window {
+    __vacBridgeOverride?: string;
+  }
+}
+
 function App() {
   const [paired, setPaired] = useState(false);
   const [transport, setTransport] = useState<TransportHandle | null>(null);
@@ -135,11 +141,16 @@ function App() {
             /* non-fatal: pairing succeeded, only the URL hygiene step failed */
           }
         } else {
+          const overrideUrl =
+            typeof window.__vacBridgeOverride === 'string'
+              ? window.__vacBridgeOverride
+              : null;
           const wsUrl =
+            overrideUrl ??
             (location.protocol === 'https:' ? 'wss:' : 'ws:') +
-            '//' +
-            location.host +
-            '/api/sessions/stream';
+              '//' +
+              location.host +
+              '/api/sessions/stream';
           t = await createTransport(wsUrl);
         }
         offs.push(registerTranscriptHandlers(t));

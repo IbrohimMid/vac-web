@@ -21,6 +21,16 @@ import runsFixture from './fixtures/runs.json' with { type: 'json' }
 type OutMessage =
 	| { type: 'ack'; ack_of: string; ok: boolean; error?: { code: string; message: string }; payload?: unknown }
 	| { type: string; payload: Record<string, unknown> }
+	| EventMessage
+
+interface EventMessage {
+	seq: number
+	session_id: string
+	type: string
+	payload: Record<string, unknown>
+	v: 1
+	ts: string
+}
 
 type InMessage = {
 	type: string
@@ -37,6 +47,8 @@ export interface ScriptedFailure {
 
 export interface MockBridgeOptions {
 	failures?: ScriptedFailure[]
+	/** Extra event payloads to push after the app opens the bridge socket. */
+	connectEvents?: Array<{ type: string; payload: Record<string, unknown> }>
 	/** Extra event payloads to push after `session/new` ack (e.g. query_failed). */
 	postHandshakeEvents?: Array<{ type: string; payload: Record<string, unknown> }>
 }
@@ -76,6 +88,11 @@ export class MockBridge {
 		this.sockets.add(ws)
 		ws.on('close', () => this.sockets.delete(ws))
 		this.send(ws, { type: 'welcome', payload: { server_version: 'mock-1', protocol: 'vac/1' } })
+		setTimeout(() => {
+			for (const ev of this.opts.connectEvents ?? []) {
+				this.event(ws, ev.type, ev.payload)
+			}
+		}, 50)
 
 		ws.on('message', (raw) => {
 			let msg: InMessage
@@ -101,7 +118,7 @@ export class MockBridge {
 				payload: { session_id: 'sess-mock-1', profile_id: 'mock' },
 			})
 			for (const ev of this.opts.postHandshakeEvents ?? []) {
-				this.send(ws, ev)
+				this.event(ws, ev.type, ev.payload)
 			}
 			return
 		}
@@ -208,6 +225,18 @@ export class MockBridge {
 			default:
 				this.ack(ws, id, true)
 		}
+	}
+
+
+	private event(ws: WebSocket, type: string, payload: Record<string, unknown>): void {
+		this.send(ws, {
+			seq: Date.now(),
+			session_id: 'sess-mock-1',
+			type,
+			payload,
+			v: 1,
+			ts: new Date().toISOString(),
+		})
 	}
 
 	private ack(ws: WebSocket, ackOf: string, ok: boolean, error?: { code: string; message: string }): void {

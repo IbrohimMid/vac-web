@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const configDir = dirname(fileURLToPath(import.meta.url))
 
 /**
  * Playwright config for the web cockpit end-to-end suite.
@@ -43,7 +47,7 @@ export default defineConfig({
 		// shows up in size-limit + size budgets).
 		command: 'pnpm exec vite build && pnpm exec vite preview --port 4173 --strictPort',
 		url: 'http://127.0.0.1:4173',
-		cwd: __dirname,
+		cwd: configDir,
 		reuseExistingServer: !process.env.CI,
 		timeout: 120_000,
 		stdout: 'pipe',
