@@ -7,7 +7,22 @@ All notable changes to vac-web are recorded here. Format follows
 ## [Unreleased]
 
 ### Added
+
+- **Post-v1 cockpit UX wiring (F5a/F5b/F5c)** — Release plane UI (`ReleasePanel`, `TargetCard`, `DeployProgressList`, `NotesDraftView`, `ObservationsFeed`); Settings/Extensions tab (`ExtensionsList`, `TrustActionMenu`, `QuarantineConfirmModal`, `PromotionRequestModal`, `PendingApprovals`); Topbar `PerfBadge` (in `cockpit/`).
+- **Trust real classification (F1)** — three production callsites of `enforce_extension_trust` in `apps/local-bridge/src/extensions/handlers.rs`; `config/extension-trust.yaml` as runtime SSOT.
+- **Perf baseline watch (F3)** — `scripts/perf-baseline-archive.mjs` + `scripts/perf-baseline-compare.mjs`; `.perf-baseline/` history surface; CI wires archive + compare + upload.
+- **Real per-subsystem perf drivers (F2 — 4/5)** — `command_ack`, `websocket_event_delivery`, `persisted_event_write`, `command_manifest_refresh`. F2.5 `topbar_interaction` split to dedicated Playwright plan.
+- **ADR-0004 (F6)** — extension trust mutation controls.
+- **Two trust hardening rounds** — audit-hardened `extensions.update_trust`; TOCTOU-safe writer (`fs2::FileExt::lock_exclusive` + tempfile atomic rename); session-bound admin gate via `profile_layer::enforce_action`; structured `audit::log_structured()` with namespace allowlist; two-party promotion approval (`request_promotion` / `approve_promotion` / `list_approvals`, proposer ≠ approver); live perf telemetry (`perf.latest_run` / `perf.run_completed`).
+- **Wave 5-6 dependency closeout (PR #23–#30)** — Vite 8, React 19, `@vitejs/plugin-react` 6, Vitest 4, scoped `@xterm/*` 6, Tailwind 4, ESLint 10, size-limit 12, `@noble/*` v2; closeout doc `docs/plans/wave-5-6-dependency-closeout-2026-05-09.md`.
+- **Topbar interaction Playwright e2e coverage (PR #22)**.
 - Post-audit v1 hardening pass (see §v1.0.0).
+
+### Deferred
+
+- **F4 CI strict flip** — perf workflow stays on `--measurement-only`; date-locked until 2026-05-21 (see `docs/plans/f4-baseline-alarm-date-lock-2026-05-09.md`).
+- **F2.5 `topbar_interaction` real Playwright driver** — last remaining real perf driver (see `docs/plans/wiring/topbar-interaction-playwright-plan-2026-05-07.md`).
+- **`@types/node` 22 → 25 (dev)** — runtime target still Node 20/22; widening dev types ahead would mask incompatibilities (see `docs/plans/wave-5-6-dependency-closeout-2026-05-09.md`).
 
 ## [1.0.0] — 2026-04-24
 

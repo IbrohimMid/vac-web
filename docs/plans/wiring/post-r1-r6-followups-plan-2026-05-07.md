@@ -3,7 +3,7 @@ id: wiring.post-r1-r6-followups-2026-05-07
 title: 'Post R1–R6 follow-ups execution plan'
 priority: P1
 area: closeout
-status: active  # F1, F3 closed in this plan; F2, F4, F5, F6 planned/deferred
+status: closed_partial  # 2026-05-09: F1/F3 closed in this plan; F5/F6 closed via cockpit-UX plan + ADR-0004; F2 4/5 closed (F2.5 split to topbar plan); F4 deferred until 2026-05-21
 owners:
   - bridge
   - web
@@ -15,6 +15,8 @@ depends_on:
 ---
 
 # Post R1–R6 follow-ups execution plan (2026-05-07)
+
+> **Update 2026-05-09 (closeout sweep)**: F5 and F6 now closed. F2 partially closed (4/5 drivers landed; F2.5 `topbar_interaction` split to dedicated Playwright plan at [`topbar-interaction-playwright-plan-2026-05-07.md`](./topbar-interaction-playwright-plan-2026-05-07.md)). F4 still date-locked until 2026-05-21 (per [`../f4-baseline-alarm-date-lock-2026-05-09.md`](../f4-baseline-alarm-date-lock-2026-05-09.md)). Plan status moves from `active` to `closed_partial`. Two trust hardening rounds (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate, two-party promotion approval, live perf telemetry) layered on top of F5 — see README §Recent highlights and ADR-0004.
 
 Follow-up work after closing `remaining-work-execution-plan-2026-05-06.md` (R1–R6) and landing Phase 2 scaffolding for perf and trust. Items split into closed-in-this-plan (F1, F3) and planned/deferred (F2, F4, F5, F6).
 
@@ -43,7 +45,7 @@ steps:
     status: closed
   - id: F2
     do: 'Phase 2 perf real per-subsystem drivers (5)'
-    status: planned
+    status: partial  # 4/5 landed (command_ack, websocket_event_delivery, persisted_event_write, command_manifest_refresh); F2.5 topbar_interaction split to topbar-interaction-playwright-plan-2026-05-07.md
   - id: F3
     do: 'Baseline watch infrastructure'
     status: closed
@@ -52,15 +54,16 @@ steps:
     status: deferred
   - id: F5
     do: 'Phase 3 trust cockpit UX'
-    status: planned
+    status: closed  # closed 2026-05-09 via cockpit-ux-implementation-plan-2026-05-07.md (F5a/F5b/F5c) plus two trust hardening rounds
   - id: F6
     do: 'ADR refresh cycle'
-    status: planned
+    status: closed  # closed 2026-05-09 — ADR-0004 (extension trust mutation controls) added; ADR-0003 cross-linked
 acceptance:
   - 'F1, F3 closed in commit landing this plan'
-  - 'F2 has driver-level acceptance'
+  - 'F2 has driver-level acceptance — 4/5 landed; F2.5 (topbar_interaction) split to dedicated Playwright plan'
   - 'F4 deferred until 2026-05-21 (14d from baseline start)'
-  - 'F5, F6 scoped with effort estimate'
+  - 'F5 closed 2026-05-09 (cockpit-UX plan landed; trust hardening rounds 1+2 layered on top)'
+  - 'F6 closed 2026-05-09 (ADR-0004 added; ADR-0003 cross-linked)'
 validation_gates:
   - cargo test -p profile-core
   - node scripts/check-extension-trust.mjs
@@ -107,7 +110,9 @@ validation_gates:
 
 **Phase 1 → Phase 2 migration**: function signature changed from `fn(ctx)` to `fn(ctx, config)`. No production callers existed; Phase 1 stub was unused. Cockpit/bridge integration deferred to F5.
 
-### F2 — Phase 2 perf: 5 real per-subsystem drivers (planned)
+### F2 — Phase 2 perf: 5 real per-subsystem drivers (4/5 landed; F2.5 in topbar plan)
+
+**Update 2026-05-09**: 4 of 5 drivers shipped real (`command_ack`, `websocket_event_delivery`, `persisted_event_write`, `command_manifest_refresh`). The 5th, `topbar_interaction`, is split into [`topbar-interaction-playwright-plan-2026-05-07.md`](./topbar-interaction-playwright-plan-2026-05-07.md) due to Playwright harness setup cost. Current bail in `tools/perf/src/scenarios/topbar_interaction.rs:17` remains until that plan lands.
 
 **Goal**: replace synthetic constants in `tools/perf/src/main.rs` with real measurements from running local-bridge instances.
 
@@ -168,7 +173,9 @@ Skipped in F3 scripts-landing because perf.yml YAML edits with GitHub Actions te
 
 **Earliest target**: 2026-05-21 (assuming baseline start 2026-05-07 + 14 days).
 
-### F5 — Phase 3 trust cockpit UX (planned)
+### F5 — Phase 3 trust cockpit UX ✅ closed (2026-05-09)
+
+**Closed via**: [`cockpit-ux-implementation-plan-2026-05-07.md`](./cockpit-ux-implementation-plan-2026-05-07.md) (F5a Release panel + F5b Extensions settings + bridge wiring + F5c Perf badge + CI baseline wiring) plus two trust hardening rounds layered on top (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate via `profile_layer::enforce_action`, structured audit emission, two-party promotion approval flow, live perf telemetry). Three production callsites of `enforce_extension_trust` now exist in `apps/local-bridge/src/extensions/handlers.rs` (lines 340, 464, 934).
 
 **Scope**:
 
@@ -181,7 +188,9 @@ Skipped in F3 scripts-landing because perf.yml YAML edits with GitHub Actions te
 
 **Depends on**: F1 (✅) for runtime classification.
 
-### F6 — ADR refresh cycle (planned)
+### F6 — ADR refresh cycle ✅ closed (2026-05-09)
+
+**Closed via**: ADR-0004 (`docs/adr/0004-extension-trust-mutation-controls.md`) capturing the trust-mutation guardrails introduced in trust hardening rounds 1+2. ADR-0003 (`docs/adr/0003-extension-trust-model.md`) cross-linked from protocol §3.17 / §4.14 and red-team §3.13.
 
 **Scope**:
 

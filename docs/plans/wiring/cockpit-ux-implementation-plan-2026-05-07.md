@@ -1,10 +1,14 @@
 # Cockpit UX Implementation Plan — F5a / F5b / F5c
 
-**Status**: planned
+**Status**: closed (2026-05-09)
 **Created**: 2026-05-07
 **Estimated**: 8–11h fokus tunggal sesi
 **Predecessor**: `docs/plans/wiring/post-r1-r6-followups-plan-2026-05-07.md` (F5)
 **Audit reference**: thread 2026-05-06 08:38 — UI impact audit menemukan **nol** delta UI dari R1–R6 + Phase 2 scaffolding + F1 + F3.
+
+---
+
+> **Closeout 2026-05-09**: All three slices landed and merged. F5a Release panel: 5 components consuming `useRelease` (`ReleasePanel`, `TargetCard`, `DeployProgressList`, `NotesDraftView`, `ObservationsFeed`) with vitest coverage. F5b Extensions: `ExtensionsList`, `TrustActionMenu`, `QuarantineConfirmModal`, `PromotionRequestModal`, `PendingApprovals` plus `apps/local-bridge/src/extensions/handlers.rs` with 3 production callsites of `enforce_extension_trust` and `config/extension-trust.yaml` as runtime SSOT. F5c PerfBadge in `apps/web/src/components/cockpit/PerfBadge.tsx` (note: `cockpit/`, not `Topbar/` as originally planned) wired to live perf telemetry; `.github/workflows/perf.yml` includes `perf-baseline-archive` + `perf-baseline-compare --window 10 --threshold 25` + history upload. Two trust hardening rounds layered on top — see README §Recent highlights and ADR-0004.
 
 ---
 
