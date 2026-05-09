@@ -3,7 +3,7 @@ id: wiring.f4-refresh-plan-2026-05-09
 title: 'F4 refresh plan'
 priority: P1
 area: closeout
-status: draft  # 2026-05-09: date-locked until 2026-05-21; Phase H audit found 0 errors
+status: draft  # 2026-05-09: date-locked until 2026-05-21; Phase H dry-run is informational only
 owners:
   - web
   - tools
@@ -15,7 +15,7 @@ depends_on:
 
 # F4 refresh plan (2026-05-09)
 
-> **Status 2026-05-09:** draft. F4 remains date-locked until 2026-05-21. Phase H strict dry-run audit found 0 total errors across 0 files; 0 are TS#### category needing pattern-fix. The blocker is baseline age, not a web TypeScript cleanup.
+> **Status 2026-05-09:** draft. F4 remains date-locked until 2026-05-21. Phase H dry-run is informational only because `apps/web/tsconfig.base.json` already enables the relevant strict flags through the existing baseline. The blocker is persisted baseline history, not a web TypeScript cleanup.
 
 ## Workflow-as-code control plane
 
@@ -40,7 +40,7 @@ steps:
     do: 'Run Rust + web gates and confirm no regressions are masked by the stricter budget gate'
     status: pending
 acceptance:
-  - 'At least 14 days of baseline history exist before the flip'
+  - 'By 2026-05-19, .perf-baseline/history.jsonl contains at least 14 verified entries on main'
   - 'Perf workflow uses --strict only after the date lock expires'
   - 'Validation gates stay green after the flip'
 ```
@@ -50,8 +50,9 @@ acceptance:
 - `docs/plans/f4-baseline-alarm-date-lock-2026-05-09.md` says no code should be added before 2026-05-21.
 - `docs/plans/README.md` lists F4 as the only active handoff and says the perf workflow remains `--measurement-only` until the date lock expires.
 - `docs/plans/wave-5-6-dependency-closeout-2026-05-09.md` documents F4 strict baseline alarm flip as intentionally deferred.
+- `.perf-baseline/history.jsonl` does not exist yet; only `.perf-baseline/README.md` is present, so the rolling baseline archive still needs to be persisted.
 - `docs/perf-test-plan.md` still treats `--measurement-only` as the gate until F4 lands.
-- Phase H strict dry-run audit found 0 total errors across 0 files; 0 are TS#### category needing pattern-fix.
+- Phase H dry-run was additive-only and did not probe any new strictness beyond the existing base config.
 
 ## Scope
 
@@ -74,7 +75,7 @@ acceptance:
 1. **Strict perf gate flip**
    - Acceptance: CI perf job uses `--strict` only after the date lock expires and the baseline is old enough.
 2. **Baseline sanity check**
-   - Acceptance: history has at least 14 days of data and the strict gate is only enabled after the history window is valid.
+   - Acceptance: `.perf-baseline/history.jsonl` has at least 14 verified entries on main by 2026-05-19 and the strict gate is only enabled after the history window is valid.
 3. **Validation pass**
    - Acceptance: Rust, web, and perf checks stay green after the workflow update.
 4. **Plan/doc refresh**
@@ -89,7 +90,7 @@ acceptance:
 3. **Workflow YAML escaping regressions**
    - Mitigation: validate `perf.yml` integrity before and after the flip with the same GitHub Actions templating sanity check used for Phase A.
 4. **Operator confusion about the zero-error dry-run**
-   - Mitigation: keep the audit wording explicit that the blocker is date-lock, not TypeScript remediation.
+   - Mitigation: keep the audit wording explicit that the dry-run is informational only, the base config is already strict, and the blocker is missing persisted baseline history.
 
 ## Rollback
 
