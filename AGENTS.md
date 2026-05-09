@@ -41,6 +41,21 @@ Defined in `.github/workflows/ci.yml` and `security.yml`:
 - SLO: `scripts/check-slo-budgets.mjs` (slice 8.3).
 - Security: `cargo deny`, `cargo audit`, `pnpm audit`, gitleaks, CycloneDX SBOM.
 
+### Canonical local Rust validation sequence
+
+Always mirror `.github/workflows/ci.yml` byte-for-byte:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace --all-targets
+cargo test --workspace
+```
+
+The `cargo build --workspace --all-targets` step is **not optional** - integration tests under `apps/local-bridge/tests/` and `crates/red-team/tests/` rely on `target/debug/mock-acp` and `target/debug/mock-engine`. Skipping makes those tests panic at runtime even though the source compiles. CI runs the build step explicitly; local validation must too.
+
+Per-feature checks need an additional pass: `cargo clippy -p perf --all-targets --features real_scenarios -- -D warnings`.
+
 ## Scorecard
 
 Maturity status tracked in `docs/enterprise-maturity-scorecard.md`. As of 2026-05-06: all 29 dimension entries ✓.
