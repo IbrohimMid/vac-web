@@ -53,7 +53,7 @@
     "@xterm/addon-fit": "^0.10.0"
   },
   "devDependencies": {
-    "@size-limit/preset-big-lib": "^11.1.6",
+    "@size-limit/preset-big-lib": "^12.1.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/markdown-it": "^14.1.2",
@@ -67,7 +67,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "happy-dom": "^20.9.0",
     "postcss": "^8.5.14",
-    "size-limit": "^11.1.6",
+    "size-limit": "^12.1.0",
     "tailwindcss": "^3.4.14",
     "typescript": "^6.0.3",
     "vite": "^8.0.11",
