@@ -6,7 +6,7 @@ Status: complete. Raw inventory captured with `grep -rn 'TODO|FIXME|XXX|HACK' ap
 
 - Raw grep hits: 34 lines across 18 files
 - Generated noise: 26 hits from `apps/web/node_modules` and `apps/web/dist`
-- Actionable source/script hits: 8
+- Actionable source/script hits: 7 live, 1 resolved during review
 
 ## Breakdown By Directory
 
@@ -25,7 +25,7 @@ Raw occurrence counts are inflated by generated sourcemap content under `apps/we
 
 | Tag | Raw occurrence count | Actionable source count |
 | --- | ---: | ---: |
-| `TODO` | 263 | 8 |
+| `TODO` | 263 | 7 |
 | `FIXME` | 19 | 0 |
 | `XXX` | 3 | 0 |
 | `HACK` | 5 | 0 |
@@ -37,7 +37,7 @@ Raw occurrence counts are inflated by generated sourcemap content under `apps/we
 | `apps/web/src/components/Migration/MigrationTab.tsx:37` | `TODO` | `phase-8.5 integration`: wire dry-run / verify / dispatch buttons | Future feature |
 | `apps/local-bridge/tests/event_catalog_parity.rs:31` | `TODO` | every entry here is a TODO to either promote into the catalog or... | Tech debt |
 | `apps/local-bridge/src/tunnel.rs:118` | `TODO` | `phase-7.3 integration`: route tunnel frames through the session | Future feature |
-| `apps/local-bridge/src/observability.rs:116` | `TODO` | `Pass #22; full ADR follow-up tracked as a deferred TODO.` | Stale |
+| `apps/local-bridge/src/observability.rs:116` | `NOTE` | `Pass #22 extension is covered by ADR-0002; historical context only.` | Resolved |
 | `scripts/vac-command-new.mjs:95` | `TODO` | move under the correct section heading and add fields | Tech debt |
 | `scripts/vac-pr-checklist.mjs:2` | `TODO` | generate a markdown TODO checklist for a PR body | Tech debt |
 | `scripts/vac-pr-checklist.mjs:4` | `TODO` | `Slice 39 step_03 (PR-body TODO checklist generator).` | Stale |
@@ -47,8 +47,9 @@ Raw occurrence counts are inflated by generated sourcemap content under `apps/we
 
 These markers reference slices or passes that are already closed in `docs/plans/wiring/`.
 
-- `apps/local-bridge/src/observability.rs:116` references Pass #22 / Slice 41, which is closed.
 - `scripts/vac-pr-checklist.mjs:4` references Slice 39, which is closed.
+
+The Pass #22 observability note was resolved during review by pointing the comment at ADR-0002.
 
 ## Sample Fixes
 
@@ -63,7 +64,7 @@ Before:
 After:
 
 ```rs
-/// Namespace-prefix follow-up is documented in the ADR set.
+/// and formalized in `docs/adr/0002-observability-namespace-extension.md`.
 ```
 
 ### `scripts/vac-pr-checklist.mjs:4`
@@ -127,7 +128,7 @@ After:
 ## Recommended Next Actions
 
 1. Remove generated artifacts from future backlog scans by excluding `apps/web/node_modules` and `apps/web/dist`.
-2. Rewrite or delete the stale Pass #22 and Slice 39 comments.
+2. Delete the stale Slice 39 comment; the Pass #22 observability note is already resolved against ADR-0002.
 3. Decide whether the phase-8.5 and phase-7.3 TODOs need explicit tickets or should be closed out.
 4. Keep helper-script TODO comments short and actionable so future audits do not need to infer intent.
 
