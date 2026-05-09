@@ -7,7 +7,7 @@ owners:
   - bridge
   - web
   - ops
-status: landed  # Pass #24 audit: confirmed landed (output paths all exist); Pass #27 deep audit: P41 acceptance verified — 102 audit/log_structured call sites in apps/local-bridge/src; Slice 41 closeout 39/39 translator emit sites migrated; degraded states emit (persistence/auth/config); SLO budgets documented in plan + docs/observability.md + docs/perf-test-plan.md (PARTIAL: budgets are targets, not actively CI-measured — follow-up tracked) (see wave-summary-2026-05-03.md); 2026-05-06 R6 closeout (Phase 1): tools/perf crate + config/slo-budgets.yaml + scripts/check-slo-measurements.mjs + .github/workflows/perf.yml weekly cron landed; synthetic deterministic measurements pass strict gate; Phase 2 real per-subsystem drivers tracked under tools/perf/src/scenarios/
+status: landed  # Pass #24 audit: confirmed landed (output paths all exist); Pass #27 deep audit: P41 acceptance verified — 102 audit/log_structured call sites in apps/local-bridge/src; Slice 41 closeout 39/39 translator emit sites migrated; degraded states emit (persistence/auth/config); SLO budgets documented in plan + docs/observability.md + docs/perf-test-plan.md (PARTIAL: budgets are targets, not actively CI-measured — follow-up tracked); 2026-05-06 R6 closeout (Phase 1): tools/perf crate + config/slo-budgets.yaml + scripts/check-slo-measurements.mjs + .github/workflows/perf.yml weekly cron landed; synthetic deterministic measurements pass strict gate; Phase 2 real per-subsystem drivers tracked under tools/perf/src/scenarios/
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

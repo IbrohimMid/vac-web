@@ -5,7 +5,6 @@
 - Owners: bridge, observability, protocol
 - Related slice(s): wiring.observability_slos (41), wiring.audit_red_team_observability (29), wiring.approval_lifecycle (06)
 - Supersedes: none
-- Related wave-summary: `docs/plans/wiring/wave-summary-2026-05-03.md` (Pass #22 mini-ADR)
 
 ## Context
 
@@ -19,7 +18,7 @@ Komentar di kedua tempat menyatakan eksplisit: *"Adding to this list requires an
 
 Selama Slice 41 (Pass #17 → #21), 37 emit sites di `translator/mod.rs` dimigrasi dari raw `state.audit.log(...)` ke `StructuredLogBuilder`. Banyak event domain (session create/resume, agent enforcement, dst.) bertanya dimana fields seperti `agent_id`, `mode`, `resume_mode`, `policy`, `replayed` harus diletakkan.
 
-Solusi sementara Pass #18-#21: route fields domain `session.*` / `agent.*` ke `profile.*` namespace (mis. `profile.agent_id`, `profile.mode`, `profile.policy`). Decision didokumentasi sebagai *"profile policy decisions belong to profile authority"* di Pass #19 wave-summary.
+Solusi sementara Pass #18-#21: route fields domain `session.*` / `agent.*` ke `profile.*` namespace (mis. `profile.agent_id`, `profile.mode`, `profile.policy`). Decision didokumentasi sebagai *"profile policy decisions belong to profile authority"* di Pass #19 (lihat git log).
 
 ## Problem
 
@@ -49,7 +48,7 @@ audit. persistence. workflow. shell. mcp. registry. profile. release. handoff. p
 
 1. **Keep using `profile.*` for all foreign domains** — rejected. Causes semantic confusion in audit log queries; operators searching for `approval.outcome` won't find it under `profile.outcome`.
 2. **Add only `approval.`** — rejected. Same problem repeats for `agent.*`/`session.*` future sites; pre-emptive triple-add prevents repeat-work.
-3. **Block on full ADR before any extension** — rejected. Pass #22 mini-ADR di wave-summary + this formal ADR + schema/code parity test (event_catalog_parity) enough for safe rollout.
+3. **Block on full ADR before any extension** — rejected. Pass #22 mini-ADR formalized in this ADR + schema/code parity test (event_catalog_parity) enough for safe rollout.
 4. **Allow arbitrary prefixes** — rejected. Removes the namespace gate that catches typos and unauthorized field expansion.
 
 ## Consequences
@@ -63,13 +62,13 @@ audit. persistence. workflow. shell. mcp. registry. profile. release. handoff. p
 
 ### Negative
 
-- Past sites Pass #18-#21 yang route via `profile.*` tetap di sana (no retrofit). Heterogeneous field naming antara old + new sites untuk session-domain. Mitigation: documented di wave-summary; future cleanup as needed.
+- Past sites Pass #18-#21 yang route via `profile.*` tetap di sana (no retrofit). Heterogeneous field naming antara old + new sites untuk session-domain. Mitigation: documented in commit history; future cleanup as needed.
 - Adds 3 prefixes to the validator hot-path namespace-check loop; negligible perf impact (linear scan of ~14 strings per `.namespaced()` call).
 
 ### Neutral
 
 - Comment di `observability.rs` + schema mengarah ke ADR ini sebagai authoritative reference.
-- Pass #22 wave-summary mini-ADR retained sebagai bridge documentation untuk multi-session continuity.
+- Pass #22 mini-ADR captured in this ADR; superseding the prior interim documentation.
 
 ## Implementation
 
@@ -105,7 +104,7 @@ allowed_namespace_prefixes:
 
 - `cargo test event_catalog_parity --workspace` enforces code/schema parity.
 - `cargo test -p local-bridge --lib` 351/0 with extension applied (Pass #22).
-- Full workspace gates green at Pass #22 wave-end (see wave-summary).
+- Full workspace gates green at Pass #22 wave-end (verified by Pass #25-#27 slice audits).
 
 ## Migration / rollout
 
@@ -113,7 +112,6 @@ No migration needed. Old code paths route via `profile.*` continue working. New 
 
 ## References
 
-- Pass #22 mini-ADR: `docs/plans/wiring/wave-summary-2026-05-03.md` section "Pass #22 — Slice 41 closeout"
 - Slice 41 progress: `docs/plans/wiring/41-observability-slos.md`
 - Schema: `schema/observability-events.yaml`
 - Code: `apps/local-bridge/src/observability.rs`

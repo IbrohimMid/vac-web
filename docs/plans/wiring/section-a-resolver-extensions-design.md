@@ -440,7 +440,7 @@ Once primitives land, port handlers from simplest to heaviest:
 
 1. Should `@hash_*` generators be deterministic across `State` instances (seed-only) or counter-stateful (incremental)? Current design says counter-stateful; replays reproduce sequences but only within a single `State` lifetime. For test reproducibility a seed-only `@hash_pure(seed)` variant may be useful as a follow-up.
 2. Should `filter_then_emit` support multi-key fixtures (`Vec<HashMap<&str, &str>>`)? Initial design is `&[&str]` only. Extend if a handler needs structured fixture rows.
-3. ADR or wave-summary mini-ADR for the filter DSL grammar boundary? Probably mini-ADR sufficient unless grammar grows.
+3. ADR (or lightweight mini-ADR) for the filter DSL grammar boundary? Probably mini-ADR sufficient unless grammar grows.
 
 ## Implementation pointers
 

@@ -7,7 +7,7 @@ owners:
   - bridge
   - web
   - protocol
-status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + wave-summary mentions)
+status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + git-log evidence)
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

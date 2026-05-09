@@ -6,7 +6,7 @@ area: agent-registry
 owners:
   - bridge
   - web
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/agent_runtime']; Pass #26 deep audit: P26 acceptance verified — registry.trust_violation + session.mcp_server_drift both isRegistryBlocking; McpDriftPolicy warn/fail/ignore in resume_policy.rs; trust violations not refresh-suppressed (see wave-summary-2026-05-03.md)
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/agent_runtime']; Pass #26 deep audit: P26 acceptance verified — registry.trust_violation + session.mcp_server_drift both isRegistryBlocking; McpDriftPolicy warn/fail/ignore in resume_policy.rs; trust violations not refresh-suppressed
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

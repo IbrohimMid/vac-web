@@ -6,7 +6,7 @@ area: release
 owners:
   - bridge
   - web
-status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + wave-summary mentions); Pass #27 deep audit: P14 acceptance verified — release.deploy/publish NotWired+External (command_catalog.rs:131-134); ReleaseTab gates canDeploy via gateReady+affordance; release.notes_draft labeled draft_only, deploy_progress+post_deploy_observation labeled mock_only (releaseEvents.ts:43-55, tests at releaseEvents.test.ts:17-22) (see wave-summary-2026-05-03.md); 2026-05-06 R2 closeout: classification field added to 4 release.* events in config/control-plane/event-catalog.yaml (mirrored from releaseEvents.ts); regenerated event_catalog.rs + eventCatalog.ts; verify-codegen drift gate green
+status: landed  # Pass #24 audit: confirmed landed via combined evidence (outputs + git-log evidence); Pass #27 deep audit: P14 acceptance verified — release.deploy/publish NotWired+External (command_catalog.rs:131-134); ReleaseTab gates canDeploy via gateReady+affordance; release.notes_draft labeled draft_only, deploy_progress+post_deploy_observation labeled mock_only (releaseEvents.ts:43-55, tests at releaseEvents.test.ts:17-22); 2026-05-06 R2 closeout: classification field added to 4 release.* events in config/control-plane/event-catalog.yaml (mirrored from releaseEvents.ts); regenerated event_catalog.rs + eventCatalog.ts; verify-codegen drift gate green
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

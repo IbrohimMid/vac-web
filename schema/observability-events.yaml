@@ -49,7 +49,7 @@ optional_keys:
 #
 # Slice 41 (Pass #22) extension: `approval.`, `agent.`, `session.` added to
 # stop forcing these domains to masquerade under `profile.*`. Mini-ADR is
-# captured in `docs/plans/wiring/wave-summary-2026-05-03.md` Pass #22.
+# captured in `docs/adr/0002-observability-namespace-extension.md` (Pass #22 mini-ADR formalized).
 allowed_namespace_prefixes:
   - audit.
   - persistence.

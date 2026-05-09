@@ -112,8 +112,7 @@ impl std::error::Error for LogValidationError {}
 ///
 /// Slice 41 (Pass #22) extension: `approval.`, `agent.`, `session.` added to
 /// stop forcing these domains to masquerade under `profile.*`. The mini-ADR
-/// rationale is captured in `docs/plans/wiring/wave-summary-2026-05-03.md`
-/// and formalized in `docs/adr/0002-observability-namespace-extension.md`.
+/// rationale is formalized in `docs/adr/0002-observability-namespace-extension.md`.
 const ALLOWED_NAMESPACE_PREFIXES: &[&str] = &[
     "audit.",
     "persistence.",

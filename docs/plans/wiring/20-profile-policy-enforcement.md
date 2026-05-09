@@ -6,7 +6,7 @@ area: security-policy
 owners:
   - bridge
   - profile-core
-status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/profile_layer', 'packages/profile-core']; Pass #26 deep audit: P20 acceptance verified — 7 deny codes in profile-core enforce.rs consumed by fs/terminal/profile_layer; UI copy in profileDenial.ts (7 tests); enforcement bridge-side before side effects (see wave-summary-2026-05-03.md)
+status: landed  # Pass #25 audit: confirmed via artifact paths ['apps/local-bridge/src/profile_layer', 'packages/profile-core']; Pass #26 deep audit: P20 acceptance verified — 7 deny codes in profile-core enforce.rs consumed by fs/terminal/profile_layer; UI copy in profileDenial.ts (7 tests); enforcement bridge-side before side effects
 workflow_style: vil_inspired_declarative_control_plane
 runtime_source_of_truth: rust_ts_runtime
 ---

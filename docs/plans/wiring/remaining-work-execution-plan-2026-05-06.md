@@ -24,7 +24,6 @@ runtime_source_of_truth: rust_ts_runtime
 > - Enterprise maturity scorecard 29/0/0 ✓ (`docs/enterprise-maturity-scorecard.md`)
 > - All 12 workspace AGENTS.md + capability-coverage manifest + slo-budgets structural gate (today, 2026-05-06)
 >
-> Wave-summary diaries `wave-summary-2026-05-02.md` / `wave-summary-2026-05-03.md` are STALE-labeled; new work must NOT cite them.
 
 ---
 
