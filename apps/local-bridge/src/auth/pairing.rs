@@ -1,11 +1,11 @@
 //! Pairing code mint + one-time consume. TTL 60s.
 //!
-//! Codes are generated from OS CSPRNG (`rand::thread_rng()`) not wallclock — the
+//! Codes are generated from OS CSPRNG (`rand::rng()`) not wallclock — the
 //! earlier implementation used `SystemTime::now` which allowed a local attacker
 //! to guess codes within ~100 tries given approximate pairing time.
 
 use dashmap::DashMap;
-use rand::Rng;
+use rand::RngExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,10 +33,10 @@ impl PairingStore {
         if self.inner.len() >= MAX_ACTIVE_CODES {
             return None;
         }
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Retry until we find a slot not taken (practically first try).
         for _ in 0..5 {
-            let n: u32 = rng.gen_range(0..100_000_000);
+            let n: u32 = rng.random_range(0..100_000_000);
             let code = format!("{n:08}");
             if self.inner.insert(code.clone(), Instant::now()).is_none() {
                 return Some(code);
