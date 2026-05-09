@@ -1,5 +1,5 @@
 /// <reference types="vitest" />
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
@@ -28,10 +28,22 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom'],
-          tanstack: ['@tanstack/react-query', '@tanstack/react-virtual'],
-        },
+        manualChunks(id) {
+          const normalizedId = id.replace(/\\/g, '/');
+          if (
+            normalizedId.includes('/node_modules/react/') ||
+            normalizedId.includes('/node_modules/react-dom/')
+          ) {
+            return 'react';
+          }
+          if (
+            normalizedId.includes('/node_modules/@tanstack/react-query/') ||
+            normalizedId.includes('/node_modules/@tanstack/react-virtual/')
+          ) {
+            return 'tanstack';
+          }
+          return undefined;
+        }
       },
     },
   },
