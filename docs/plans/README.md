@@ -14,11 +14,11 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 
 ## Active handoffs
 
-- [`wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./wiring/topbar-interaction-playwright-plan-2026-05-07.md) — F2.5 last remaining real perf driver (`topbar_interaction` via Playwright). 4/5 perf drivers landed; this one was split out due to Playwright harness setup cost. Driver still bails at `tools/perf/src/scenarios/topbar_interaction.rs:17`. Status: active 2026-05-07. Recommended land window 2026-05-08..2026-05-20 (before F4 strict flip ≥ 2026-05-21).
-- [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict CI flip date-locked until 2026-05-21. Perf workflow remains `--measurement-only`; baseline history accumulating in `.perf-baseline/`. Status: deferred 2026-05-09.
+- [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict CI flip date-locked until 2026-05-21. Perf workflow remains `--measurement-only` on the budget gate; baseline history at `.perf-baseline/history.jsonl` now accumulates real measurements from all 5 drivers (F2.5 `topbar_interaction` landed 2026-05-09). Status: deferred 2026-05-09.
 
 ## Closed handoffs
 
+- [`wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./wiring/topbar-interaction-playwright-plan-2026-05-07.md) — F2.5 final real perf driver (`topbar_interaction` via Playwright). Spec at `apps/web/tests/perf/topbar_interaction.spec.ts` (5 warmup + 50 timed iterations, in-page `performance.now()` bracket); Rust driver at `tools/perf/src/scenarios/topbar_interaction.rs` spawns the dedicated Playwright `perf` project; CI runs `cargo run -p perf --release --features real_scenarios` with Chromium cached. Status: closed 2026-05-09.
 - [`wave-5-6-dependency-closeout-2026-05-09.md`](./wave-5-6-dependency-closeout-2026-05-09.md) — PR #23–#29 dependency drift refresh, scoped `@xterm/*` migration, size-limit 12, ESLint 10, xterm 6, Tailwind 4, Noble v2. `@types/node` 22 → 25 and F4 strict flip documented as intentional deferrals. Status: closed 2026-05-09 (PR #30).
 - [`wiring/post-r1-r6-followups-plan-2026-05-07.md`](./wiring/post-r1-r6-followups-plan-2026-05-07.md) — F1 closed; F2 4/5 landed with F2.5 split to topbar plan; F3 closed; F4 deferred until 2026-05-21; F5 closed via cockpit-UX plan; F6 closed via ADR-0004. Status: closed_partial 2026-05-09.
 - [`wiring/cockpit-ux-implementation-plan-2026-05-07.md`](./wiring/cockpit-ux-implementation-plan-2026-05-07.md) — F5a Release panel, F5b Extensions settings + bridge wiring, F5c Perf badge + CI baseline wiring. Two trust hardening rounds layered on top (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate, structured audit, two-party promotion approval, live perf telemetry). Status: closed 2026-05-09.
@@ -50,11 +50,10 @@ The YAML does **not** replace runtime enforcement. Rust and TypeScript remain th
 
 ## Current priority
 
-As of 2026-05-09, all 50 numbered wiring slices (01-50), executor handoff (Pass E1+E2), R1–R6, F1/F3/F5a/F5b/F5c/F6, two trust hardening rounds, and Wave 5-6 dependency closeout (PR #23–#30) are landed. The "make the cockpit truthful before adding product breadth" baseline is met. Active focus is the small remaining tail:
+As of 2026-05-09, all 50 numbered wiring slices (01-50), executor handoff (Pass E1+E2), R1–R6, F1/F2/F3/F5a/F5b/F5c/F6, two trust hardening rounds, F2.5 Playwright driver, and Wave 5-6 dependency closeout (PR #23–#30) are landed. The "make the cockpit truthful before adding product breadth" baseline is met and all 5 real perf drivers populate the rolling baseline. Active focus reduces to a single date-locked item:
 
-1. **F2.5** — real Playwright driver for `topbar_interaction` (last remaining real perf driver). See [`wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./wiring/topbar-interaction-playwright-plan-2026-05-07.md). Recommended land before F4 strict flip.
-2. **F4** — CI strict flip from `--measurement-only` to `--strict`. Date-locked until 2026-05-21. See [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md).
-3. New product-surface plans authored as needed; reference the wiring slices for cockpit shape.
+1. **F4** — CI strict flip from `--measurement-only` to `--strict`. Date-locked until 2026-05-21 (need ≥ 14 days of rolling baseline history). See [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md).
+2. New product-surface plans authored as needed; reference the wiring slices for cockpit shape.
 
 _Historical P0 priority order (all landed): command manifest, `feature.not_wired` fallback, protocol/schema/codegen parity, declarative config/capability control-plane, session model/context telemetry, review taxonomy cleanup, profile policy enforcement, auth/WS security, CI validation gates._
 

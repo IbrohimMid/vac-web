@@ -3,7 +3,7 @@ id: wiring.post-r1-r6-followups-2026-05-07
 title: 'Post R1–R6 follow-ups execution plan'
 priority: P1
 area: closeout
-status: closed_partial  # 2026-05-09: F1/F3 closed in this plan; F5/F6 closed via cockpit-UX plan + ADR-0004; F2 4/5 closed (F2.5 split to topbar plan); F4 deferred until 2026-05-21
+status: closed_partial  # 2026-05-09: F1/F2/F3 closed in this plan family; F5/F6 closed via cockpit-UX plan + ADR-0004; F2.5 topbar Playwright driver landed; F4 deferred until 2026-05-21
 owners:
   - bridge
   - web
@@ -16,7 +16,7 @@ depends_on:
 
 # Post R1–R6 follow-ups execution plan (2026-05-07)
 
-> **Update 2026-05-09 (closeout sweep)**: F5 and F6 now closed. F2 partially closed (4/5 drivers landed; F2.5 `topbar_interaction` split to dedicated Playwright plan at [`topbar-interaction-playwright-plan-2026-05-07.md`](./topbar-interaction-playwright-plan-2026-05-07.md)). F4 still date-locked until 2026-05-21 (per [`../f4-baseline-alarm-date-lock-2026-05-09.md`](../f4-baseline-alarm-date-lock-2026-05-09.md)). Plan status moves from `active` to `closed_partial`. Two trust hardening rounds (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate, two-party promotion approval, live perf telemetry) layered on top of F5 — see README §Recent highlights and ADR-0004.
+> **Update 2026-05-09 (closeout sweep + F2.5 close)**: F5 and F6 closed; F2 also closed — 5/5 drivers landed, with F2.5 `topbar_interaction` Playwright driver landed via [`topbar-interaction-playwright-plan-2026-05-07.md`](./topbar-interaction-playwright-plan-2026-05-07.md). F4 still date-locked until 2026-05-21 (per [`../f4-baseline-alarm-date-lock-2026-05-09.md`](../f4-baseline-alarm-date-lock-2026-05-09.md)). Plan status remains `closed_partial` — only F4 deferred; everything else closed. Two trust hardening rounds (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate, two-party promotion approval, live perf telemetry) layered on top of F5 — see README §Recent highlights and ADR-0004.
 
 Follow-up work after closing `remaining-work-execution-plan-2026-05-06.md` (R1–R6) and landing Phase 2 scaffolding for perf and trust. Items split into closed-in-this-plan (F1, F3) and planned/deferred (F2, F4, F5, F6).
 
@@ -45,7 +45,7 @@ steps:
     status: closed
   - id: F2
     do: 'Phase 2 perf real per-subsystem drivers (5)'
-    status: partial  # 4/5 landed (command_ack, websocket_event_delivery, persisted_event_write, command_manifest_refresh); F2.5 topbar_interaction split to topbar-interaction-playwright-plan-2026-05-07.md
+    status: closed  # 5/5 landed (command_ack, websocket_event_delivery, persisted_event_write, command_manifest_refresh, topbar_interaction); F2.5 Playwright driver landed 2026-05-09
   - id: F3
     do: 'Baseline watch infrastructure'
     status: closed
@@ -60,7 +60,7 @@ steps:
     status: closed  # closed 2026-05-09 — ADR-0004 (extension trust mutation controls) added; ADR-0003 cross-linked
 acceptance:
   - 'F1, F3 closed in commit landing this plan'
-  - 'F2 has driver-level acceptance — 4/5 landed; F2.5 (topbar_interaction) split to dedicated Playwright plan'
+  - 'F2 has driver-level acceptance — 5/5 landed; F2.5 (topbar_interaction) Playwright driver closed 2026-05-09'
   - 'F4 deferred until 2026-05-21 (14d from baseline start)'
   - 'F5 closed 2026-05-09 (cockpit-UX plan landed; trust hardening rounds 1+2 layered on top)'
   - 'F6 closed 2026-05-09 (ADR-0004 added; ADR-0003 cross-linked)'
@@ -110,9 +110,9 @@ validation_gates:
 
 **Phase 1 → Phase 2 migration**: function signature changed from `fn(ctx)` to `fn(ctx, config)`. No production callers existed; Phase 1 stub was unused. Cockpit/bridge integration deferred to F5.
 
-### F2 — Phase 2 perf: 5 real per-subsystem drivers (4/5 landed; F2.5 in topbar plan)
+### F2 — Phase 2 perf: 5 real per-subsystem drivers ✅ closed (2026-05-09)
 
-**Update 2026-05-09**: 4 of 5 drivers shipped real (`command_ack`, `websocket_event_delivery`, `persisted_event_write`, `command_manifest_refresh`). The 5th, `topbar_interaction`, is split into [`topbar-interaction-playwright-plan-2026-05-07.md`](./topbar-interaction-playwright-plan-2026-05-07.md) due to Playwright harness setup cost. Current bail in `tools/perf/src/scenarios/topbar_interaction.rs:17` remains until that plan lands.
+**Update 2026-05-09**: All 5 drivers shipped real (`command_ack`, `websocket_event_delivery`, `persisted_event_write`, `command_manifest_refresh`, `topbar_interaction`). F2.5 `topbar_interaction` Playwright driver landed via [`topbar-interaction-playwright-plan-2026-05-07.md`](./topbar-interaction-playwright-plan-2026-05-07.md); the bail at `tools/perf/src/scenarios/topbar_interaction.rs:17` is replaced by a Playwright-driven harness that spawns the dedicated `perf` project, parses `{subsystem, samples_ms}` from `VAC_PERF_OUTPUT`, converts ms→ns, and reuses the shared `summarize()` reducer. Perf workflow now runs `cargo run -p perf --release --features real_scenarios` so all 5 drivers populate the rolling baseline at `.perf-baseline/history.jsonl`.
 
 **Goal**: replace synthetic constants in `tools/perf/src/main.rs` with real measurements from running local-bridge instances.
 
