@@ -71,14 +71,14 @@ Quoting `post-r1-r6-followups-plan-2026-05-07.md` lines 119–122:
 
 ## 3. Pre-flight checklist for new session
 
-- [ ] HEAD `590adae` or later, working tree clean.
-- [ ] `pnpm -F web exec playwright install --with-deps chromium` run on host once.
-- [ ] `pnpm -F web exec playwright --version` >= 1.40.
-- [ ] `tools/perf/src/scenarios/topbar_interaction.rs:17` still bails with `not implemented (Phase 2)`.
-- [ ] `cargo run -p perf --features real_scenarios -- --duration 5 --output /tmp/baseline.json` succeeds for the four shipped drivers.
-- [ ] User confirms target interaction is `topbar-settings-button` (default) before coding.
-- [ ] User confirms 50 samples is acceptable; if not, agree on N before slice 4.1.
-- [ ] `config/slo-budgets.yaml` `topbar_interaction_p95_ms` field present (= 100).
+- [x] HEAD `590adae` or later, working tree clean.
+- [x] `pnpm -F web exec playwright install --with-deps chromium` run on host once.
+- [x] `pnpm -F web exec playwright --version` >= 1.40.
+- [x] `tools/perf/src/scenarios/topbar_interaction.rs:17` still bails with `not implemented (Phase 2)`.
+- [x] `cargo run -p perf --features real_scenarios -- --duration 5 --output /tmp/baseline.json` succeeds for the four shipped drivers.
+- [x] User confirms target interaction is `topbar-settings-button` (default) before coding.
+- [x] User confirms 50 samples is acceptable; if not, agree on N before slice 4.1.
+- [x] `config/slo-budgets.yaml` `topbar_interaction_p95_ms` field present (= 100).
 
 ---
 
@@ -198,16 +198,16 @@ In the `real-scenarios` job (the one already running `cargo run -p perf --featur
 
 ## 5. Acceptance criteria
 
-- [ ] `cargo run -p perf --features real_scenarios -- --duration 60 --output /tmp/perf-real.json` returns exactly 5 entries, each `p95_ms` < its budget in `config/slo-budgets.yaml`.
-- [ ] `topbar_interaction` p95 < 100ms locally and in CI (3 consecutive CI runs).
-- [ ] `cargo fmt --all -- --check` clean.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean.
-- [ ] `cargo test --workspace` clean.
-- [ ] `pnpm -F web typecheck && pnpm -F web test && pnpm -F web build` clean (web 99 file / 687 test baseline preserved or improved).
-- [ ] All 4 codegen drift checks pass.
-- [ ] `apps/web/tests/perf/topbar_interaction.spec.ts` runs in `--project=perf`, does NOT run under default `pnpm -F web test` (vitest) or default `playwright test` (e2e project).
-- [ ] No new `\u2026` / `\u2014` JSX text introduced (hard rule).
-- [ ] No `&&` short-circuits in any new shell snippet (hard rule).
+- [x] `cargo run -p perf --features real_scenarios -- --duration 60 --output /tmp/perf-real.json` returns exactly 5 entries, each `p95_ms` < its budget in `config/slo-budgets.yaml`.
+- [x] `topbar_interaction` p95 < 100ms locally and in CI (3 consecutive CI runs).
+- [x] `cargo fmt --all -- --check` clean.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` clean.
+- [x] `cargo test --workspace` clean.
+- [x] `pnpm -F web typecheck && pnpm -F web test && pnpm -F web build` clean (web 99 file / 687 test baseline preserved or improved).
+- [x] All 4 codegen drift checks pass.
+- [x] `apps/web/tests/perf/topbar_interaction.spec.ts` runs in `--project=perf`, does NOT run under default `pnpm -F web test` (vitest) or default `playwright test` (e2e project).
+- [x] No new `\u2026` / `\u2014` JSX text introduced (hard rule).
+- [x] No `&&` short-circuits in any new shell snippet (hard rule).
 
 ---
 

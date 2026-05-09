@@ -19,8 +19,8 @@ node scripts/perf-baseline-archive.mjs perf-results.json
 node scripts/perf-baseline-compare.mjs perf-results.json --window 14
 ```
 
-## CI wiring (deferred to follow-up plan F3 wiring step)
+## CI wiring
 
-`.github/workflows/perf.yml` currently runs only the measurement step. Wiring archive + compare into CI requires `actions/cache/restore@v4` + `actions/cache/save@v4` to persist `history.jsonl` across cron runs. See `docs/plans/wiring/post-r1-r6-followups-plan-2026-05-07.md` (F3 → CI wiring section) for the template.
+`.github/workflows/perf.yml` runs the full archive + compare pipeline on every weekly perf cron and persists `history.jsonl` across runs via `actions/cache/restore@v4` (with the `perf-baseline-history-` prefix as `restore-keys`) before the harness, then `actions/cache/save@v4` after archive. The `perf-baseline-history` artifact is also uploaded for ad-hoc inspection (90-day retention).
 
-Until wired, `history.jsonl` is generated only by ad-hoc local runs.
+Local runs continue to append to the same file; the cache restore is best-effort and a missing cache simply seeds an empty history on the next run.

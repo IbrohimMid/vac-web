@@ -50,7 +50,7 @@ acceptance:
 - `docs/plans/f4-baseline-alarm-date-lock-2026-05-09.md` says no code should be added before 2026-05-21.
 - `docs/plans/README.md` lists F4 as the only active handoff and says the perf workflow remains `--measurement-only` until the date lock expires.
 - `docs/plans/wave-5-6-dependency-closeout-2026-05-09.md` documents F4 strict baseline alarm flip as intentionally deferred.
-- `.perf-baseline/history.jsonl` does not exist yet; only `.perf-baseline/README.md` is present, so the rolling baseline archive still needs to be persisted.
+- `.perf-baseline/history.jsonl` is not committed to `main`; the perf workflow now persists it across runs via `actions/cache/restore@v4` + `actions/cache/save@v4` (added 2026-05-10), so the rolling baseline begins accumulating from the next scheduled perf run on Monday 04:00 UTC. Until at least one cron has fired, the history file only exists as a CI cache + uploaded artifact.
 - `docs/perf-test-plan.md` still treats `--measurement-only` as the gate until F4 lands.
 - Phase H dry-run was additive-only and did not probe any new strictness beyond the existing base config.
 

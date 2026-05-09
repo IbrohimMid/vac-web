@@ -1,3 +1,14 @@
+---
+id: wiring.executor-implementation-plan
+title: 'Executor implementation wiring plan (Pass E1 + E2)'
+priority: P1
+area: executor
+status: landed  # 2026-05-06: Pass E1 audit + Pass E2 spawn_executor_for_handoff extraction
+owners:
+  - tools
+created: 2026-05-06
+---
+
 # Executor Implementation Wiring Plan (Pass E1 + E2)
 
 **Handoff:** Executor Implementation (Pass E1 + E2)

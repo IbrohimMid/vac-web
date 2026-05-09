@@ -14,7 +14,7 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 
 ## Active handoffs
 
-- [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict CI flip date-locked until 2026-05-21. Perf workflow remains `--measurement-only` on the budget gate; baseline history at `.perf-baseline/history.jsonl` now accumulates real measurements from all 5 drivers (F2.5 `topbar_interaction` landed 2026-05-09). Status: deferred 2026-05-09.
+- [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict CI flip date-locked until 2026-05-21. Perf workflow remains `--measurement-only` on the budget gate; baseline history at `.perf-baseline/history.jsonl` is persisted across cron runs via `actions/cache/restore@v4` + `actions/cache/save@v4` (perf.yml, 2026-05-10) and accumulates real measurements from all 5 drivers (F2.5 `topbar_interaction` landed 2026-05-09). Status: deferred 2026-05-09.
 
 ## Closed handoffs
 
@@ -24,11 +24,6 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 - [`wiring/cockpit-ux-implementation-plan-2026-05-07.md`](./wiring/cockpit-ux-implementation-plan-2026-05-07.md) — F5a Release panel, F5b Extensions settings + bridge wiring, F5c Perf badge + CI baseline wiring. Two trust hardening rounds layered on top (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate, structured audit, two-party promotion approval, live perf telemetry). Status: closed 2026-05-09.
 - [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md) — Pass E1 (audit) + Pass E2 (`spawn_executor_for_handoff` extraction & integration tests). Status: landed 2026-05-06.
 - [`wiring/remaining-work-execution-plan-2026-05-06.md`](./wiring/remaining-work-execution-plan-2026-05-06.md) — six remaining work items (R1–R6) covering slices 14, 36, 39, 41, 47, 48 follow-ups. Status: closed 2026-05-06 (all R1–R6 landed).
-
-## Stale (do not cite for new work)
-
-- [`wiring/wave-summary-2026-05-02.md`](./wiring/wave-summary-2026-05-02.md) — historical execution diary, superseded.
-- [`wiring/wave-summary-2026-05-03.md`](./wiring/wave-summary-2026-05-03.md) — Passes #1–#16+ execution diary; all work superseded by Pass #37 + 2026-05-06 closeout. Retained only as inbound-link target.
 
 ## Workflow-as-code rule
 

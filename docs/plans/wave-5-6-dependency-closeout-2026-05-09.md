@@ -1,3 +1,15 @@
+---
+id: plans.wave-5-6-dependency-closeout-2026-05-09
+title: 'Wave 5-6 dependency closeout'
+priority: P2
+area: dependencies
+status: closed  # 2026-05-09 via PR #30; @types/node 22→25 + F4 strict flip remain intentionally deferred
+owners:
+  - web
+  - tools
+created: 2026-05-09
+---
+
 # Wave 5-6 dependency closeout — 2026-05-09
 
 Status: closed out. No further dependency upgrades planned in this wave.

@@ -1,3 +1,15 @@
+---
+id: wiring.cockpit-ux-implementation-plan-2026-05-07
+title: 'Cockpit UX implementation plan (F5a/F5b/F5c)'
+priority: P1
+area: cockpit-ux
+status: closed  # landed 2026-05-09; all three slices merged
+owners:
+  - web
+  - tools
+created: 2026-05-07
+---
+
 # Cockpit UX Implementation Plan — F5a / F5b / F5c
 
 **Status**: closed (2026-05-09)
@@ -49,15 +61,15 @@ Semua kerja R1–R6 + Phase 2 + F1 + F3 adalah library/CI/dev-tool/docs work. Pl
 
 ## 3. Pre-flight checklist sesi baru
 
-- [ ] MCP `mcpServer_vac_web_workbench3` aktif dan terhubung ke worker sehat.
-- [ ] Branch `main` clean, latest dari remote (`git status` empty, `git fetch && git status` no behind).
-- [ ] Latest HEAD memuat commit `60d4c92` (F1+F3) atau lebih baru.
-- [ ] Tidak ada PR open yang memodifikasi file target F5a/F5b/F5c.
-- [ ] User confirm scope: total (F5a+F5b+F5c) atau parsial (F5a saja, dst).
-- [ ] User confirm urutan (saran default: F5a → F5c-CI → F5b → F5c-Web).
-- [ ] Recon dulu pattern bridge handler di `apps/local-bridge/src/server/` (file struktur belum diaudit di plan ini).
-- [ ] Cek `apps/local-bridge/Cargo.toml` untuk `serde_yaml` dependency; bila tidak ada, tambah.
-- [ ] Recon `apps/web/src/transport/` untuk API `transport.send` yang akan dipakai F5b.
+- [x] MCP `mcpServer_vac_web_workbench3` aktif dan terhubung ke worker sehat.
+- [x] Branch `main` clean, latest dari remote (`git status` empty, `git fetch && git status` no behind).
+- [x] Latest HEAD memuat commit `60d4c92` (F1+F3) atau lebih baru.
+- [x] Tidak ada PR open yang memodifikasi file target F5a/F5b/F5c.
+- [x] User confirm scope: total (F5a+F5b+F5c) atau parsial (F5a saja, dst).
+- [x] User confirm urutan (saran default: F5a → F5c-CI → F5b → F5c-Web).
+- [x] Recon dulu pattern bridge handler di `apps/local-bridge/src/server/` (file struktur belum diaudit di plan ini).
+- [x] Cek `apps/local-bridge/Cargo.toml` untuk `serde_yaml` dependency; bila tidak ada, tambah.
+- [x] Recon `apps/web/src/transport/` untuk API `transport.send` yang akan dipakai F5b.
 
 ---
 
@@ -83,16 +95,16 @@ User melihat targets list, deploy progress live, release notes draft, dan post-d
 
 ### Acceptance criteria
 
-- [ ] `pnpm -F web dev` → buka cockpit → klik "Release" di Topbar → panel terbuka.
-- [ ] Tanpa transport event, panel menampilkan empty state per section ("No targets yet", dst).
-- [ ] Inject sintetik via dev console: `useRelease.getState().setTargets([{id:'t1', label:'staging-eu', environment:'staging', last_status:'idle'}])` → `TargetCard` muncul.
-- [ ] `useRelease.getState().upsertDeploy({...})` → `DeployProgressList` update tanpa unmount; status badge berubah live.
-- [ ] `useRelease.getState().setNotes({...})` → markdown render terlihat dengan source_refs di footer.
-- [ ] `useRelease.getState().appendObservation({...})` → muncul di feed (newest top).
-- [ ] Esc menutup overlay.
-- [ ] Vitest: minimal 1 test per komponen (5 file × 1 test = 5 test minimum), driven dengan `useRelease.setState`.
-- [ ] `pnpm -F web typecheck && pnpm -F web test && pnpm -F web build` PASS.
-- [ ] Grep verifier: `grep -rn 'useRelease' apps/web/src/components/` HARUS return ≥ 5 baris (5 komponen baru).
+- [x] `pnpm -F web dev` → buka cockpit → klik "Release" di Topbar → panel terbuka.
+- [x] Tanpa transport event, panel menampilkan empty state per section ("No targets yet", dst).
+- [x] Inject sintetik via dev console: `useRelease.getState().setTargets([{id:'t1', label:'staging-eu', environment:'staging', last_status:'idle'}])` → `TargetCard` muncul.
+- [x] `useRelease.getState().upsertDeploy({...})` → `DeployProgressList` update tanpa unmount; status badge berubah live.
+- [x] `useRelease.getState().setNotes({...})` → markdown render terlihat dengan source_refs di footer.
+- [x] `useRelease.getState().appendObservation({...})` → muncul di feed (newest top).
+- [x] Esc menutup overlay.
+- [x] Vitest: minimal 1 test per komponen (5 file × 1 test = 5 test minimum), driven dengan `useRelease.setState`.
+- [x] `pnpm -F web typecheck && pnpm -F web test && pnpm -F web build` PASS.
+- [x] Grep verifier: `grep -rn 'useRelease' apps/web/src/components/` HARUS return ≥ 5 baris (5 komponen baru).
 
 ---
 
@@ -170,16 +182,16 @@ User melihat daftar extensions, tier badge, dapat revoke/quarantine via UI. Akti
 
 ### Acceptance criteria
 
-- [ ] `cargo test -p local-bridge` PASS, termasuk minimal 1 integration test handler `extensions.update_trust` yang memanggil `enforce_extension_trust` dengan assert TrustDecision yang diharapkan.
-- [ ] `cargo clippy -p local-bridge --all-targets -- -D warnings` PASS.
-- [ ] **Grep verifier baru** `node scripts/check-extension-trust-callsites.mjs` PASS dengan ≥ 1 callsite di `apps/local-bridge/src/`.
-- [ ] Dev cockpit: klik settings → tab Extensions → list 3 seed entry muncul dengan tier badge benar.
-- [ ] Klik aksi "Quarantine" pada `ext-bundled-demo` → modal konfirmasi → submit → entry tier berubah jadi `quarantined` di UI tanpa reload.
-- [ ] `cat config/extension-trust.yaml` setelah action menunjukkan tier baru tertulis di disk.
-- [ ] Reload cockpit → state persist (load via `extensions.list`).
-- [ ] `node scripts/codegen-event-catalog.mjs --check` PASS (no diff).
-- [ ] `pnpm -F web typecheck && pnpm -F web test` PASS.
-- [ ] Vitest: minimal 1 test untuk store + 1 test untuk `ExtensionsList` + 1 test untuk handler.
+- [x] `cargo test -p local-bridge` PASS, termasuk minimal 1 integration test handler `extensions.update_trust` yang memanggil `enforce_extension_trust` dengan assert TrustDecision yang diharapkan.
+- [x] `cargo clippy -p local-bridge --all-targets -- -D warnings` PASS.
+- [x] **Grep verifier baru** `node scripts/check-extension-trust-callsites.mjs` PASS dengan ≥ 1 callsite di `apps/local-bridge/src/`.
+- [x] Dev cockpit: klik settings → tab Extensions → list 3 seed entry muncul dengan tier badge benar.
+- [x] Klik aksi "Quarantine" pada `ext-bundled-demo` → modal konfirmasi → submit → entry tier berubah jadi `quarantined` di UI tanpa reload.
+- [x] `cat config/extension-trust.yaml` setelah action menunjukkan tier baru tertulis di disk.
+- [x] Reload cockpit → state persist (load via `extensions.list`).
+- [x] `node scripts/codegen-event-catalog.mjs --check` PASS (no diff).
+- [x] `pnpm -F web typecheck && pnpm -F web test` PASS.
+- [x] Vitest: minimal 1 test untuk store + 1 test untuk `ExtensionsList` + 1 test untuk handler.
 
 ---
 
@@ -216,10 +228,10 @@ User melihat daftar extensions, tier badge, dapat revoke/quarantine via UI. Akti
 
 ### Acceptance criteria
 
-- [ ] `perf.yml` tervalidasi syntax (push branch test → workflow trigger sukses).
-- [ ] CI run menghasilkan `.perf-baseline/history.jsonl` artifact (uploaded).
-- [ ] `perf-baseline-compare.mjs` step exit 0 di first run (sesuai design empty-window handling).
-- [ ] PerfBadge render di Topbar dev cockpit dengan label dan warna minimal.
+- [x] `perf.yml` tervalidasi syntax (push branch test → workflow trigger sukses).
+- [x] CI run menghasilkan `.perf-baseline/history.jsonl` artifact (uploaded).
+- [x] `perf-baseline-compare.mjs` step exit 0 di first run (sesuai design empty-window handling).
+- [x] PerfBadge render di Topbar dev cockpit dengan label dan warna minimal.
 
 ---
 
@@ -254,14 +266,14 @@ git diff --exit-code
 
 ## 8. Definition of done (full plan)
 
-- [ ] Semua slice acceptance criteria centang.
-- [ ] Validation suite lengkap PASS.
-- [ ] **Grep audit ulang menunjukkan ≥ 1 UI consumer untuk: `useRelease` (F5a), `useExtensions` (F5b), perf data (F5c).**
-- [ ] **Grep audit ulang menunjukkan ≥ 1 callsite produksi `enforce_extension_trust` di `apps/local-bridge/src/`** (verifier `check-extension-trust-callsites.mjs` PASS).
-- [ ] Notion handoff page F5 di-update status DONE dengan tabel before/after delta UI.
-- [ ] Commit message format: `feat(cockpit-ux): F5a/F5b/F5c wire release+extensions+perf to UI`.
-- [ ] Plan tracker `post-r1-r6-followups-plan-2026-05-07.md` F5 dipindah ke ✅ Closed.
-- [ ] Plan ini sendiri ditandai status: `closed` di frontmatter setelah merge.
+- [x] Semua slice acceptance criteria centang.
+- [x] Validation suite lengkap PASS.
+- [x] **Grep audit ulang menunjukkan ≥ 1 UI consumer untuk: `useRelease` (F5a), `useExtensions` (F5b), perf data (F5c).**
+- [x] **Grep audit ulang menunjukkan ≥ 1 callsite produksi `enforce_extension_trust` di `apps/local-bridge/src/`** (verifier `check-extension-trust-callsites.mjs` PASS).
+- [x] Notion handoff page F5 di-update status DONE dengan tabel before/after delta UI.
+- [x] Commit message format: `feat(cockpit-ux): F5a/F5b/F5c wire release+extensions+perf to UI`.
+- [x] Plan tracker `post-r1-r6-followups-plan-2026-05-07.md` F5 dipindah ke ✅ Closed.
+- [x] Plan ini sendiri ditandai status: `closed` di frontmatter setelah merge.
 
 ---
 

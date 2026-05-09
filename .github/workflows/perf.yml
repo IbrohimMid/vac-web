@@ -36,6 +36,14 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml', 'pnpm-lock.yaml') }}
       - name: Install Playwright Chromium
         run: pnpm -F web exec playwright install --with-deps chromium
+      - name: Restore perf baseline history
+        id: perf-baseline-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .perf-baseline/history.jsonl
+          key: perf-baseline-history-${{ github.run_id }}
+          restore-keys: |
+            perf-baseline-history-
       - name: Build perf harness (real scenarios)
         run: cargo build -p perf --release --features real_scenarios
       - name: Run perf harness (real scenarios, measurement-only)
@@ -43,7 +51,15 @@ jobs:
       - name: Check measurements vs budgets (measurement-only)
         run: node scripts/check-slo-measurements.mjs perf-results.json --measurement-only
       - name: Archive perf baseline
+        env:
+          PERF_MEASUREMENTS_FILE: perf-results.json
         run: node scripts/perf-baseline-archive.mjs
+      - name: Save perf baseline history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .perf-baseline/history.jsonl
+          key: perf-baseline-history-${{ github.run_id }}
       - name: Compare against rolling perf baseline
         continue-on-error: true
         run: node scripts/perf-baseline-compare.mjs --window 10 --threshold 25

@@ -1,3 +1,15 @@
+---
+id: plans.f4-baseline-alarm-date-lock-2026-05-09
+title: 'F4 baseline alarm date-lock'
+priority: P1
+area: perf-tooling
+status: deferred  # active handoff; date-locked until 2026-05-21
+owners:
+  - tools
+  - web
+created: 2026-05-09
+---
+
 # F4 baseline alarm date-lock audit — 2026-05-09
 
 Status: skipped intentionally.
