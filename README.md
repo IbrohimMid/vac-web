@@ -22,7 +22,7 @@ End-to-end software delivery cockpit: **build → assess → handoff → execute
 | Cockpit UX (F5) | Release plane UI, Settings/Extensions tab, Perf badge, CI perf baseline wiring |
 | Trust hardening | Audit-hardened `update_trust`, session-bound admin gate, structured audit, TOCTOU fix, two-party promotion approval, live perf telemetry |
 
-Test surface: **97 vitest files / 677 tests** + cargo workspace (clippy `-D warnings` + fmt + nextest + doctests) + **4 drift checks** + red-team adversarial cases.
+Test surface: **99 vitest files / 687 tests** + cargo workspace (clippy `-D warnings` + fmt + nextest + doctests) + **4 drift checks** + red-team adversarial cases.
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the per-phase log.
 
@@ -76,8 +76,9 @@ vac-web/
 
 ## Recent highlights
 
-Latest cockpit-UX wiring + two trust-hardening rounds (May 2026):
+Latest dependency closeout + cockpit-UX wiring + two trust-hardening rounds (May 2026):
 
+- **Wave 5-6 dependency closeout (PR #23–#30)** — Vite 8 + React 19 + scoped `@xterm/*` 6, Tailwind 4, ESLint 10, size-limit 12, `@noble/*` v2, plus closeout doc `docs/plans/wave-5-6-dependency-closeout-2026-05-09.md`. `@types/node` 22 → 25 and F4 strict flip intentionally deferred.
 - **Cockpit UX F5a/b/c (`5630598..1e9d8e2`)** — Release plane wired to 5 store-reading components, Settings/Extensions tab with `TrustActionMenu` + `QuarantineConfirmModal`, Topbar Perf badge, CI perf baseline archive + compare scripts.
 - **Trust hardening — Round 1 (`5ab8563..7fc29a2`)** — `extensions.update_trust` audit hardening: admin gate, no silent auto-insert, restricted `revoked → allowed_*` transitions, structured audit emission, 5 new error codes, full doc cross-link (protocol §3.17/§4.14, ADR 0003, red-team §3.13).
 - **Trust hardening — Round 2 (`dc2fb7f..1b886c8`)**

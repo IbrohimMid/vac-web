@@ -27,7 +27,7 @@ End-to-end software delivery cockpit. Local-first, browser-driven; assessor/exec
 
 ## Plan set
 
-All 50 numbered wiring slices (01–50) landed by Pass #27 (2026-05-04). See `docs/plans/README.md` for active handoffs (currently: `executor-implementation-plan.md`, landed 2026-05-06).
+All 50 numbered wiring slices (01–50) landed by Pass #27 (2026-05-04). Post-v1 cockpit UX (F5a/F5b/F5c), trust real classification (F1), perf baseline watch (F3), ADR refresh (F6), executor handoff (Pass E1+E2), R1–R6, two trust hardening rounds, and Wave 5-6 dependency closeout (PR #23–#30) all landed. See `docs/plans/README.md` for active handoffs (currently: F2.5 `topbar-interaction-playwright-plan-2026-05-07.md` + F4 CI strict flip date-locked until 2026-05-21).
 
 ## CI gates (must stay green)
 
