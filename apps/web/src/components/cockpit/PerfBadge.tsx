@@ -4,7 +4,7 @@
 //
 // Producer: apps/local-bridge/src/perf.rs (Slice F5c-CI / F5c-web).
 // Bridge status union: 'unknown' | 'ok' | 'warn' | 'crit'.
-//   unknown -> visual='ok', text='perf: \u2014' (em dash placeholder)
+//   unknown -> visual='ok', text='perf: -' (placeholder)
 //   ok      -> visual='ok'
 //   warn    -> visual='warn'
 //   crit    -> visual='crit'
@@ -53,7 +53,7 @@ export function PerfBadge({ transport = null }: Props) {
 
   const visual: VisualState =
     status === 'warn' ? 'warn' : status === 'crit' ? 'crit' : 'ok';
-  const text = status === 'unknown' ? 'perf: \u2014' : `perf: ${status}`;
+  const text = status === 'unknown' ? 'perf: -' : `perf: ${status}`;
 
   return (
     <span
