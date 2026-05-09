@@ -86,7 +86,7 @@ jobs:
       - name: Generate Node SBOM
         run: pnpm dlx @cyclonedx/cdxgen@^10 -o sbom-node.cdx.json -p
       - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: |
