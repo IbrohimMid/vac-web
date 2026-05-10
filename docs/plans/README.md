@@ -1,14 +1,12 @@
 # Implementation Plans
 
-Active implementation plans only. Historical phase/stage docs were removed because they referenced old commits, old stage gates, and behavior that no longer matches the current backend/UI wiring.
-
-Use `git log` for archaeology. Use this directory for work that should guide the next code changes.
+Active implementation plans only. Historical phase/stage docs and completed handoff plans are removed from this directory when they stop guiding the next code changes; use `git log -- docs/plans` for archaeology.
 
 ## Plan index
 
-All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). The plan set is now reference material — use it to understand current cockpit shape and architectural intent. New work is tracked in dedicated handoff plans (see *Active handoffs* below).
+All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). The split wiring set is retained as reference material for current cockpit shape and architectural intent.
 
-1. [`wiring/00-index.md`](./wiring/00-index.md) — full split-plan index, all slices landed.
+1. [`wiring/00-index.md`](./wiring/00-index.md) — full split-plan index, all numbered slices landed.
 2. [`wiring/30-product-surface-roadmap.md`](./wiring/30-product-surface-roadmap.md) — historical implementation wave ordering.
 3. [`backend-ui-wiring.md`](./backend-ui-wiring.md) — compatibility router that points to the split `wiring/` plan set.
 
@@ -17,16 +15,15 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 - [`keyboard-nav-overlays-2026-05-10.md`](./keyboard-nav-overlays-2026-05-10.md) — Focus trap + keyboard-equal action handling for 4 cockpit overlays (Release, Handoff, Extensions, Approvals) plus GateDetail. Closes PRD §6 prinsip 1 gap (audit avg keyboard nav 1.8/5). Status: draft 2026-05-10.
 - [`release-plane-backend-phase-6.md`](./release-plane-backend-phase-6.md) — Phase 6 backend executors for `release.deploy/publish/generate_notes` + `executor.release` capability profile + audit log + gate enforcement. UI auto-enables via affordance catalog when manifest flips. Status: draft 2026-05-10.
 
-## Closed handoffs
+## Recently closed, now removed from active docs
 
-- [`wiring/f4-refresh-plan-2026-05-09.md`](./wiring/f4-refresh-plan-2026-05-09.md) + [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict perf gate flip. `--strict` enabled + `continue-on-error` shim removed from `.github/workflows/perf.yml`; baseline alarm date-lock superseded by warmup-safe `MIN_STRICT_WINDOW = 5` guard in `scripts/perf-baseline-compare.mjs` (gate is informational until ≥ 5 history entries accumulate, then becomes truly gating). Status: closed 2026-05-10.
-- [`affordance-fake-feature-closeout-2026-05-10.md`](./affordance-fake-feature-closeout-2026-05-10.md) — 8 ungated NotWired buttons (release.publish/generate_notes, gate.signoff/override, runtime.cancel_job, migration.create_draft, connector.connect/disconnect) gated via affordance catalog. 5 components refactored, 16 tests added, 704/704 web tests green, bundle budget unchanged. Status: closed 2026-05-10.
-- [`wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./wiring/topbar-interaction-playwright-plan-2026-05-07.md) — F2.5 final real perf driver (`topbar_interaction` via Playwright). Spec at `apps/web/tests/perf/topbar_interaction.spec.ts` (5 warmup + 50 timed iterations, in-page `performance.now()` bracket); Rust driver at `tools/perf/src/scenarios/topbar_interaction.rs` spawns the dedicated Playwright `perf` project; CI runs `cargo run -p perf --release --features real_scenarios` with Chromium cached. Status: closed 2026-05-09.
-- [`wave-5-6-dependency-closeout-2026-05-09.md`](./wave-5-6-dependency-closeout-2026-05-09.md) — PR #23–#29 dependency drift refresh, scoped `@xterm/*` migration, size-limit 12, ESLint 10, xterm 6, Tailwind 4, Noble v2. `@types/node` 22 → 25 and F4 strict flip documented as intentional deferrals. Status: closed 2026-05-09 (PR #30).
-- [`wiring/post-r1-r6-followups-plan-2026-05-07.md`](./wiring/post-r1-r6-followups-plan-2026-05-07.md) — F1 closed; F2 4/5 landed with F2.5 split to topbar plan; F3 closed; F4 deferred until 2026-05-21; F5 closed via cockpit-UX plan; F6 closed via ADR-0004. Status: closed_partial 2026-05-09.
-- [`wiring/cockpit-ux-implementation-plan-2026-05-07.md`](./wiring/cockpit-ux-implementation-plan-2026-05-07.md) — F5a Release panel, F5b Extensions settings + bridge wiring, F5c Perf badge + CI baseline wiring. Two trust hardening rounds layered on top (audit-hardened `update_trust`, TOCTOU fix, session-bound admin gate, structured audit, two-party promotion approval, live perf telemetry). Status: closed 2026-05-09.
-- [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md) — Pass E1 (audit) + Pass E2 (`spawn_executor_for_handoff` extraction & integration tests). Status: landed 2026-05-06.
-- [`wiring/remaining-work-execution-plan-2026-05-06.md`](./wiring/remaining-work-execution-plan-2026-05-06.md) — six remaining work items (R1–R6) covering slices 14, 36, 39, 41, 47, 48 follow-ups. Status: closed 2026-05-06 (all R1–R6 landed).
+Use `git log -- docs/plans` for the full deleted text. Current durable behavior lives in the relevant contract docs and source files.
+
+- Affordance fake-feature closeout: 8 NotWired buttons are now affordance-gated in the web UI.
+- F4 strict perf gate flip: `.github/workflows/perf.yml` now runs strict compare, with `MIN_STRICT_WINDOW = 5` warmup guard in `scripts/perf-baseline-compare.mjs`.
+- F2.5 topbar Playwright driver: the real topbar interaction perf scenario is landed.
+- Wave 5-6 dependency closeout: dependency decisions are retained in changelog / lockfile / ADR-0005 where still relevant.
+- R1-R6, executor handoff, cockpit UX, and post-R1-R6 followups: landed; reference current product/architecture docs instead of historical plans.
 
 ## Workflow-as-code rule
 
@@ -48,7 +45,7 @@ The YAML does **not** replace runtime enforcement. Rust and TypeScript remain th
 
 ## Current priority
 
-As of 2026-05-10, all 50 numbered wiring slices (01-50), executor handoff (Pass E1+E2), R1–R6, F1/F2/F3/F4/F5a/F5b/F5c/F6, two trust hardening rounds, F2.5 Playwright driver, Wave 5-6 dependency closeout (PR #23–#30), and the affordance fake-feature closeout (8 buttons) are landed. F4 strict gate is now active in `.github/workflows/perf.yml` with a `MIN_STRICT_WINDOW` warmup guard so it self-loosens until enough history accumulates. Active focus moves to product-surface depth:
+As of 2026-05-10, all 50 numbered wiring slices (01-50), executor handoff (Pass E1+E2), R1-R6, F1/F2/F3/F4/F5a/F5b/F5c/F6, two trust hardening rounds, F2.5 Playwright driver, Wave 5-6 dependency closeout, and the affordance fake-feature closeout (8 buttons) are landed. F4 strict gate is active with a `MIN_STRICT_WINDOW` warmup guard so it self-loosens until enough history accumulates. Active focus moves to product-surface depth:
 
 1. **Keyboard nav overlays** — closes PRD §6 prinsip 1 gap. See [`keyboard-nav-overlays-2026-05-10.md`](./keyboard-nav-overlays-2026-05-10.md).
 2. **Release plane backend Phase 6** — wires `release.deploy/publish/generate_notes` real executors so the UI affordances auto-enable. See [`release-plane-backend-phase-6.md`](./release-plane-backend-phase-6.md).
@@ -59,7 +56,6 @@ _Historical P0 priority order (all landed): command manifest, `feature.not_wired
 ## Declarative pattern adoption
 
 Declarative pattern adoption starts at [`wiring/31-declarative-pattern-adoption-audit.md`](./wiring/31-declarative-pattern-adoption-audit.md). Use this before adding new product surfaces or refactoring command/event catalogs.
-
 
 ## Enterprise maturity layer
 

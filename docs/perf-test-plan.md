@@ -268,7 +268,7 @@ Sections 1–7 above scope **frontend** perf measurement (Playwright traces, Vit
 
 ### Phase 1 — synthetic baseline (closed)
 
-The crate originally emitted **deterministic synthetic measurements** below the SLO budgets to validate the end-to-end contract (Rust crate → JSON → Node check script → CI upload) without real per-subsystem drivers. Synthetic placeholders survive in `tools/perf/src/main.rs::synthetic_measurements()` as fallbacks for any subsystem that has not yet shipped a real driver. The check script still runs in `--measurement-only` mode (warn but exit 0) until F4 strict flip lands (date-locked until 2026-05-21).
+The crate originally emitted **deterministic synthetic measurements** below the SLO budgets to validate the end-to-end contract (Rust crate → JSON → Node check script → CI upload) without real per-subsystem drivers. Synthetic placeholders survive in `tools/perf/src/main.rs::synthetic_measurements()` as fallbacks for any subsystem that has not yet shipped a real driver. CI now runs the baseline compare in strict mode; `scripts/perf-baseline-compare.mjs` keeps early runs warmup-safe with `MIN_STRICT_WINDOW = 5`, reporting undersized windows without failing.
 
 ### Phase 2 — real per-subsystem drivers (landed 2026-05-09)
 
@@ -278,9 +278,9 @@ All five drivers under `tools/perf/src/scenarios/` now exercise their respective
 - `websocket_event_delivery.rs` — emits synthetic events from translator; measures server→client delivery.
 - `persisted_event_write.rs` — invokes `audit::log_structured` + session persistence; measures fsync window.
 - `command_manifest_refresh.rs` — reloads `command-manifest.yaml`; measures dispatcher cold-start.
-- `topbar_interaction.rs` — F2.5 (landed 2026-05-09 via [`plans/wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./plans/wiring/topbar-interaction-playwright-plan-2026-05-07.md)). Spawns the dedicated Playwright `perf` project (config: `apps/web/playwright.config.ts`; spec: `apps/web/tests/perf/topbar_interaction.spec.ts`) which boots `vite preview` + a `MockBridge`, performs 5 warmup iterations followed by 50 timed iterations bracketing `topbar-settings-button` click → `settings-overlay` visible (in-page `performance.now()` + `requestAnimationFrame` poll), and writes `{subsystem, samples_ms}` to the path passed via `VAC_PERF_OUTPUT`. The Rust driver converts ms→ns and reuses the shared `summarize()` helper. Budget: `topbar_interaction_p95_ms = 100` (`config/slo-budgets.yaml`).
+- `topbar_interaction.rs` — F2.5 (landed 2026-05-09 via the 2026-05-09 F2.5 implementation commit). Spawns the dedicated Playwright `perf` project (config: `apps/web/playwright.config.ts`; spec: `apps/web/tests/perf/topbar_interaction.spec.ts`) which boots `vite preview` + a `MockBridge`, performs 5 warmup iterations followed by 50 timed iterations bracketing `topbar-settings-button` click → `settings-overlay` visible (in-page `performance.now()` + `requestAnimationFrame` poll), and writes `{subsystem, samples_ms}` to the path passed via `VAC_PERF_OUTPUT`. The Rust driver converts ms→ns and reuses the shared `summarize()` helper. Budget: `topbar_interaction_p95_ms = 100` (`config/slo-budgets.yaml`).
 
-The check script default flip from `--measurement-only` to `--strict` is gated on F4 (date-locked until 2026-05-21 per [`plans/f4-baseline-alarm-date-lock-2026-05-09.md`](./plans/f4-baseline-alarm-date-lock-2026-05-09.md)) — at least 14 days of rolling baseline history must accumulate before strict gating is safe.
+The check script default has flipped from `--measurement-only` to `--strict`. Warmup safety is enforced by `MIN_STRICT_WINDOW = 5`: strict runs with fewer than five history entries report the comparison but exit successfully; once the window is large enough, regressions fail CI.
 
 ### Cross-references
 
@@ -288,4 +288,4 @@ The check script default flip from `--measurement-only` to `--strict` is gated o
 - Budget source of truth: `config/slo-budgets.yaml`
 - Structural validator (well-formedness only): `scripts/check-slo-budgets.mjs` (slice 41 closeout, 2026-05-06)
 - Measurement validator (this section): `scripts/check-slo-measurements.mjs`
-- Tracker: `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md::R6`
+- Status: landed; see `tools/perf/src/scenarios/` and the perf workflow for current behavior.

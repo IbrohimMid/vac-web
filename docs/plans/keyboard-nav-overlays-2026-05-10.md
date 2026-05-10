@@ -8,7 +8,7 @@ owners:
   - web
 created: 2026-05-10
 depends_on:
-  - plans/affordance-fake-feature-closeout-2026-05-10
+  - apps/web/src/domain/capabilities/affordanceCatalog.ts
 ---
 
 # Keyboard nav for cockpit overlays — 2026-05-10
@@ -74,7 +74,7 @@ area: cockpit-ux
 owners:
   - web
 depends_on:
-  - plans/affordance-fake-feature-closeout-2026-05-10
+  - apps/web/src/domain/capabilities/affordanceCatalog.ts
 steps:
   - id: focus_trap_hook
     do: 'Create useFocusTrap hook'

@@ -60,7 +60,7 @@ Per slice 48 step_05 ("Define which practices are adopted, adapted, rejected, or
 | Reconciliation loops | rejected | Local-first cockpit; no continuous reconciler. State changes are command-driven, not desired-state-driven. ADR will be authored if/when the first reconciler need surfaces. | n/a |
 | Conditions | adapted | Capability classifiers in `apps/web/src/domain/capabilities/*.ts` carry condition-equivalent gates (`canDeploy`, `canApprove`, `gateReady`, etc.). Not a generic boolean DSL. | `apps/web/src/domain/capabilities/`, slice 33 |
 | Admission / defaulting | adapted | `enforce_*` functions in `packages/profile-core` provide admission. `command-manifest.yaml` provides defaults via codegen. Not Kubernetes-style mutating webhooks. | `packages/profile-core/src/lib.rs`, slice 20 |
-| Dry-run / diff | deferred | Useful for handoff dispatch + workflow apply; no concrete user surface needs it yet. Tracked as a follow-up under `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md`. | follow-up |
+| Dry-run / diff | deferred | Useful for handoff dispatch + workflow apply; no concrete user surface needs it yet. Deferred until a concrete user surface needs it; promote to a new active handoff plan when that happens. | follow-up |
 | Version conversion | adopted | `docs/data-contract-versioning.md` + `schema/migrations/` define versioned schemas with codegen. | `docs/data-contract-versioning.md`, slice 44 |
 | Golden examples | adopted | `examples/workflows/*.yaml` + `tools/mock-engine/scenarios/*.yaml` + golden test fixtures in `tools/mock-engine/tests/`. | `examples/workflows/`, `tools/mock-engine/scenarios/`, slice 35 |
 | Provenance | partial | SBOM (slice 43) covers supply-chain provenance. Per-event provenance (who emitted, with what auth) is captured in audit logs (slice 29) but not a first-class field on every event. Tracked as a follow-up. | `.github/workflows/security.yml` (sbom job), `apps/local-bridge/src/audit/`, slice 29 + slice 43 |
@@ -75,4 +75,4 @@ Per slice 48 step_05 ("Define which practices are adopted, adapted, rejected, or
 
 ### Action item update
 
-Action item #4 of this benchmark ("Adopt sigstore/cosign signing for release artifacts") feeds into the trust-model design captured in `docs/extension-trust-model.md` (slice 47 follow-up, 2026-05-06) and ADR `docs/adr/0003-extension-trust-model.md`. Action item #3 ("Adopt SLSA L1 in CI") is pending; tracked under `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md` if release-cycle planning surfaces it.
+Action item #4 of this benchmark ("Adopt sigstore/cosign signing for release artifacts") feeds into the trust-model design captured in `docs/extension-trust-model.md` (slice 47 follow-up, 2026-05-06) and ADR `docs/adr/0003-extension-trust-model.md`. Action item #3 ("Adopt SLSA L1 in CI") is pending; promote it into a new active handoff plan when release-cycle planning surfaces it.

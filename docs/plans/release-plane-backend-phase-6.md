@@ -9,8 +9,8 @@ owners:
   - web
 created: 2026-05-10
 depends_on:
-  - plans/affordance-fake-feature-closeout-2026-05-10
-  - plans/wiring/f4-refresh-plan-2026-05-09
+  - apps/web/src/domain/capabilities/affordanceCatalog.ts
+  - scripts/perf-baseline-compare.mjs
 ---
 
 # Release plane backend (Phase 6) — 2026-05-10
@@ -83,8 +83,8 @@ owners:
   - tools
   - web
 depends_on:
-  - plans/affordance-fake-feature-closeout-2026-05-10
-  - plans/wiring/f4-refresh-plan-2026-05-09
+  - apps/web/src/domain/capabilities/affordanceCatalog.ts
+  - scripts/perf-baseline-compare.mjs
 steps:
   - id: capability_profile
     do: 'Author config/capability-profiles/executor.release.yaml'
@@ -190,7 +190,7 @@ Effort total: **3-5 hari** (24-40h spread, multi-PR):
 - Day 4 (8h): tests (Rust + web update) + red-team + manual smoke.
 - Day 5 (4h): manifest flip + codegen + closeout + plan review.
 
-Dependency: F4 (date-locked sampai 2026-05-21) tidak block plan ini secara teknis (perf-only), tapi sebaiknya F4 settle dulu agar perf budget gate tidak interferensi dengan release deploy timing test.
+Dependency: F4 strict perf gate does not block this plan technically. The current warmup guard keeps undersized baseline windows report-only, so release-plane work can proceed while perf history accumulates.
 
 ## Sequencing relative to other plans
 
@@ -201,7 +201,7 @@ gate-governance-backend (TBD) ───┘                                 │
                                                                    ↓
                                                       release-runbooks (TBD, P2)
 keyboard-nav-overlays (2-3h, P1) ── (independent)
-F4 strict flip (date-locked 2026-05-21, P1) ── (independent perf gate)
+F4 strict perf gate (landed, warmup-safe) ── (independent perf gate)
 ```
 
 ## Critical files

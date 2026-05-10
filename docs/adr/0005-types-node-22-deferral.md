@@ -37,8 +37,6 @@ Revisit this decision when one of the following is true:
 
 ## Cross-references
 
-- `docs/plans/wave-5-6-dependency-closeout-2026-05-09.md`
-- `docs/plans/f4-baseline-alarm-date-lock-2026-05-09.md`
 - `docs/plans/README.md`
 - `packages/protocol-ts/package.json`
 - `README.md`

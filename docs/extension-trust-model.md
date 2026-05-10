@@ -93,7 +93,7 @@ Operator UX (cockpit-side, slice 47 Phase 4):
 
 | Phase | Scope | Status | Tracker |
 | --- | --- | --- | --- |
-| 1 | Design doc (this file) + ADR 0003 | landed 2026-05-06 | `docs/plans/wiring/remaining-work-execution-plan-2026-05-06.md` (R5) |
+| 1 | Design doc (this file) + ADR 0003 | landed 2026-05-06 | Current durable source: this file + `docs/adr/0003-extension-trust-model.md` |
 | 2 | `config/extension-trust.yaml` shape + drift gate | planned | follow-up |
 | 3 | `enforce_extension_trust` runtime gate | planned | follow-up |
 | 4 | Cockpit UX (list, revoke, quarantine) | planned | follow-up |

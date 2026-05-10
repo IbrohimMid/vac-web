@@ -17,7 +17,7 @@ The previous monolith mixed command manifest work, frontend affordance gating, w
 
 ## P0 slice order (historical — all landed)
 
-The original P0 ordering below is preserved for archaeology. As of Pass #27 audit (2026-05-04), all 10 entries — and all 50 numbered slices — have landed. New work is tracked in dedicated handoff plans (e.g. [`wiring/executor-implementation-plan.md`](./wiring/executor-implementation-plan.md)).
+The original P0 ordering below is preserved for archaeology. As of Pass #27 audit (2026-05-04), all 10 entries — and all 50 numbered slices — have landed. New work is tracked in dedicated active handoff plans such as [`keyboard-nav-overlays-2026-05-10.md`](./keyboard-nav-overlays-2026-05-10.md) and [`release-plane-backend-phase-6.md`](./release-plane-backend-phase-6.md).
 
 1. [`wiring/01-command-manifest.md`](./wiring/01-command-manifest.md) — landed.
 2. [`wiring/02-not-wired-fallback.md`](./wiring/02-not-wired-fallback.md) — landed.

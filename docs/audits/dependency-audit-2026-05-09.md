@@ -40,7 +40,7 @@ No manifest, lockfile, or Rust crate changes were made. The direct package versi
 
 ### F4 lock
 
-- None. The F4 date-lock is documented separately, but it does not block any dependency bump in this audit because no safe bump was available.
+- None. The F4 strict-gate work was independent from this dependency audit and did not block any dependency bump because no safe bump was available.
 
 ### Runtime mismatch
 
@@ -61,7 +61,7 @@ All dependencies are up to date, yay!
 ## Recommended next actions
 
 1. Re-run `pnpm audit` after a future release of `ajv`, `ajv-cli`, or `size-limit` lands on a patched line.
-2. Keep the F4 strict flip date-locked until 2026-05-21.
+2. Keep perf-gate changes separate from dependency bumps; use the current perf plan/index for active status.
 3. Re-run dependency audits in the next maintenance sweep, even if `pnpm outdated` remains empty, because security advisories can lag version publication.
 
 ## UX impact
