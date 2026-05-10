@@ -6,6 +6,7 @@ import type { CSSProperties } from 'react';
 import { useGates, type GateId } from '../../stores/gates';
 import { useRelease } from '../../stores/release';
 import { useSession } from '../../stores/session';
+import { useOverlays } from '../../stores/overlays';
 import type { TransportHandle } from '../../transport';
 import {
   affordanceFor,
@@ -29,6 +30,22 @@ const blockedStyle: CSSProperties = {
   fontSize: 12,
   color: 'var(--warn, #c98a13)',
   marginTop: 4,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  flexWrap: 'wrap',
+};
+const gateLinkStyle: CSSProperties = {
+  appearance: 'none',
+  border: 0,
+  padding: 0,
+  margin: 0,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  textDecoration: 'underline',
+  textUnderlineOffset: 2,
+  cursor: 'pointer',
 };
 const disabledReasonListStyle: CSSProperties = {
   display: 'flex',
@@ -51,6 +68,7 @@ export function TargetCard({ targetId, transport }: Props) {
   const target = useRelease((s) => s.targets.get(targetId));
   const gates = useGates((s) => s.gates);
   const sessionId = useSession((s) => s.sessionId);
+  const openOverlay = useOverlays((s) => s.open);
 
   if (!target) return null;
 
@@ -111,6 +129,10 @@ export function TargetCard({ targetId, transport }: Props) {
     }
   };
 
+  const openGate = (gateId: GateId) => {
+    openOverlay('gate_detail', { gateId, transport });
+  };
+
   return (
     <li style={rowStyle} data-testid={`release-target-${target.id}`}>
       <div style={headerStyle}>
@@ -162,7 +184,24 @@ export function TargetCard({ targetId, transport }: Props) {
         </div>
       )}
       {missing.length > 0 && (
-        <div style={blockedStyle}>Blocked by: {missing.join(', ')}</div>
+        <div style={blockedStyle} aria-label="Blocked release gates">
+          <span>Blocked by:</span>
+          {missing.map((gateId, index) => (
+            <span key={gateId}>
+              {index > 0 && <span aria-hidden="true">, </span>}
+              <button
+                type="button"
+                style={gateLinkStyle}
+                onClick={() => openGate(gateId)}
+                data-testid={`release-blocked-gate-${gateId}`}
+                aria-label={`Open ${gateId} gate detail`}
+                title={`Open ${gateId} gate detail`}
+              >
+                {gateId}
+              </button>
+            </span>
+          ))}
+        </div>
       )}
     </li>
   );

@@ -6,6 +6,7 @@ import '@testing-library/jest-dom/vitest';
 import { useGates, type Gate, type GateId, type GateState } from '../../stores/gates';
 import { useRelease } from '../../stores/release';
 import { useSession } from '../../stores/session';
+import { useOverlays } from '../../stores/overlays';
 import type { TransportHandle } from '../../transport';
 import { TargetCard } from './TargetCard';
 
@@ -59,6 +60,7 @@ describe('TargetCard', () => {
     cleanup();
     useRelease.getState().clear();
     useGates.getState().clear();
+    useOverlays.setState({ stack: [] });
   });
 
   it('enables Deploy via the affordance catalog when release.deploy is implemented', async () => {
@@ -115,7 +117,7 @@ describe('TargetCard', () => {
     );
   });
 
-  it('shows blocked reason when ReadyToDeploy gate is missing', () => {
+  it('renders blocked gates as keyboard-focusable buttons that open GateDetail', () => {
     useGates.getState().clear();
     useGates.getState().upsert(gate('DevComplete', 'pass'));
     render(
@@ -124,6 +126,10 @@ describe('TargetCard', () => {
       </ul>,
     );
     expect(screen.getByText(/Blocked by:/)).toBeInTheDocument();
-    expect(screen.getByText(/ReadyToDeploy/)).toBeInTheDocument();
+    const gateButton = screen.getByRole('button', { name: 'Open ReadyToDeploy gate detail' });
+    expect(gateButton).toHaveAttribute('data-testid', 'release-blocked-gate-ReadyToDeploy');
+    fireEvent.click(gateButton);
+    expect(useOverlays.getState().topmost()?.kind).toBe('gate_detail');
+    expect(useOverlays.getState().topmost()?.params.gateId).toBe('ReadyToDeploy');
   });
 });
