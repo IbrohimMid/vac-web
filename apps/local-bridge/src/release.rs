@@ -288,19 +288,7 @@ pub async fn handle_generate_notes(
     let draft = {
         let mut guard = match handle.release_state.lock() {
             Ok(g) => g,
-            Err(_) => {
-                return (
-                    ServerAck {
-                        ack_of: cmd.id.clone(),
-                        ok: false,
-                        error: Some(ErrorInfo {
-                            code: "persistence.write_failed".into(),
-                            message: "release state lock poisoned".into(),
-                        }),
-                    },
-                    Vec::new(),
-                );
-            }
+            Err(_) => return release_internal_error(cmd, "release state lock poisoned"),
         };
         guard.seed_default_targets();
         let Some(target) = guard.get_target(target_id) else {
@@ -401,19 +389,7 @@ pub async fn handle_deploy(
     let (deploying, deployed, deploy_id, started_at, finished_at) = {
         let mut release_guard = match handle.release_state.lock() {
             Ok(g) => g,
-            Err(_) => {
-                return (
-                    ServerAck {
-                        ack_of: cmd.id.clone(),
-                        ok: false,
-                        error: Some(ErrorInfo {
-                            code: "persistence.write_failed".into(),
-                            message: "release state lock poisoned".into(),
-                        }),
-                    },
-                    Vec::new(),
-                );
-            }
+            Err(_) => return release_internal_error(cmd, "release state lock poisoned"),
         };
         release_guard.seed_default_targets();
         let target_environment = {
@@ -424,19 +400,7 @@ pub async fn handle_deploy(
         };
         let gate_guard = match handle.gate_state.lock() {
             Ok(g) => g,
-            Err(_) => {
-                return (
-                    ServerAck {
-                        ack_of: cmd.id.clone(),
-                        ok: false,
-                        error: Some(ErrorInfo {
-                            code: "persistence.write_failed".into(),
-                            message: "gate state lock poisoned".into(),
-                        }),
-                    },
-                    Vec::new(),
-                );
-            }
+            Err(_) => return release_internal_error(cmd, "gate state lock poisoned"),
         };
         let required = gate::required_gate_ids_for_environment(&target_environment);
         let (ready, missing) = gate::missing_gate_ids(&gate_guard, required);
@@ -609,7 +573,7 @@ pub async fn handle_publish(
     let (event, deploy_id, finished_at) = {
         let mut release_guard = match handle.release_state.lock() {
             Ok(g) => g,
-            Err(_) => return release_target_error(cmd, "release state lock poisoned"),
+            Err(_) => return release_internal_error(cmd, "release state lock poisoned"),
         };
         release_guard.seed_default_targets();
         if release_guard.get_target(target_id).is_none() {
@@ -617,19 +581,7 @@ pub async fn handle_publish(
         }
         let gate_guard = match handle.gate_state.lock() {
             Ok(g) => g,
-            Err(_) => {
-                return (
-                    ServerAck {
-                        ack_of: cmd.id.clone(),
-                        ok: false,
-                        error: Some(ErrorInfo {
-                            code: "persistence.write_failed".into(),
-                            message: "gate state lock poisoned".into(),
-                        }),
-                    },
-                    Vec::new(),
-                );
-            }
+            Err(_) => return release_internal_error(cmd, "gate state lock poisoned"),
         };
         let required = gate::required_publish_gate_ids();
         let (ready, missing) = gate::missing_gate_ids(&gate_guard, required);
@@ -726,6 +678,23 @@ fn release_target_error(
             ok: false,
             error: Some(ErrorInfo {
                 code: "release.target_not_found".into(),
+                message: message.into(),
+            }),
+        },
+        Vec::new(),
+    )
+}
+
+fn release_internal_error(
+    cmd: &ClientCommand,
+    message: impl Into<String>,
+) -> (ServerAck, Vec<ServerEvent>) {
+    (
+        ServerAck {
+            ack_of: cmd.id.clone(),
+            ok: false,
+            error: Some(ErrorInfo {
+                code: "persistence.write_failed".into(),
                 message: message.into(),
             }),
         },
