@@ -3,7 +3,7 @@ id: plans.release-plane-backend-phase-6
 title: 'Release plane backend executors (Phase 6)'
 priority: P1
 area: release-plane
-status: draft
+status: closed
 owners:
   - tools
   - web
@@ -30,6 +30,15 @@ State sekarang (verified `main` 2026-05-10):
 - **Command catalog**: `release.list_targets`, `release.generate_notes`, `release.deploy`, `release.publish` semua **`status: not_wired`** di `config/control-plane/command-manifest.yaml`. Tidak ada executor di `apps/local-bridge/src/`.
 - **Event catalog**: `release.deploy_progress`, `release.post_deploy_observation` `status: planned`, producer `mock-engine.release-deploy` (mock-only sekarang).
 - **Gate system** (PRD §5): `DevComplete`, `ReadyToDeploy`, `ReadyToPublish` schemas ada di `useGates`. Sign-off + override **affordance-disabled** sampai gate backend wired (lihat Risiko #2).
+
+## Closeout
+
+Implemented in commit `4d28505` as a bridge-managed local release plane v1:
+
+- `release.deploy`, `release.publish`, `release.generate_notes`, and `release.list_targets` are wired in the local bridge.
+- Gate enforcement and session persistence back the release state.
+- Command and event catalogs were regenerated, and the web affordances auto-enable from the manifest flip.
+- This is not external connector/OAuth release integration; that remains future work.
 
 Plan ini implement 4 executor command + 2 event producer real (replace mock), plus capability profile `executor.release`. **Tidak termasuk** Runbooks (defer ke plan terpisah karena terkait template engine).
 

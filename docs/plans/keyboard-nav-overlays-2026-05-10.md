@@ -3,7 +3,7 @@ id: plans.keyboard-nav-overlays-2026-05-10
 title: 'Keyboard navigation + ESC handling for cockpit overlays'
 priority: P1
 area: cockpit-ux
-status: draft
+status: closed
 owners:
   - web
 created: 2026-05-10
@@ -35,6 +35,14 @@ Empat overlay kritikal yang harus dapat treatment penuh:
 - `GateDetail` (sign-off + override form)
 
 Menggunakan PRD §6 prinsip 7 ("Profile-aware UI — actions denied by current session profile are greyed with hover tooltip"), tooltip sudah landed via affordance closeout (plan terkait). Plan ini menambah kemampuan tooltip diakses tanpa mouse hover (focus + keyboard reveal).
+
+## Closeout
+
+Implemented in commit `4d28505`:
+
+- `apps/web/src/hooks/useFocusTrap.ts` dan test-nya landed.
+- Focus trap, focus restoration, and keyboard-submit behavior landed across GateDetail, overlay host, drawers/modals, and release/gate surfaces.
+- Web validation passed (`pnpm -r typecheck`, `pnpm -r build`, `pnpm -r test`).
 
 ## Scope
 

@@ -3,7 +3,7 @@ id: plans.active-plans-implementation-2026-05-10
 title: 'Execution plan for all unfinished active plans'
 priority: P0
 area: cockpit-ux release-plane governance
-status: draft
+status: closed
 owners:
   - web
   - tools
@@ -25,6 +25,16 @@ Current unfinished plans:
 2. [`release-plane-backend-phase-6.md`](./release-plane-backend-phase-6.md) — P1, 3-5d, real release executors.
 
 This plan turns both drafts into one execution sequence, including the release-plane prerequisite that is implicit in the release plan: minimal gate governance backend support for sign-off / override persistence and audit.
+
+## Closeout
+
+Implemented in commit `4d28505`. This orchestration plan is now closed:
+
+- keyboard nav overlays landed in the web cockpit
+- minimal gate governance backend landed in the bridge
+- release-plane backend Phase 6 landed as bridge-managed local release dispatch v1
+
+The release-plane work intentionally remains local/bridge-managed rather than external connector/OAuth deployment.
 
 ## Current repo baseline
 
