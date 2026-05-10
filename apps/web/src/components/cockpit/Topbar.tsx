@@ -111,15 +111,6 @@ function modelChoicesFromConfigOptions(raw: unknown): Array<Record<string, unkno
   return typeof current === 'string' && current.trim() ? [{ id: current, name: current, value: current }] : [];
 }
 
-function fallbackModelChoices(agentId: string | null): Array<Record<string, unknown>> {
-  if (!agentId || !agentId.includes('codex')) return [];
-  return [
-    { id: 'gpt-5-codex', name: 'GPT-5 Codex' },
-    { id: 'gpt-5', name: 'GPT-5' },
-    { id: 'o4-mini', name: 'o4-mini' },
-  ];
-}
-
 function getModelId(model: Record<string, unknown>, fallback: string): string {
   for (const key of ['id', 'modelId', 'model_id', 'value', 'name']) {
     const value = model[key];
@@ -171,13 +162,11 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   const sessionId = useSession((s) => s.sessionId);
   const acpModel = useSession((s) => s.acpModel);
   const agentKind = useSession((s) => s.agentKind);
-  const agentId = useSession((s) => s.agentId);
   const setAcpModelSnapshot = useSession((s) => s.setAcpModelSnapshot);
   const modes = asModelArray(acpModel.modes);
   const models = asModelArray(acpModel.models);
   const configModelChoices = modelChoicesFromConfigOptions(acpModel.configOptions);
-  const fallbackChoices = fallbackModelChoices(agentId);
-  const choices = modes.length > 0 ? modes : models.length > 0 ? models : configModelChoices.length > 0 ? configModelChoices : fallbackChoices;
+  const choices = modes.length > 0 ? modes : models.length > 0 ? models : configModelChoices;
   const source = modes.length > 0 ? 'mode' : 'model';
   if (agentKind !== 'acp' && choices.length === 0 && !acpModel.currentModelId) return null;
   const current = acpModel.currentModelId ?? (choices[0] ? getModelId(choices[0], 'model') : 'model unknown');
@@ -193,7 +182,6 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   if (modes.length > 0) metadataKeys.push('modes');
   if (models.length > 0) metadataKeys.push('models');
   if (configModelChoices.length > 0) metadataKeys.push('config_options');
-  if (fallbackChoices.length > 0) metadataKeys.push('config_options');
   const modelSelectAffordance = affordanceFor('topbar.model.select', {
     commandStatus: modelSelectStatus,
     hasTransport: !!transport,
@@ -218,11 +206,7 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
     }
   };
   const title = [
-    choices.length > 0
-      ? fallbackChoices.length > 0 && modes.length === 0 && models.length === 0 && configModelChoices.length === 0
-        ? `${choices.length} Codex model entries from VAC compatibility defaults`
-        : `${choices.length} ACP ${source} entries advertised`
-      : 'No ACP model/mode list advertised yet',
+    choices.length > 0 ? `${choices.length} ACP ${source} entries advertised` : 'No ACP model/mode list advertised yet',
     acpModel.currentModelId ? `Current model/mode: ${acpModel.currentModelId}` : 'Current model/mode not advertised',
     acpModel.contextLimit ? `Context window: ${context}` : 'Context window telemetry unavailable from this ACP adapter',
     canSwitch
