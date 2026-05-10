@@ -79,4 +79,52 @@ describe('cockpit Topbar', () => {
     await waitFor(() => expect(useSession.getState().acpModel.currentModelId).toBe('gemini-flash'));
     expect(screen.getByTestId('model-context-chip')).toHaveTextContent('ctx 157k/500k');
   });
+
+  it('renders a model selector from ACP config_options when no modes are advertised', async () => {
+    const send = vi.fn(async () => ({ ackOf: 'cmd', ok: true }));
+    const transport: TransportHandle = {
+      send,
+      on: () => () => undefined,
+      close: () => undefined,
+    };
+
+    useSession.setState({
+      sessionId: 'sess_02',
+      agentKind: 'acp',
+      acpModel: {
+        currentModelId: 'gpt-5',
+        models: null,
+        modes: null,
+        configOptions: [
+          {
+            id: 'model',
+            value: 'gpt-5',
+            values: [
+              { value: 'gpt-5', label: 'GPT-5', context_window: 1000000 },
+              { value: 'gpt-5-mini', label: 'GPT-5 Mini', context_window: 200000 },
+            ],
+          },
+        ],
+        contextUsed: 12000,
+        contextLimit: 1000000,
+      },
+    });
+
+    render(<Topbar onCmdK={() => {}} onTweaks={() => {}} transport={transport} />);
+
+    const select = screen.getByLabelText('ACP model');
+    expect(select).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'GPT-5 Mini' })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'gpt-5-mini' } });
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith('sess_02', 'session.config_option.set', {
+        option_id: 'model',
+        value: 'gpt-5-mini',
+      }),
+    );
+    await waitFor(() => expect(useSession.getState().acpModel.currentModelId).toBe('gpt-5-mini'));
+    expect(screen.getByTestId('model-context-chip')).toHaveTextContent('ctx 12k/200k');
+  });
 });

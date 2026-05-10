@@ -67,20 +67,52 @@ function summarizeAgentCapabilities(
   return { fs, terminal, loadSession, image };
 }
 
-function asModelArray(raw: unknown): Array<Record<string, unknown>> {
+function asRecordArray(raw: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(raw)) return raw.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+  return [];
+}
+
+function asModelArray(raw: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(raw)) return asRecordArray(raw);
   if (raw && typeof raw === 'object') {
     const obj = raw as Record<string, unknown>;
-    for (const key of ['models', 'items', 'available']) {
+    for (const key of ['models', 'items', 'available', 'options']) {
       const value = obj[key];
-      if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+      if (Array.isArray(value)) return asRecordArray(value);
     }
   }
   return [];
 }
 
+function modelOptionId(option: Record<string, unknown>): string | null {
+  for (const key of ['id', 'optionId', 'option_id', 'name', 'key']) {
+    const value = option[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function modelChoicesFromConfigOptions(raw: unknown): Array<Record<string, unknown>> {
+  const option = asModelArray(raw).find((entry) => modelOptionId(entry) === 'model');
+  if (!option) return [];
+  for (const key of ['values', 'choices', 'options', 'items', 'available', 'enum', 'models']) {
+    const value = option[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item, index): Record<string, unknown> | null => {
+          if (typeof item === 'string' && item.trim()) return { id: item, name: item, value: item };
+          if (item && typeof item === 'object') return item as Record<string, unknown>;
+          return { id: `model-${index + 1}`, name: `model-${index + 1}` };
+        })
+        .filter((item): item is Record<string, unknown> => item !== null);
+    }
+  }
+  const current = option.value ?? option.currentValue ?? option.current_value;
+  return typeof current === 'string' && current.trim() ? [{ id: current, name: current, value: current }] : [];
+}
+
 function getModelId(model: Record<string, unknown>, fallback: string): string {
-  for (const key of ['id', 'modelId', 'model_id', 'name']) {
+  for (const key of ['id', 'modelId', 'model_id', 'value', 'name']) {
     const value = model[key];
     if (typeof value === 'string' && value.trim()) return value;
   }
@@ -133,7 +165,8 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   const setAcpModelSnapshot = useSession((s) => s.setAcpModelSnapshot);
   const modes = asModelArray(acpModel.modes);
   const models = asModelArray(acpModel.models);
-  const choices = modes.length > 0 ? modes : models;
+  const configModelChoices = modelChoicesFromConfigOptions(acpModel.configOptions);
+  const choices = modes.length > 0 ? modes : models.length > 0 ? models : configModelChoices;
   const source = modes.length > 0 ? 'mode' : 'model';
   if (agentKind !== 'acp' && choices.length === 0 && !acpModel.currentModelId) return null;
   const current = acpModel.currentModelId ?? (choices[0] ? getModelId(choices[0], 'model') : 'model unknown');
@@ -148,6 +181,7 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   const metadataKeys: Array<string> = [];
   if (modes.length > 0) metadataKeys.push('modes');
   if (models.length > 0) metadataKeys.push('models');
+  if (configModelChoices.length > 0) metadataKeys.push('config_options');
   const modelSelectAffordance = affordanceFor('topbar.model.select', {
     commandStatus: modelSelectStatus,
     hasTransport: !!transport,
@@ -192,7 +226,7 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
         >
           {choices.map((model, index) => {
             const id = getModelId(model, `model-${index + 1}`);
-            const name = typeof model.name === 'string' ? model.name : id;
+            const name = typeof model.name === 'string' ? model.name : typeof model.label === 'string' ? model.label : id;
             return (
               <option key={`${id}-${index}`} value={id}>
                 {name}

@@ -137,6 +137,12 @@ describe('session handlers', () => {
     expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-flash');
     expect(useSession.getState().acpModel.contextUsed).toBe(157000);
 
+    emit('session.config_options.updated', { option_id: 'model', value: 'gemini-2.5-pro' });
+    expect(useSession.getState().acpModel.configOptions).toEqual([
+      { id: 'model', value: 'gemini-2.5-pro' },
+    ]);
+    expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-pro');
+
     off();
   });
 

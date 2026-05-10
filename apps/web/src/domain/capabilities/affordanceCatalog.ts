@@ -67,7 +67,7 @@ const SPECS: ReadonlyArray<AffordanceSpec> = Object.freeze([
 		id: 'topbar.model.select',
 		component: 'Topbar.ModelContextChip',
 		command: 'session.mode.set',
-		when: { sessionKind: 'acp', hasTransport: true, hasSessionId: true, metadataAny: ['modes', 'models'] },
+		when: { sessionKind: 'acp', hasTransport: true, hasSessionId: true, metadataAny: ['modes', 'models', 'config_options'] },
 		enabledIf: { commandStatus: 'implemented' },
 		disabledCopy: 'Model switching is unavailable for this runtime.',
 	},

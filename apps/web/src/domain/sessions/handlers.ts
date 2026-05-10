@@ -123,6 +123,17 @@ function modelValueFromOptions(raw: unknown): string | null {
   return null;
 }
 
+function optionUpdateAsOptions(p: {
+  option_id?: unknown;
+  optionId?: unknown;
+  id?: unknown;
+  value?: unknown;
+}): unknown[] | null {
+  const id = asString(p.option_id) ?? asString(p.optionId) ?? asString(p.id);
+  if (!id) return null;
+  return [{ id, value: p.value }];
+}
+
 function coerceRow(p: SessionChangedPayload): SessionRow | null {
   if (!p.id) return null;
   return {
@@ -203,10 +214,19 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
 
   offs.push(
     transport.on('session.config_options.updated', (ev) => {
-      const p = (ev.payload ?? {}) as { options?: unknown; config_options?: unknown; configOptions?: unknown };
-      const configOptions = p.options ?? p.config_options ?? p.configOptions ?? null;
-      const modelId = modelValueFromOptions(configOptions);
+      const p = (ev.payload ?? {}) as {
+        options?: unknown;
+        config_options?: unknown;
+        configOptions?: unknown;
+        option_id?: unknown;
+        optionId?: unknown;
+        id?: unknown;
+        value?: unknown;
+      };
       const state = useSession.getState().acpModel;
+      const patchOptions = optionUpdateAsOptions(p);
+      const configOptions = p.options ?? p.config_options ?? p.configOptions ?? patchOptions ?? state.configOptions ?? null;
+      const modelId = modelValueFromOptions(configOptions);
       useSession.getState().setAcpModelSnapshot({
         configOptions,
         ...(modelId
