@@ -127,4 +127,45 @@ describe('cockpit Topbar', () => {
     await waitFor(() => expect(useSession.getState().acpModel.currentModelId).toBe('gpt-5-mini'));
     expect(screen.getByTestId('model-context-chip')).toHaveTextContent('ctx 12k/200k');
   });
+
+  it('shows Codex fallback model choices when the ACP adapter omits model metadata', async () => {
+    const send = vi.fn(async () => ({ ackOf: 'cmd', ok: true }));
+    const transport: TransportHandle = {
+      send,
+      on: () => () => undefined,
+      close: () => undefined,
+    };
+
+    useSession.setState({
+      sessionId: 'sess_codex',
+      agentId: 'codex-acp',
+      agentKind: 'acp',
+      acpModel: {
+        currentModelId: null,
+        models: null,
+        modes: null,
+        configOptions: null,
+        contextUsed: null,
+        contextLimit: null,
+      },
+    });
+
+    render(<Topbar onCmdK={() => {}} onTweaks={() => {}} transport={transport} />);
+
+    const select = screen.getByLabelText('ACP model');
+    expect(select).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'GPT-5 Codex' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'GPT-5' })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'gpt-5' } });
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith('sess_codex', 'session.config_option.set', {
+        option_id: 'model',
+        value: 'gpt-5',
+      }),
+    );
+    await waitFor(() => expect(useSession.getState().acpModel.currentModelId).toBe('gpt-5'));
+  });
+
 });
