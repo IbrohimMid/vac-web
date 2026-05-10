@@ -75,17 +75,30 @@ describe('TargetCard', () => {
     expect(deploy.getAttribute('title') ?? '').not.toBe('');
   });
 
-  it('dispatches release.publish with target_id when Publish is clicked and ReadyToPublish is pass', async () => {
+  it('disables Publish via the affordance catalog when release.publish is not_wired', async () => {
     const send = vi.fn(async () => ({ ackOf: 'cmd', ok: true }));
     render(
       <ul>
         <TargetCard targetId="t_prod" transport={transportWith(send)} />
       </ul>,
     );
-    fireEvent.click(screen.getByRole('button', { name: /^Publish$/ }));
-    await waitFor(() =>
-      expect(send).toHaveBeenCalledWith('sess_01', 'release.publish', { target_id: 't_prod' }),
+    const publish = screen.getByRole('button', { name: /^Publish$/ });
+    expect(publish).toBeDisabled();
+    expect(publish.getAttribute('data-affordance-id')).toBe('release.publish.button');
+    expect(publish.getAttribute('title') ?? '').toMatch(/not wired/i);
+    fireEvent.click(publish);
+    await waitFor(() => expect(send).not.toHaveBeenCalled());
+  });
+
+  it('disables Release notes via the affordance catalog when release.generate_notes is not_wired', () => {
+    render(
+      <ul>
+        <TargetCard targetId="t_prod" transport={transportWith(vi.fn(async () => ({ ackOf: 'x', ok: true })))} />
+      </ul>,
     );
+    const notes = screen.getByRole('button', { name: /^Release notes$/ });
+    expect(notes).toBeDisabled();
+    expect(notes.getAttribute('data-affordance-id')).toBe('release.generate_notes.button');
   });
 
   it('shows blocked reason when ReadyToDeploy gate is missing', () => {

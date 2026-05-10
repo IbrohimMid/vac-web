@@ -196,6 +196,160 @@ describe('affordanceFor', () => {
 		expect(d.enabled).toBe(false);
 	});
 
+	// Fake-feature closeout 2026-05-10: 8 buttons that previously dispatched
+	// not_wired commands without affordance gating. Each pair below asserts the
+	// not_wired -> disabled invariant and the implemented -> enabled positive.
+
+	it('disables release.publish.button when release.publish is not_wired', () => {
+		const d = affordanceFor('release.publish.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: true,
+			gateReady: true,
+		});
+		expect(d.enabled).toBe(false);
+		expect(d.disabledReason).toMatch(/not wired/i);
+	});
+
+	it('enables release.publish.button when implemented and gate ready', () => {
+		const d = affordanceFor('release.publish.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+			gateReady: true,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables release.generate_notes.button when not_wired', () => {
+		const d = affordanceFor('release.generate_notes.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(false);
+	});
+
+	it('enables release.generate_notes.button when implemented', () => {
+		const d = affordanceFor('release.generate_notes.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables gate.signoff.button when not_wired', () => {
+		const d = affordanceFor('gate.signoff.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(false);
+		expect(d.disabledReason).toMatch(/audit/i);
+	});
+
+	it('enables gate.signoff.button when implemented', () => {
+		const d = affordanceFor('gate.signoff.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables gate.override.button when not_wired', () => {
+		const d = affordanceFor('gate.override.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(false);
+		expect(d.disabledReason).toMatch(/reason/i);
+	});
+
+	it('enables gate.override.button when implemented', () => {
+		const d = affordanceFor('gate.override.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables runtime.cancel_job.button when not_wired', () => {
+		const d = affordanceFor('runtime.cancel_job.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(false);
+	});
+
+	it('enables runtime.cancel_job.button when implemented', () => {
+		const d = affordanceFor('runtime.cancel_job.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables migration.create_draft.button when not_wired', () => {
+		const d = affordanceFor('migration.create_draft.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(false);
+		expect(d.disabledReason).toMatch(/Phase 7/i);
+	});
+
+	it('enables migration.create_draft.button when implemented', () => {
+		const d = affordanceFor('migration.create_draft.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables connector.connect.button when not_wired', () => {
+		const d = affordanceFor('connector.connect.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: false,
+		});
+		expect(d.enabled).toBe(false);
+	});
+
+	it('enables connector.connect.button when implemented and transport present', () => {
+		const d = affordanceFor('connector.connect.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: false,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
+	it('disables connector.disconnect.button when not_wired', () => {
+		const d = affordanceFor('connector.disconnect.button', {
+			commandStatus: 'not_wired',
+			hasTransport: true,
+			hasSessionId: false,
+		});
+		expect(d.enabled).toBe(false);
+	});
+
+	it('enables connector.disconnect.button when implemented', () => {
+		const d = affordanceFor('connector.disconnect.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: false,
+		});
+		expect(d.enabled).toBe(true);
+	});
+
 	it('hides review.revert_all when there is no session yet', () => {
 		const d = affordanceFor('review.revert_all', {
 			commandStatus: 'frontend_owned',

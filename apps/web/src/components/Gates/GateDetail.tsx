@@ -8,6 +8,10 @@ import { useGates, type GateId } from '../../stores/gates';
 import { useSession } from '../../stores/session';
 import type { OverlayRenderProps } from '../../overlays/registry';
 import type { TransportHandle } from '../../transport';
+import {
+  affordanceFor,
+  toAffordanceStatus,
+} from '../../domain/capabilities/affordanceCatalog';
 
 export function GateDetail({ params, dismiss }: OverlayRenderProps) {
   const gateId = typeof params.gateId === 'string' ? (params.gateId as GateId) : null;
@@ -35,31 +39,42 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
   const stateBadge =
     gate.state === 'pass' ? 'ok' : gate.state === 'fail' ? 'crit' : 'warn';
 
+  const signoffDecision = affordanceFor('gate.signoff.button', {
+    commandStatus: toAffordanceStatus('gate.signoff'),
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+  });
+  const overrideDecision = affordanceFor('gate.override.button', {
+    commandStatus: toAffordanceStatus('gate.override'),
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+  });
+
   const signoff = async () => {
+    if (!signoffDecision.enabled) return;
     if (!signerName.trim()) return;
+    if (!transport || !sessionId) return;
     useGates.getState().addSigner(gateId, signerName.trim());
-    if (transport && sessionId) {
-      try {
-        await transport.send(sessionId, 'gate.signoff', { id: gateId, signer: signerName.trim() });
-      } catch {
-        /* ignore */
-      }
-    }
     setSignerName('');
+    try {
+      await transport.send(sessionId, 'gate.signoff', { id: gateId, signer: signerName.trim() });
+    } catch {
+      /* ignore */
+    }
   };
 
   const override = async () => {
+    if (!overrideDecision.enabled) return;
     if (!overrideReason.trim()) return;
+    if (!transport || !sessionId) return;
     useGates.getState().override(gateId, overrideReason.trim());
-    if (transport && sessionId) {
-      try {
-        await transport.send(sessionId, 'gate.override', {
-          id: gateId,
-          reason: overrideReason.trim(),
-        });
-      } catch {
-        /* ignore */
-      }
+    try {
+      await transport.send(sessionId, 'gate.override', {
+        id: gateId,
+        reason: overrideReason.trim(),
+      });
+    } catch {
+      /* ignore */
     }
     dismiss();
   };
@@ -164,7 +179,9 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
               <button
                 className="btn primary"
                 onClick={signoff}
-                disabled={!signerName.trim()}
+                disabled={!signoffDecision.enabled || !signerName.trim()}
+                data-affordance-id={signoffDecision.affordanceId}
+                title={signoffDecision.disabledReason ?? ''}
               >
                 Sign off
               </button>
@@ -199,7 +216,9 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
               <button
                 className="btn"
                 onClick={override}
-                disabled={!overrideReason.trim()}
+                disabled={!overrideDecision.enabled || !overrideReason.trim()}
+                data-affordance-id={overrideDecision.affordanceId}
+                title={overrideDecision.disabledReason ?? ''}
               >
                 Override
               </button>

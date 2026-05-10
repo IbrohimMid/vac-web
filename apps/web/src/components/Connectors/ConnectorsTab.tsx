@@ -5,6 +5,10 @@ import { useEffect } from 'react';
 import { SeverityIcon, type Severity } from '../SeverityIcon';
 import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
 import type { TransportHandle } from '../../transport';
+import {
+  affordanceFor,
+  toAffordanceStatus,
+} from '../../domain/capabilities/affordanceCatalog';
 
 interface Props {
   transport: TransportHandle | null;
@@ -27,17 +31,29 @@ export function ConnectorsTab({ transport }: Props) {
     transport.send('', 'connector.list', {}).catch(() => {});
   }, [transport]);
 
+  const connectDecision = affordanceFor('connector.connect.button', {
+    commandStatus: toAffordanceStatus('connector.connect'),
+    hasTransport: !!transport,
+    hasSessionId: false,
+  });
+  const disconnectDecision = affordanceFor('connector.disconnect.button', {
+    commandStatus: toAffordanceStatus('connector.disconnect'),
+    hasTransport: !!transport,
+    hasSessionId: false,
+  });
+
   const connect = async (provider: string) => {
+    if (!connectDecision.enabled) return;
     if (!transport) return;
     try {
       await transport.send('', 'connector.connect', { provider });
-      // Bridge responds with `connector.oauth_url` event; app opens it.
     } catch {
       /* surfaced via notify */
     }
   };
 
   const disconnect = async (id: string) => {
+    if (!disconnectDecision.enabled) return;
     if (!transport) return;
     try {
       await transport.send('', 'connector.disconnect', { id });
@@ -82,7 +98,12 @@ export function ConnectorsTab({ transport }: Props) {
                     </span>
                   )}
                 </div>
-                <button onClick={() => disconnect(c.id)} disabled={!transport}>
+                <button
+                  onClick={() => disconnect(c.id)}
+                  disabled={!disconnectDecision.enabled}
+                  data-affordance-id={disconnectDecision.affordanceId}
+                  title={disconnectDecision.disabledReason ?? ''}
+                >
                   Disconnect
                 </button>
               </li>
@@ -104,7 +125,12 @@ export function ConnectorsTab({ transport }: Props) {
               }}
             >
               <span style={{ flex: 1, textTransform: 'capitalize' }}>{p}</span>
-              <button onClick={() => connect(p)} disabled={!transport}>
+              <button
+                onClick={() => connect(p)}
+                disabled={!connectDecision.enabled}
+                data-affordance-id={connectDecision.affordanceId}
+                title={connectDecision.disabledReason ?? ''}
+              >
                 Connect
               </button>
             </li>

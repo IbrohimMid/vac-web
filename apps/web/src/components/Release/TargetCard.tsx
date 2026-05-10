@@ -9,15 +9,8 @@ import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
 import {
   affordanceFor,
-  type AffordanceCommandStatus,
+  toAffordanceStatus,
 } from '../../domain/capabilities/affordanceCatalog';
-import { commandStatus } from '../../generated/commandCatalog';
-
-function toAffordanceStatus(id: string): AffordanceCommandStatus {
-  const s = commandStatus(id);
-  if (s === 'implemented' || s === 'frontend_owned' || s === 'not_wired') return s;
-  return 'unknown';
-}
 
 const rowStyle: CSSProperties = {
   padding: '8px 12px',
@@ -56,16 +49,27 @@ export function TargetCard({ targetId, transport }: Props) {
   const gateReady = missing.length === 0;
   const publishOk = gates.get('ReadyToPublish')?.state === 'pass';
 
-  const releaseDeployStatus = toAffordanceStatus('release.deploy');
   const deployDecision = affordanceFor('release.deploy.button', {
-    commandStatus: releaseDeployStatus,
+    commandStatus: toAffordanceStatus('release.deploy'),
     hasTransport: !!transport,
     hasSessionId: !!sessionId,
     gateReady,
   });
+  const publishDecision = affordanceFor('release.publish.button', {
+    commandStatus: toAffordanceStatus('release.publish'),
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+    gateReady: publishOk,
+  });
+  const notesDecision = affordanceFor('release.generate_notes.button', {
+    commandStatus: toAffordanceStatus('release.generate_notes'),
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+  });
 
   const deploy = async () => {
-    if (!transport || !sessionId || !gateReady) return;
+    if (!deployDecision.enabled) return;
+    if (!transport || !sessionId) return;
     try {
       await transport.send(sessionId, 'release.deploy', { target_id: target.id });
     } catch {
@@ -73,7 +77,8 @@ export function TargetCard({ targetId, transport }: Props) {
     }
   };
   const publish = async () => {
-    if (!transport || !sessionId || !publishOk) return;
+    if (!publishDecision.enabled) return;
+    if (!transport || !sessionId) return;
     try {
       await transport.send(sessionId, 'release.publish', { target_id: target.id });
     } catch {
@@ -81,6 +86,7 @@ export function TargetCard({ targetId, transport }: Props) {
     }
   };
   const generateNotes = async () => {
+    if (!notesDecision.enabled) return;
     if (!transport || !sessionId) return;
     try {
       await transport.send(sessionId, 'release.generate_notes', { target_id: target.id });
@@ -103,10 +109,20 @@ export function TargetCard({ targetId, transport }: Props) {
         >
           Deploy
         </button>
-        <button onClick={publish} disabled={!publishOk || !transport}>
+        <button
+          onClick={publish}
+          disabled={!publishDecision.enabled}
+          data-affordance-id={publishDecision.affordanceId}
+          title={publishDecision.disabledReason ?? ''}
+        >
           Publish
         </button>
-        <button onClick={generateNotes} disabled={!transport}>
+        <button
+          onClick={generateNotes}
+          disabled={!notesDecision.enabled}
+          data-affordance-id={notesDecision.affordanceId}
+          title={notesDecision.disabledReason ?? ''}
+        >
           Release notes
         </button>
       </div>

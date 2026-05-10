@@ -6,6 +6,10 @@ import { useState } from 'react';
 import { canDispatchMigration, useMigration } from '../../stores/migration';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import {
+  affordanceFor,
+  toAffordanceStatus,
+} from '../../domain/capabilities/affordanceCatalog';
 
 interface Props {
   transport: TransportHandle | null;
@@ -20,7 +24,14 @@ export function MigrationTab({ transport }: Props) {
 
   const active = active_id ? packets.get(active_id) : null;
 
+  const newDraftDecision = affordanceFor('migration.create_draft.button', {
+    commandStatus: toAffordanceStatus('migration.create_draft'),
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+  });
+
   const createDraft = async () => {
+    if (!newDraftDecision.enabled) return;
     if (!transport || !sessionId) return;
     setCreating(true);
     try {
@@ -43,7 +54,12 @@ export function MigrationTab({ transport }: Props) {
       <header style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <h3 style={{ margin: 0 }}>Migrations</h3>
         <span style={{ flex: 1 }} />
-        <button onClick={createDraft} disabled={!transport || creating}>
+        <button
+          onClick={createDraft}
+          disabled={!newDraftDecision.enabled || creating}
+          data-affordance-id={newDraftDecision.affordanceId}
+          title={newDraftDecision.disabledReason ?? ''}
+        >
           New draft
         </button>
       </header>

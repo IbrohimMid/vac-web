@@ -5,6 +5,10 @@ import { useRuntime } from '../../stores/runtime';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import {
+  affordanceFor,
+  toAffordanceStatus,
+} from '../../domain/capabilities/affordanceCatalog';
 
 interface Props {
   transport: TransportHandle | null;
@@ -37,7 +41,14 @@ export function RuntimeTab({ transport }: Props) {
     setSelected(order[0] ?? null);
   }, [order, selected]);
 
+  const cancelDecision = affordanceFor('runtime.cancel_job.button', {
+    commandStatus: toAffordanceStatus('runtime.cancel_job'),
+    hasTransport: !!transport,
+    hasSessionId: !!sessionId,
+  });
+
   const cancel = async (id: string) => {
+    if (!cancelDecision.enabled) return;
     if (!transport || !sessionId) return;
     try {
       await transport.send(sessionId, 'runtime.cancel_job', { job_id: id });
@@ -127,6 +138,9 @@ export function RuntimeTab({ transport }: Props) {
                         e.stopPropagation();
                         void cancel(id);
                       }}
+                      disabled={!cancelDecision.enabled}
+                      data-affordance-id={cancelDecision.affordanceId}
+                      title={cancelDecision.disabledReason ?? ''}
                       style={{ marginTop: 4, fontSize: 11 }}
                     >
                       Cancel

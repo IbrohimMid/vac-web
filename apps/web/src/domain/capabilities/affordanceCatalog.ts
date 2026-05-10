@@ -16,6 +16,8 @@
 // Surface code (Topbar / ReleaseTab / etc.) imports `affordanceFor()` and
 // receives a deterministic decision instead of repeating capability checks.
 
+import { commandStatus } from '../../generated/commandCatalog';
+
 export type AffordanceCommandStatus =
 	| 'implemented'
 	| 'frontend_owned'
@@ -164,12 +166,82 @@ const SPECS: ReadonlyArray<AffordanceSpec> = Object.freeze([
 		enabledIf: { commandStatus: 'frontend_owned' },
 		disabledCopy: 'Connect to the bridge before reverting the changeset.',
 	},
+	{
+		id: 'release.publish.button',
+		component: 'ReleaseTab.PublishButton',
+		command: 'release.publish',
+		when: { hasTransport: true, hasSessionId: true },
+		enabledIf: { commandStatus: 'implemented', gateReady: true },
+		disabledCopy: 'Release publish backend is not wired yet.',
+	},
+	{
+		id: 'release.generate_notes.button',
+		component: 'ReleaseTab.GenerateNotesButton',
+		command: 'release.generate_notes',
+		when: { hasTransport: true, hasSessionId: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Release notes generator is not wired yet.',
+	},
+	{
+		id: 'gate.signoff.button',
+		component: 'GateDetail.SignOffButton',
+		command: 'gate.signoff',
+		when: { hasTransport: true, hasSessionId: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Gate signoff requires persistence + audit; not wired.',
+	},
+	{
+		id: 'gate.override.button',
+		component: 'GateDetail.OverrideButton',
+		command: 'gate.override',
+		when: { hasTransport: true, hasSessionId: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Gate override requires reason+expiry+audit; not wired.',
+	},
+	{
+		id: 'runtime.cancel_job.button',
+		component: 'RuntimeTab.CancelButton',
+		command: 'runtime.cancel_job',
+		when: { hasTransport: true, hasSessionId: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Job cancellation backend is not wired yet.',
+	},
+	{
+		id: 'migration.create_draft.button',
+		component: 'MigrationTab.NewDraftButton',
+		command: 'migration.create_draft',
+		when: { hasTransport: true, hasSessionId: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Migration packets require executor.migration profile; not wired (Phase 7).',
+	},
+	{
+		id: 'connector.connect.button',
+		component: 'ConnectorsTab.ConnectButton',
+		command: 'connector.connect',
+		when: { hasTransport: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Connector connect flow is not wired yet.',
+	},
+	{
+		id: 'connector.disconnect.button',
+		component: 'ConnectorsTab.DisconnectButton',
+		command: 'connector.disconnect',
+		when: { hasTransport: true },
+		enabledIf: { commandStatus: 'implemented' },
+		disabledCopy: 'Connector disconnect flow is not wired yet.',
+	},
 ]);
 
 const SPEC_BY_ID = new Map<string, AffordanceSpec>(SPECS.map((s) => [s.id, s]));
 
 export function listAffordances(): ReadonlyArray<AffordanceSpec> {
 	return SPECS;
+}
+
+export function toAffordanceStatus(commandId: string): AffordanceCommandStatus {
+	const s = commandStatus(commandId);
+	if (s === 'implemented' || s === 'frontend_owned' || s === 'not_wired') return s;
+	return 'unknown';
 }
 
 export function affordanceFor(
