@@ -16,7 +16,7 @@
     "assessor.ux@1.0.0": "sha256:d6f330d6efa1a2bd0770ed9e47f82c5cef9b4129714cf6e09bf01a189aa0bfd1",
     "executor.code@1.0.0": "sha256:a878ec34b24a417a1d213cd7316c31912b2731b534beb3e87d0fa46fc47bfb3a",
     "executor.migration@1.0.0": "sha256:d64b62bbc87731ff2bae885e35dc1d11fdce2e0f3b58a67421c7732e4c8575b2",
-    "executor.release@1.0.0": "sha256:7d0d1cdd25cab6833c6da969fd72483a83f17e44ef799224fabe0088de7fe0e8"
+    "executor.release@1.0.0": "sha256:934aeb4fbc35965f52b5be83afdf6411fb15aaf113f93d6129f535ea08940b42"
   },
   "note": "Hashes computed over raw YAML bytes (stable line endings). CI enforces match; edit YAML -> bump manifest."
 }

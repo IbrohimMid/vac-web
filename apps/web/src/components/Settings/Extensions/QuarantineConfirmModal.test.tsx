@@ -47,4 +47,22 @@ describe('QuarantineConfirmModal', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it('focuses the confirm action and closes on Escape', () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <QuarantineConfirmModal
+        entry={SAMPLE_ENTRY}
+        targetTier="quarantined"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    expect(screen.getByTestId('quarantine-confirm')).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId('quarantine-confirm'), { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });

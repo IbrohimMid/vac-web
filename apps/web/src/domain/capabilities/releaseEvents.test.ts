@@ -3,23 +3,24 @@ import { describe, expect, it } from 'vitest';
 import {
 	releaseEventCopyFor,
 	releaseAffordanceFor,
-	RELEASE_EVENTS,
 } from './releaseEvents';
 
 describe('releaseEventCopyFor', () => {
-	it('marks every release event as non-production by default', () => {
-		for (const code of RELEASE_EVENTS) {
-			expect(releaseEventCopyFor(code).production).toBe(false);
-		}
-	});
-
 	it('labels draft notes explicitly as draft_only', () => {
 		expect(releaseEventCopyFor('release.notes_draft').status).toBe('draft_only');
 	});
 
-	it('labels deploy_progress and post_deploy as mock_only', () => {
-		expect(releaseEventCopyFor('release.deploy_progress').status).toBe('mock_only');
-		expect(releaseEventCopyFor('release.post_deploy_observation').status).toBe('mock_only');
+	it('marks real bridge release events as production-grade', () => {
+		expect(releaseEventCopyFor('release.targets').status).toBe('implemented');
+		expect(releaseEventCopyFor('release.targets').production).toBe(true);
+		expect(releaseEventCopyFor('release.deploy_progress').production).toBe(true);
+		expect(releaseEventCopyFor('release.post_deploy_observation').production).toBe(true);
+		expect(releaseEventCopyFor('release.notes_draft').production).toBe(false);
+	});
+
+	it('labels deploy_progress and post_deploy_observation as implemented', () => {
+		expect(releaseEventCopyFor('release.deploy_progress').status).toBe('implemented');
+		expect(releaseEventCopyFor('release.post_deploy_observation').status).toBe('implemented');
 	});
 
 	it('falls back deterministically for unknown event types', () => {

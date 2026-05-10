@@ -2,8 +2,7 @@
 //
 // Acceptance:
 //   * Release tab never implies production confidence from mock data.
-//   * Deploy/publish disabled until gate readiness and backend executor
-//     exist.
+//   * Deploy/publish are real bridge flows but remain gated on readiness.
 //   * Draft notes are labeled drafts.
 //
 // `releaseEventCopyFor()` and `releaseAffordanceFor()` are the single
@@ -37,8 +36,8 @@ const CODES: Record<string, Omit<ReleaseEventCopy, 'eventType'>> = {
 	'release.targets': {
 		status: 'implemented',
 		title: 'Release targets loaded',
-		detail: 'Read-only target list from local config.',
-		production: false,
+		detail: 'Read-only target list from the bridge release plane.',
+		production: true,
 	},
 	'release.notes_draft': {
 		status: 'draft_only',
@@ -47,16 +46,16 @@ const CODES: Record<string, Omit<ReleaseEventCopy, 'eventType'>> = {
 		production: false,
 	},
 	'release.deploy_progress': {
-		status: 'mock_only',
-		title: 'Deploy progress (mock)',
-		detail: 'Deploy progress events come from the mock engine; no production deploy is in progress.',
-		production: false,
+		status: 'implemented',
+		title: 'Deploy progress',
+		detail: 'Bridge-emitted deploy progress from the release executor.',
+		production: true,
 	},
 	'release.post_deploy_observation': {
-		status: 'mock_only',
-		title: 'Post-deploy observation (mock)',
-		detail: 'Observed only in mock scenarios; not yet wired to real telemetry.',
-		production: false,
+		status: 'implemented',
+		title: 'Post-deploy observation',
+		detail: 'Bridge-emitted post-deploy observation from the release executor.',
+		production: true,
 	},
 };
 

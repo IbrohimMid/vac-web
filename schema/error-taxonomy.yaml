@@ -75,6 +75,12 @@ entries:
     recovery: no_action
     audit_required: false
     user_message: Job is no longer running.
+  - code: gate.not_found
+    severity: warning
+    retryable: no_retry
+    recovery: no_action
+    audit_required: false
+    user_message: Gate was not found.
   - code: gate.reason_required
     severity: warning
     retryable: manual_retry
@@ -93,3 +99,15 @@ entries:
     recovery: no_action
     audit_required: false
     user_message: Override expiry must be in the future.
+  - code: release.target_not_found
+    severity: warning
+    retryable: no_retry
+    recovery: no_action
+    audit_required: false
+    user_message: Release target was not found.
+  - code: release.gate_not_ready
+    severity: warning
+    retryable: manual_retry
+    recovery: no_action
+    audit_required: false
+    user_message: Required release gates are not ready yet.

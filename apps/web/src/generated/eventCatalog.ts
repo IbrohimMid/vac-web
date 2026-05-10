@@ -41,6 +41,7 @@ export type EventId =
   | 'extensions.update_trust.denied'
   | 'extensions.update_trust.save_failed'
   | 'extensions.updated'
+  | 'gate.changed'
   | 'handoff.completed'
   | 'handoff.execution_progress'
   | 'pairing.exchange'
@@ -100,16 +101,17 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'extensions.update_trust.denied', status: 'implemented', owner: 'bridge', producer: "extensions.handlers.handle_update_trust", consumers: Object.freeze(["audit"]) }),
   Object.freeze({ id: 'extensions.update_trust.save_failed', status: 'implemented', owner: 'bridge', producer: "extensions.handlers.handle_update_trust", consumers: Object.freeze(["audit"]) }),
   Object.freeze({ id: 'extensions.updated', status: 'implemented', owner: 'bridge', producer: "translator.extensions_update_trust", consumers: Object.freeze(["domain.extensions.handlers", "ExtensionsList"]) }),
+  Object.freeze({ id: 'gate.changed', status: 'implemented', owner: 'bridge', producer: "gate.handlers", consumers: Object.freeze(["domain.gates.handlers", "GateDetail", "ReleaseTab"]) }),
   Object.freeze({ id: 'handoff.completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.handoffErrors"]) }),
   Object.freeze({ id: 'handoff.execution_progress', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.handoffErrors"]) }),
   Object.freeze({ id: 'pairing.exchange', status: 'implemented', owner: 'bridge', producer: "auth.exchange_pair", consumers: Object.freeze(["audit.pairing_shard"]) }),
   Object.freeze({ id: 'pairing.exchange_denied', status: 'implemented', owner: 'bridge', producer: "auth.exchange_pair", consumers: Object.freeze(["audit.pairing_shard"]) }),
   Object.freeze({ id: 'pairing.mint', status: 'implemented', owner: 'bridge', producer: "auth.mint_pair", consumers: Object.freeze(["audit.pairing_shard"]) }),
   Object.freeze({ id: 'perf.run_completed', status: 'implemented', owner: 'bridge', producer: "perf.handle_latest_run", consumers: Object.freeze(["PerfBadge"]) }),
-  Object.freeze({ id: 'release.deploy_progress', status: 'planned', owner: 'bridge', producer: "mock-engine.release-deploy", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
-  Object.freeze({ id: 'release.notes_draft', status: 'implemented', owner: 'bridge', producer: "translator.release_notes_draft", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
-  Object.freeze({ id: 'release.post_deploy_observation', status: 'planned', owner: 'bridge', producer: "mock-engine.release-deploy", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
-  Object.freeze({ id: 'release.targets', status: 'implemented', owner: 'bridge', producer: "translator.release_targets", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
+  Object.freeze({ id: 'release.deploy_progress', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
+  Object.freeze({ id: 'release.notes_draft', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
+  Object.freeze({ id: 'release.post_deploy_observation', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
+  Object.freeze({ id: 'release.targets', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'review.changeset_updated', status: 'implemented', owner: 'bridge', producer: "translator.review_changeset_updated", consumers: Object.freeze(["domain.review.handlers"]) }),
   Object.freeze({ id: 'review.file_diff_chunk', status: 'implemented', owner: 'bridge', producer: "translator.review_file_diff_chunk", consumers: Object.freeze(["domain.review.handlers"]) }),
   Object.freeze({ id: 'runtime.job_completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),

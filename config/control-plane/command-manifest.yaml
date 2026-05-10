@@ -397,31 +397,28 @@ commands:
 
   # Gates -----------------------------------------------------------------
   - id: gate.evaluate
-    status: not_wired
-    side_effect: read_only
+    status: implemented
+    side_effect: state
     scope: session
+    summary: Emit the current gate snapshot for a session.
   - id: gate.signoff
-    status: not_wired
+    status: implemented
     side_effect: state
     scope: session
-    ui:
-      gate: disabled
-      reason: Gate signoff requires persistence + audit; not wired.
+    requires_profile_tool: gate.signoff
+    summary: Record a gate sign-off and persist it.
   - id: gate.override
-    status: not_wired
+    status: implemented
     side_effect: state
     scope: session
     requires_profile_tool: gate.override
-    ui:
-      gate: disabled
-      reason: Gate override requires reason+expiry+audit; not wired.
+    summary: Persist an audit-logged gate override with expiry.
   - id: gate.revoke_override
-    status: not_wired
+    status: implemented
     side_effect: state
     scope: session
     requires_profile_tool: gate.override
-    ui:
-      gate: disabled
+    summary: Revoke an active gate override.
 
   # Connectors ------------------------------------------------------------
   - id: connector.list
@@ -453,31 +450,28 @@ commands:
 
   # Release ---------------------------------------------------------------
   - id: release.list_targets
-    status: not_wired
+    status: implemented
     side_effect: read_only
     scope: either
-    ui:
-      gate: disabled
-      reason: Release targets surface is held until config-driven read lands.
+    summary: Return the current deploy targets for a session or workspace.
   - id: release.generate_notes
-    status: not_wired
-    side_effect: read_only
+    status: implemented
+    side_effect: state
     scope: session
-    ui:
-      gate: disabled
+    requires_profile_tool: release_notes.write
+    summary: Generate a draft release notes event for the selected target.
   - id: release.deploy
-    status: not_wired
+    status: implemented
     side_effect: external
     scope: session
-    ui:
-      gate: disabled
-      reason: Deploy is disabled until gate readiness + audit + executor exist.
+    requires_profile_tool: deploy.*
+    summary: Start a bridge-managed deployment and emit progress events.
   - id: release.publish
-    status: not_wired
+    status: implemented
     side_effect: external
     scope: session
-    ui:
-      gate: disabled
+    requires_profile_tool: publish.*
+    summary: Publish the selected target through the bridge release plane.
 
   # Migration / continuous ------------------------------------------------
   - id: continuous.write_config

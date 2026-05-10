@@ -76,7 +76,7 @@ const SPECS: ReadonlyArray<AffordanceSpec> = Object.freeze([
 		component: 'ReleaseTab.DeployButton',
 		command: 'release.deploy',
 		enabledIf: { commandStatus: 'implemented', gateReady: true },
-		disabledCopy: 'Release deploy backend is not wired yet.',
+		disabledCopy: 'Release gates are not ready.',
 	},
 	{
 		id: 'shell.start',
@@ -172,7 +172,7 @@ const SPECS: ReadonlyArray<AffordanceSpec> = Object.freeze([
 		command: 'release.publish',
 		when: { hasTransport: true, hasSessionId: true },
 		enabledIf: { commandStatus: 'implemented', gateReady: true },
-		disabledCopy: 'Release publish backend is not wired yet.',
+		disabledCopy: 'Release publish gate is not ready.',
 	},
 	{
 		id: 'release.generate_notes.button',

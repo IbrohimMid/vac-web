@@ -61,4 +61,22 @@ describe('PromotionRequestModal', () => {
       screen.getByRole('alertdialog', { name: /Request promotion/i }),
     ).toBeInTheDocument();
   });
+
+  it('focuses the confirm action and closes on Escape', () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <PromotionRequestModal
+        entry={REVOKED_ENTRY}
+        targetTier="allowed_signed"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    expect(screen.getByTestId('promotion-request-confirm')).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId('promotion-request-confirm'), { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });

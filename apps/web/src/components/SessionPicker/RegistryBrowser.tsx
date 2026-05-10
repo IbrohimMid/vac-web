@@ -12,8 +12,9 @@
 // `AgentRuntimeRegistry` which has implications for live ACP sessions
 // and is intentionally out of Sprint 5 scope.)
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TransportHandle } from '../../transport';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 const REGISTRY_PLACEHOLDER_SESSION = 'sess_pending_registry';
 
@@ -131,6 +132,7 @@ export function RegistryBrowser({
   transport: TransportHandle;
   onClose: () => void;
 }) {
+  const modalRef = useRef<HTMLDivElement | null>(null);
   const [entries, setEntries] = useState<RegistryAgentEntry[]>([]);
   const [meta, setMeta] = useState<{ source: string; fromCache: boolean } | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -151,6 +153,7 @@ export function RegistryBrowser({
     () => entries.filter((e) => e.source === 'local'),
     [entries],
   );
+  useFocusTrap(true, modalRef, { onEscape: onClose });
 
   // Audit fix: wrap `sync` in `useCallback` so we can list it as a
   // dependency of the auto-sync `useEffect` without re-syncing every
@@ -239,6 +242,7 @@ export function RegistryBrowser({
 
   return (
     <div
+      ref={modalRef}
       role="dialog"
       aria-modal="true"
       aria-label="Browse remote agent registry"

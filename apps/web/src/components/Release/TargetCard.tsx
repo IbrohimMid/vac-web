@@ -30,6 +30,17 @@ const blockedStyle: CSSProperties = {
   color: 'var(--warn, #c98a13)',
   marginTop: 4,
 };
+const disabledReasonListStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  marginTop: 6,
+};
+const disabledReasonStyle: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: 1.45,
+  color: 'var(--ink-3)',
+};
 
 interface Props {
   targetId: string;
@@ -66,6 +77,11 @@ export function TargetCard({ targetId, transport }: Props) {
     hasTransport: !!transport,
     hasSessionId: !!sessionId,
   });
+  const disabledReasons = [
+    { label: 'Deploy', decision: deployDecision },
+    { label: 'Publish', decision: publishDecision },
+    { label: 'Release notes', decision: notesDecision },
+  ].filter((item) => !item.decision.enabled && item.decision.disabledReason);
 
   const deploy = async () => {
     if (!deployDecision.enabled) return;
@@ -131,6 +147,20 @@ export function TargetCard({ targetId, transport }: Props) {
         {target.last_commit ? ` @ ${target.last_commit.slice(0, 8)}` : ''}
         {target.last_deployed_at ? ` · ${target.last_deployed_at}` : ''}
       </div>
+      {disabledReasons.length > 0 && (
+        <div style={disabledReasonListStyle} aria-label="Disabled release actions">
+          {disabledReasons.map(({ label, decision }) => (
+            <div
+              key={label}
+              role="note"
+              tabIndex={0}
+              style={disabledReasonStyle}
+            >
+              {label}: {decision.disabledReason}
+            </div>
+          ))}
+        </div>
+      )}
       {missing.length > 0 && (
         <div style={blockedStyle}>Blocked by: {missing.join(', ')}</div>
       )}

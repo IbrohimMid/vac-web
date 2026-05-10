@@ -112,6 +112,14 @@ const ENTRIES: Record<string, Omit<ErrorTaxonomyEntry, 'code'>> = {
 		auditRequired: false,
 		userMessage: 'Job is no longer running.',
 	},
+	// Gate / release
+	'gate.not_found': {
+		severity: 'warning',
+		retryable: 'no_retry',
+		recovery: 'no_action',
+		auditRequired: false,
+		userMessage: 'Gate was not found.',
+	},
 	// Gate
 	'gate.reason_required': {
 		severity: 'warning',
@@ -133,6 +141,20 @@ const ENTRIES: Record<string, Omit<ErrorTaxonomyEntry, 'code'>> = {
 		recovery: 'no_action',
 		auditRequired: false,
 		userMessage: 'Override expiry must be in the future.',
+	},
+	'release.target_not_found': {
+		severity: 'warning',
+		retryable: 'no_retry',
+		recovery: 'no_action',
+		auditRequired: false,
+		userMessage: 'Release target was not found.',
+	},
+	'release.gate_not_ready': {
+		severity: 'warning',
+		retryable: 'manual_retry',
+		recovery: 'no_action',
+		auditRequired: false,
+		userMessage: 'Required release gates are not ready yet.',
 	},
 };
 

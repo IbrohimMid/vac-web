@@ -65,6 +65,14 @@ export const ERROR_TAXONOMY_CATALOG: ReadonlyArray<ErrorTaxonomyCatalogEntry> = 
     userMessage: "An expiry date is required for gate override.",
   }),
   Object.freeze({
+    code: 'gate.not_found',
+    severity: 'warning',
+    retryable: 'no_retry',
+    recovery: 'no_action',
+    auditRequired: false,
+    userMessage: "Gate was not found.",
+  }),
+  Object.freeze({
     code: 'gate.reason_required',
     severity: 'warning',
     retryable: 'manual_retry',
@@ -87,6 +95,22 @@ export const ERROR_TAXONOMY_CATALOG: ReadonlyArray<ErrorTaxonomyCatalogEntry> = 
     recovery: 'check_profile',
     auditRequired: true,
     userMessage: "Your profile does not allow this action.",
+  }),
+  Object.freeze({
+    code: 'release.gate_not_ready',
+    severity: 'warning',
+    retryable: 'manual_retry',
+    recovery: 'no_action',
+    auditRequired: false,
+    userMessage: "Required release gates are not ready yet.",
+  }),
+  Object.freeze({
+    code: 'release.target_not_found',
+    severity: 'warning',
+    retryable: 'no_retry',
+    recovery: 'no_action',
+    auditRequired: false,
+    userMessage: "Release target was not found.",
   }),
   Object.freeze({
     code: 'runtime.job_not_cancellable',

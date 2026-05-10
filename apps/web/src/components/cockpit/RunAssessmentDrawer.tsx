@@ -8,12 +8,13 @@
 //  - transport.send(sessionId, 'assessment.run', { swarm }) — same command the
 //    ReadinessHub buttons use today; the drawer becomes an alternate entry.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ASSESSOR_FAMILIES, type AssessorFamily, type SweepFailurePolicy, type SweepMode } from '../../stores/assessment';
 import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
 import { useSession } from '../../stores/session';
 import type { AvailableAgent, TransportHandle } from '../../transport';
 import { describeAssessmentAgent, pickAssessmentAgentId } from '../../domain/assessment/agentSelection';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 import {
   requestAssessmentSweepRun,
   type AssessmentDepth,
@@ -78,6 +79,8 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
   const [concurrency, setConcurrency] = useState(2);
   const [failurePolicy, setFailurePolicy] = useState<SweepFailurePolicy>('continue');
   const [running, setRunning] = useState(false);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(true, drawerRef, { onEscape: onClose });
   const selectedAgent = advertisedAgents.find((agent) => agent.id === agentId);
 
   useEffect(() => {
@@ -85,17 +88,6 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
       advertisedAgents.some((agent) => agent.id === current) ? current : defaultAgentId,
     );
   }, [advertisedAgents, defaultAgentId]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const run = async () => {
     if (!transport || !sessionId || running) return;
@@ -141,6 +133,7 @@ export function RunAssessmentDrawer({ transport, onClose }: Props) {
         }}
       />
       <aside
+        ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-label="Run assessment"

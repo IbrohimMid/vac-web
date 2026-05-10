@@ -29,7 +29,7 @@ pub struct ErrorTaxonomyEntry {
     pub user_message: &'static str,
 }
 
-pub const ERROR_TAXONOMY: [ErrorTaxonomyEntry; 12] = [
+pub const ERROR_TAXONOMY: [ErrorTaxonomyEntry; 15] = [
     ErrorTaxonomyEntry {
         code: "audit.write_failed",
         severity: ErrorSeverity::Critical,
@@ -66,6 +66,13 @@ pub const ERROR_TAXONOMY: [ErrorTaxonomyEntry; 12] = [
         user_message: "An expiry date is required for gate override.",
     },
     ErrorTaxonomyEntry {
+        code: "gate.not_found",
+        severity: ErrorSeverity::Warning,
+        retryable: ErrorRetryability::NoRetry,
+        audit_required: false,
+        user_message: "Gate was not found.",
+    },
+    ErrorTaxonomyEntry {
         code: "gate.reason_required",
         severity: ErrorSeverity::Warning,
         retryable: ErrorRetryability::ManualRetry,
@@ -85,6 +92,20 @@ pub const ERROR_TAXONOMY: [ErrorTaxonomyEntry; 12] = [
         retryable: ErrorRetryability::NoRetry,
         audit_required: true,
         user_message: "Your profile does not allow this action.",
+    },
+    ErrorTaxonomyEntry {
+        code: "release.gate_not_ready",
+        severity: ErrorSeverity::Warning,
+        retryable: ErrorRetryability::ManualRetry,
+        audit_required: false,
+        user_message: "Required release gates are not ready yet.",
+    },
+    ErrorTaxonomyEntry {
+        code: "release.target_not_found",
+        severity: ErrorSeverity::Warning,
+        retryable: ErrorRetryability::NoRetry,
+        audit_required: false,
+        user_message: "Release target was not found.",
     },
     ErrorTaxonomyEntry {
         code: "runtime.job_not_cancellable",

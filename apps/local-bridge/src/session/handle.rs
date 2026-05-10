@@ -16,7 +16,9 @@ use crate::agent_runtime::acp::{
     ToolStatus, DEFAULT_RAW_OUTPUT_CAP_BYTES, TOOL_CALL_HASH_DROP_FIELDS,
 };
 use crate::agent_runtime::{AgentDefinition, AgentKind};
+use crate::gate::{build_session_gate_state, SessionGateState};
 use crate::notify::{activity_event, Severity as NotifySeverity};
+use crate::release::{build_session_release_state, SessionReleaseState};
 use crate::ws::envelope::{ClientCommand, ServerEvent};
 use bridge_core::{EventRing, StateHolder};
 use std::path::{Path, PathBuf};
@@ -56,6 +58,8 @@ pub(crate) fn test_handle(
         acp: None,
         audit: None,
         persistence: None,
+        gate_state: build_session_gate_state(None, &session_id),
+        release_state: build_session_release_state(None, &session_id),
         assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
     });
     (handle, broadcast_rx)
@@ -455,6 +459,12 @@ pub struct SessionHandle {
     /// disk; on session close the reaper / watchdog calls
     /// [`PersistenceSink::mark_closed`] / [`mark_failed`].
     pub persistence: Option<PersistenceSink>,
+    /// Durable gate state replayed from persistence and mutated by the
+    /// gate governance commands.
+    pub(crate) gate_state: Arc<StdMutex<SessionGateState>>,
+    /// Durable release-plane state replayed from persistence and mutated
+    /// by release commands.
+    pub(crate) release_state: Arc<StdMutex<SessionReleaseState>>,
     assessment_validation: Arc<Mutex<AssessmentValidationTracker>>,
 }
 
@@ -708,6 +718,9 @@ impl SessionHandle {
             Some(bcast_tx.clone()),
             opts.assessment_index.clone(),
         );
+        let gate_state = build_session_gate_state(opts.persistence.as_ref(), &opts.session_id);
+        let release_state =
+            build_session_release_state(opts.persistence.as_ref(), &opts.session_id);
 
         let handle = Arc::new(Self {
             id: opts.session_id.clone(),
@@ -724,6 +737,8 @@ impl SessionHandle {
             acp: None,
             audit: opts.audit.clone(),
             persistence: persistence_sink,
+            gate_state,
+            release_state,
             assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
 
@@ -2166,6 +2181,9 @@ impl SessionHandle {
             Some(bcast_tx.clone()),
             opts.assessment_index.clone(),
         );
+        let gate_state = build_session_gate_state(opts.persistence.as_ref(), &opts.session_id);
+        let release_state =
+            build_session_release_state(opts.persistence.as_ref(), &opts.session_id);
         persist_acp_session_details(
             opts.persistence.as_ref(),
             &opts.session_id,
@@ -2189,6 +2207,8 @@ impl SessionHandle {
             acp: Some(Arc::clone(&acp_runtime)),
             audit: opts.audit.clone(),
             persistence: persistence_sink_acp,
+            gate_state,
+            release_state,
             assessment_validation: Arc::new(Mutex::new(AssessmentValidationTracker::default())),
         });
 

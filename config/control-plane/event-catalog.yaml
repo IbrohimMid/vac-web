@@ -165,6 +165,17 @@ events:
     consumers:
       - capabilities.handoffErrors
 
+  # ---- gate governance --------------------------------------------------
+  - id: gate.changed
+    owner: bridge
+    status: implemented
+    classification: implemented
+    producer: gate.handlers
+    consumers:
+      - domain.gates.handlers
+      - GateDetail
+      - ReleaseTab
+
   # ---- runtime jobs ------------------------------------------------------
   - id: runtime.job_started
     owner: bridge
@@ -287,7 +298,7 @@ events:
     owner: bridge
     status: implemented
     classification: implemented
-    producer: translator.release_targets
+    producer: release.handlers
     consumers:
       - domain.release.handlers
       - ReleaseTab
@@ -295,23 +306,23 @@ events:
     owner: bridge
     status: implemented
     classification: draft_only
-    producer: translator.release_notes_draft
+    producer: release.handlers
     consumers:
       - domain.release.handlers
       - ReleaseTab
   - id: release.deploy_progress
     owner: bridge
-    status: planned
-    classification: mock_only
-    producer: mock-engine.release-deploy
+    status: implemented
+    classification: implemented
+    producer: release.handlers
     consumers:
       - domain.release.handlers
       - ReleaseTab
   - id: release.post_deploy_observation
     owner: bridge
-    status: planned
-    classification: mock_only
-    producer: mock-engine.release-deploy
+    status: implemented
+    classification: implemented
+    producer: release.handlers
     consumers:
       - domain.release.handlers
       - ReleaseTab

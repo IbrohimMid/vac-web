@@ -16,6 +16,8 @@ interface ChangedPayload {
   required_signers?: number;
   overridden?: boolean;
   last_changed_at?: string;
+  override_reason?: string;
+  override_expires_at?: string;
 }
 
 export function registerGateHandlers(transport: TransportHandle): () => void {

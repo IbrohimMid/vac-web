@@ -20,7 +20,8 @@ use std::sync::OnceLock;
 /// - `workbench.invoke { action }` — workbench-scoped action.
 /// - `shell.start { profile }` — spawns a shell under `profile`.
 /// - `handoff.dispatch_*` — explicit mutation escalation.
-/// - `gate.override` — governance escalation.
+/// - `gate.signoff` / `gate.override` — governance escalation.
+/// - `release.deploy` / `release.publish` / `release.generate_notes` — release-plane mutations.
 ///
 /// Protocol flows like `message.submit`, `approval.approve`, `assessment.run`,
 /// `session.*` are **not** tool invocations at this boundary. Engine Layer 2
@@ -40,7 +41,11 @@ fn required_tool_for(cmd: &str, payload: &serde_json::Value) -> Option<String> {
         "extensions.approve_promotion" => Some("extensions.approve_promotion".into()),
         "extensions.list_approvals" => Some("extensions.list_approvals".into()),
         "handoff.dispatch_local" | "handoff.dispatch_web_cli" => Some("handoff.dispatch".into()),
+        "gate.signoff" => Some("gate.signoff".into()),
         "gate.override" | "gate.revoke_override" => Some("gate.override".into()),
+        "release.deploy" => Some("deploy.*".into()),
+        "release.publish" => Some("publish.*".into()),
+        "release.generate_notes" => Some("release_notes.write".into()),
         _ => None,
     }
 }

@@ -24,6 +24,8 @@ tool_allow:
   - connector.read.*
   - connector.write.github
   - connector.write.notion
+  - gate.signoff
+  - gate.override
   - extensions.update_trust
   - extensions.request_promotion
   - extensions.approve_promotion

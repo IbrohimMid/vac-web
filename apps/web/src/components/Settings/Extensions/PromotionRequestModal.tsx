@@ -5,11 +5,13 @@
 // extensions.approve_promotion before any trust delta is persisted.
 
 import type { CSSProperties } from 'react';
+import { useRef } from 'react';
 import {
   tierLabel,
   type ExtensionEntry,
   type PromotionTier,
 } from '../../../domain/extensions/types';
+import { useFocusTrap } from '../../../hooks/useFocusTrap';
 
 interface Props {
   entry: ExtensionEntry;
@@ -51,8 +53,12 @@ export function PromotionRequestModal({
   onConfirm,
   onCancel,
 }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(true, dialogRef, { onEscape: onCancel });
+
   return (
     <div
+      ref={dialogRef}
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="promotion-request-title"
@@ -88,6 +94,7 @@ export function PromotionRequestModal({
             onClick={onConfirm}
             data-testid="promotion-request-confirm"
             autoFocus
+            data-autofocus="true"
           >
             Request {tierLabel(targetTier)}
           </button>

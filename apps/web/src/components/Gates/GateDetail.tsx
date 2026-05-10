@@ -167,25 +167,47 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
             ))}
           </ul>
           {canSignOff && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-              <input
-                className="twk-field"
-                value={signerName}
-                onChange={(e) => setSignerName(e.target.value)}
-                placeholder="your name"
-                aria-label="Signer name"
-                style={inputStyle}
-              />
-              <button
-                className="btn primary"
-                onClick={signoff}
-                disabled={!signoffDecision.enabled || !signerName.trim()}
-                data-affordance-id={signoffDecision.affordanceId}
-                title={signoffDecision.disabledReason ?? ''}
-              >
-                Sign off
-              </button>
-            </div>
+            <>
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <input
+                  className="twk-field"
+                  value={signerName}
+                  onChange={(e) => setSignerName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && signoffDecision.enabled && signerName.trim()) {
+                      e.preventDefault();
+                      void signoff();
+                    }
+                  }}
+                  placeholder="your name"
+                  aria-label="Signer name"
+                  style={inputStyle}
+                />
+                <button
+                  className="btn primary"
+                  onClick={signoff}
+                  disabled={!signoffDecision.enabled || !signerName.trim()}
+                  data-affordance-id={signoffDecision.affordanceId}
+                  title={signoffDecision.disabledReason ?? ''}
+                >
+                  Sign off
+                </button>
+              </div>
+              {!signoffDecision.enabled && signoffDecision.disabledReason && (
+                <p
+                  role="note"
+                  tabIndex={0}
+                  style={{
+                    margin: '6px 0 0',
+                    fontSize: 11.5,
+                    lineHeight: 1.45,
+                    color: 'var(--ink-3)',
+                  }}
+                >
+                  {signoffDecision.disabledReason}
+                </p>
+              )}
+            </>
           )}
         </section>
 
@@ -209,7 +231,19 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
               <input
                 value={overrideReason}
                 onChange={(e) => setOverrideReason(e.target.value)}
-                placeholder="reason"
+                onKeyDown={(e) => {
+                  // Override is risky: require Cmd/Ctrl+Enter to submit, never bare Enter.
+                  if (
+                    e.key === 'Enter' &&
+                    (e.metaKey || e.ctrlKey) &&
+                    overrideDecision.enabled &&
+                    overrideReason.trim()
+                  ) {
+                    e.preventDefault();
+                    void override();
+                  }
+                }}
+                placeholder="reason (Cmd/Ctrl+Enter to submit)"
                 aria-label="Override reason"
                 style={{ ...inputStyle, flex: 1 }}
               />
@@ -223,6 +257,20 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
                 Override
               </button>
             </div>
+            {!overrideDecision.enabled && overrideDecision.disabledReason && (
+              <p
+                role="note"
+                tabIndex={0}
+                style={{
+                  margin: '6px 0 0',
+                  fontSize: 11.5,
+                  lineHeight: 1.45,
+                  color: 'var(--ink-3)',
+                }}
+              >
+                {overrideDecision.disabledReason}
+              </p>
+            )}
           </section>
         )}
       </div>

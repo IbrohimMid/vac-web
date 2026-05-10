@@ -8,7 +8,7 @@ import {
 
 describe('affordanceFor', () => {
 	it('treats implemented commands as enabled with no disabled reason', () => {
-		const a = affordanceFor('session.create');
+		const a = affordanceFor('release.deploy');
 		expect(a.known).toBe(true);
 		expect(a.status).toBe('implemented');
 		expect(a.enabled).toBe(true);
@@ -17,7 +17,7 @@ describe('affordanceFor', () => {
 	});
 
 	it('treats not_wired commands as disabled and exposes catalog reason copy', () => {
-		const a = affordanceFor('release.deploy');
+		const a = affordanceFor('shell.start');
 		expect(a.known).toBe(true);
 		expect(a.status).toBe('not_wired');
 		expect(a.enabled).toBe(false);
@@ -41,20 +41,21 @@ describe('affordanceFor', () => {
 
 describe('canExecute / statusOf / disabledReasonFor', () => {
 	it('canExecute is true only for implemented commands', () => {
-		expect(canExecute('session.create')).toBe(true);
-		expect(canExecute('release.deploy')).toBe(false);
+		expect(canExecute('release.deploy')).toBe(true);
+		expect(canExecute('shell.start')).toBe(false);
 		expect(canExecute('overlay.open')).toBe(false); // frontend_owned, not bridge-executable
 		expect(canExecute('does.not.exist')).toBe(false);
 	});
 
 	it('statusOf returns the catalog status', () => {
-		expect(statusOf('session.create')).toBe('implemented');
-		expect(statusOf('release.deploy')).toBe('not_wired');
+		expect(statusOf('release.deploy')).toBe('implemented');
+		expect(statusOf('shell.start')).toBe('not_wired');
 		expect(statusOf('overlay.open')).toBe('frontend_owned');
 		expect(statusOf('transcript.completed')).toBe('protocol_only');
 	});
 
 	it('disabledReasonFor returns empty string for executable commands', () => {
 		expect(disabledReasonFor('session.create')).toBe('');
+		expect(disabledReasonFor('release.deploy')).toBe('');
 	});
 });

@@ -4,8 +4,9 @@
 // the panel with the X button or by clicking the backdrop. Simpler than the
 // prototype's full editmode protocol — we just need the user-facing knobs.
 
-import { useEffect } from 'react';
+import { useRef } from 'react';
 import { ACCENT_PRESETS, useCockpit, type Density, type Theme } from '../../stores/cockpit';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface Props {
   onClose: () => void;
@@ -22,18 +23,8 @@ export function TweaksPanel({ onClose }: Props) {
   const setAccent = useCockpit((s) => s.setAccent);
   const setSidebarCollapsed = useCockpit((s) => s.setSidebarCollapsed);
   const setRailCollapsed = useCockpit((s) => s.setRailCollapsed);
-
-  // Esc closes; matches overlay stack precedence.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const panelRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(true, panelRef, { onEscape: onClose });
 
   return (
     <>
@@ -48,6 +39,7 @@ export function TweaksPanel({ onClose }: Props) {
         }}
       />
       <aside
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="Tweaks"

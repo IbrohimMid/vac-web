@@ -2,11 +2,13 @@
 // before quarantine/revoke land on the persisted trust config.
 
 import type { CSSProperties } from 'react';
+import { useRef } from 'react';
 import {
   tierLabel,
   type ExtensionEntry,
   type ExtensionTier,
 } from '../../../domain/extensions/types';
+import { useFocusTrap } from '../../../hooks/useFocusTrap';
 
 interface Props {
   entry: ExtensionEntry;
@@ -57,8 +59,12 @@ export function QuarantineConfirmModal({
   onConfirm,
   onCancel,
 }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(true, dialogRef, { onEscape: onCancel });
+
   return (
     <div
+      ref={dialogRef}
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="quarantine-title"
@@ -91,6 +97,7 @@ export function QuarantineConfirmModal({
             onClick={onConfirm}
             data-testid="quarantine-confirm"
             autoFocus
+            data-autofocus="true"
           >
             {tierLabel(targetTier)}
           </button>

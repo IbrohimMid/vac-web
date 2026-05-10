@@ -37,26 +37,28 @@ describe('affordanceFor', () => {
 		expect(d.command).toBe('session.mode.set');
 	});
 
-	it('disables release deploy when backend is not wired (acceptance #1)', () => {
-		const d = affordanceFor('release.deploy.button', {
-			commandStatus: 'not_wired',
-			hasTransport: true,
-			hasSessionId: false,
-			gateReady: true,
-		});
-		expect(d.visible).toBe(true);
-		expect(d.enabled).toBe(false);
-		expect(d.disabledReason).toMatch(/not wired/i);
-	});
-
 	it('disables release deploy when gates are not ready', () => {
 		const d = affordanceFor('release.deploy.button', {
 			commandStatus: 'implemented',
 			hasTransport: true,
-			hasSessionId: false,
+			hasSessionId: true,
 			gateReady: false,
 		});
+		expect(d.visible).toBe(true);
 		expect(d.enabled).toBe(false);
+		expect(d.disabledReason).toMatch(/gate/i);
+	});
+
+	it('enables release deploy when backend is implemented and gates are ready', () => {
+		const d = affordanceFor('release.deploy.button', {
+			commandStatus: 'implemented',
+			hasTransport: true,
+			hasSessionId: true,
+			gateReady: true,
+		});
+		expect(d.visible).toBe(true);
+		expect(d.enabled).toBe(true);
+		expect(d.command).toBe('release.deploy');
 	});
 
 	it('enables overlay.dismiss_all as frontend_owned with no command (acceptance #1)', () => {
@@ -196,19 +198,19 @@ describe('affordanceFor', () => {
 		expect(d.enabled).toBe(false);
 	});
 
-	// Fake-feature closeout 2026-05-10: 8 buttons that previously dispatched
-	// not_wired commands without affordance gating. Each pair below asserts the
-	// not_wired -> disabled invariant and the implemented -> enabled positive.
+	// Release-plane closeout 2026-05-10: the command surface is now wired.
+	// These pairs assert readiness-gated disablement where relevant and the
+	// implemented -> enabled positive path.
 
-	it('disables release.publish.button when release.publish is not_wired', () => {
+	it('disables release.publish.button when gates are not ready', () => {
 		const d = affordanceFor('release.publish.button', {
-			commandStatus: 'not_wired',
+			commandStatus: 'implemented',
 			hasTransport: true,
 			hasSessionId: true,
-			gateReady: true,
+			gateReady: false,
 		});
 		expect(d.enabled).toBe(false);
-		expect(d.disabledReason).toMatch(/not wired/i);
+		expect(d.disabledReason).toMatch(/gate/i);
 	});
 
 	it('enables release.publish.button when implemented and gate ready', () => {
@@ -219,6 +221,7 @@ describe('affordanceFor', () => {
 			gateReady: true,
 		});
 		expect(d.enabled).toBe(true);
+		expect(d.command).toBe('release.publish');
 	});
 
 	it('disables release.generate_notes.button when not_wired', () => {
@@ -237,6 +240,7 @@ describe('affordanceFor', () => {
 			hasSessionId: true,
 		});
 		expect(d.enabled).toBe(true);
+		expect(d.command).toBe('release.generate_notes');
 	});
 
 	it('disables gate.signoff.button when not_wired', () => {
