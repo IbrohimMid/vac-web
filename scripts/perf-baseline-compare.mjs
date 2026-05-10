@@ -19,6 +19,12 @@ function flag(name, fallback) {
 const windowSize = Number(flag('window', '10'));
 const thresholdPct = Number(flag('threshold', '25'));
 const strict = args.includes('--strict');
+// Minimum window size before strict gating activates. Below this, the script
+// reports findings but exits 0 even when --strict is passed. This prevents
+// fail-closed gating during baseline warmup (the first 1-2 weeks after F4
+// flip on 2026-05-21, when history.jsonl has fewer than MIN_STRICT_WINDOW
+// entries). Once window is large enough, --strict gates real regressions.
+const MIN_STRICT_WINDOW = 5;
 
 const HIST = path.join(process.cwd(), '.perf-baseline', 'history.jsonl');
 if (!fs.existsSync(HIST)) {
@@ -87,5 +93,13 @@ console.log(JSON.stringify({ regressions, ok }, null, 2));
 
 if (regressions.length > 0) {
   console.warn(`[perf-baseline-compare] ${regressions.length} regression(s) over threshold.`);
-  if (strict) process.exit(1);
+  if (strict) {
+    if (window.length < MIN_STRICT_WINDOW) {
+      console.warn(
+        `[perf-baseline-compare] strict mode: window=${window.length} < MIN_STRICT_WINDOW=${MIN_STRICT_WINDOW}; reporting only, not gating.`,
+      );
+    } else {
+      process.exit(1);
+    }
+  }
 }

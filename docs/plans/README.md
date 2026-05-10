@@ -14,10 +14,13 @@ All 50 numbered wiring slices (01-50) landed as of Pass #27 audit (2026-05-04). 
 
 ## Active handoffs
 
-- [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict CI flip date-locked until 2026-05-21. Perf workflow remains `--measurement-only` on the budget gate; baseline history at `.perf-baseline/history.jsonl` is persisted across cron runs via `actions/cache/restore@v4` + `actions/cache/save@v4` (perf.yml, 2026-05-10) and accumulates real measurements from all 5 drivers (F2.5 `topbar_interaction` landed 2026-05-09). Status: deferred 2026-05-09.
+- [`keyboard-nav-overlays-2026-05-10.md`](./keyboard-nav-overlays-2026-05-10.md) — Focus trap + keyboard-equal action handling for 4 cockpit overlays (Release, Handoff, Extensions, Approvals) plus GateDetail. Closes PRD §6 prinsip 1 gap (audit avg keyboard nav 1.8/5). Status: draft 2026-05-10.
+- [`release-plane-backend-phase-6.md`](./release-plane-backend-phase-6.md) — Phase 6 backend executors for `release.deploy/publish/generate_notes` + `executor.release` capability profile + audit log + gate enforcement. UI auto-enables via affordance catalog when manifest flips. Status: draft 2026-05-10.
 
 ## Closed handoffs
 
+- [`wiring/f4-refresh-plan-2026-05-09.md`](./wiring/f4-refresh-plan-2026-05-09.md) + [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md) — F4 strict perf gate flip. `--strict` enabled + `continue-on-error` shim removed from `.github/workflows/perf.yml`; baseline alarm date-lock superseded by warmup-safe `MIN_STRICT_WINDOW = 5` guard in `scripts/perf-baseline-compare.mjs` (gate is informational until ≥ 5 history entries accumulate, then becomes truly gating). Status: closed 2026-05-10.
+- [`affordance-fake-feature-closeout-2026-05-10.md`](./affordance-fake-feature-closeout-2026-05-10.md) — 8 ungated NotWired buttons (release.publish/generate_notes, gate.signoff/override, runtime.cancel_job, migration.create_draft, connector.connect/disconnect) gated via affordance catalog. 5 components refactored, 16 tests added, 704/704 web tests green, bundle budget unchanged. Status: closed 2026-05-10.
 - [`wiring/topbar-interaction-playwright-plan-2026-05-07.md`](./wiring/topbar-interaction-playwright-plan-2026-05-07.md) — F2.5 final real perf driver (`topbar_interaction` via Playwright). Spec at `apps/web/tests/perf/topbar_interaction.spec.ts` (5 warmup + 50 timed iterations, in-page `performance.now()` bracket); Rust driver at `tools/perf/src/scenarios/topbar_interaction.rs` spawns the dedicated Playwright `perf` project; CI runs `cargo run -p perf --release --features real_scenarios` with Chromium cached. Status: closed 2026-05-09.
 - [`wave-5-6-dependency-closeout-2026-05-09.md`](./wave-5-6-dependency-closeout-2026-05-09.md) — PR #23–#29 dependency drift refresh, scoped `@xterm/*` migration, size-limit 12, ESLint 10, xterm 6, Tailwind 4, Noble v2. `@types/node` 22 → 25 and F4 strict flip documented as intentional deferrals. Status: closed 2026-05-09 (PR #30).
 - [`wiring/post-r1-r6-followups-plan-2026-05-07.md`](./wiring/post-r1-r6-followups-plan-2026-05-07.md) — F1 closed; F2 4/5 landed with F2.5 split to topbar plan; F3 closed; F4 deferred until 2026-05-21; F5 closed via cockpit-UX plan; F6 closed via ADR-0004. Status: closed_partial 2026-05-09.
@@ -45,10 +48,11 @@ The YAML does **not** replace runtime enforcement. Rust and TypeScript remain th
 
 ## Current priority
 
-As of 2026-05-09, all 50 numbered wiring slices (01-50), executor handoff (Pass E1+E2), R1–R6, F1/F2/F3/F5a/F5b/F5c/F6, two trust hardening rounds, F2.5 Playwright driver, and Wave 5-6 dependency closeout (PR #23–#30) are landed. The "make the cockpit truthful before adding product breadth" baseline is met and all 5 real perf drivers populate the rolling baseline. Active focus reduces to a single date-locked item:
+As of 2026-05-10, all 50 numbered wiring slices (01-50), executor handoff (Pass E1+E2), R1–R6, F1/F2/F3/F4/F5a/F5b/F5c/F6, two trust hardening rounds, F2.5 Playwright driver, Wave 5-6 dependency closeout (PR #23–#30), and the affordance fake-feature closeout (8 buttons) are landed. F4 strict gate is now active in `.github/workflows/perf.yml` with a `MIN_STRICT_WINDOW` warmup guard so it self-loosens until enough history accumulates. Active focus moves to product-surface depth:
 
-1. **F4** — CI strict flip from `--measurement-only` to `--strict`. Date-locked until 2026-05-21 (need ≥ 14 days of rolling baseline history). See [`f4-baseline-alarm-date-lock-2026-05-09.md`](./f4-baseline-alarm-date-lock-2026-05-09.md).
-2. New product-surface plans authored as needed; reference the wiring slices for cockpit shape.
+1. **Keyboard nav overlays** — closes PRD §6 prinsip 1 gap. See [`keyboard-nav-overlays-2026-05-10.md`](./keyboard-nav-overlays-2026-05-10.md).
+2. **Release plane backend Phase 6** — wires `release.deploy/publish/generate_notes` real executors so the UI affordances auto-enable. See [`release-plane-backend-phase-6.md`](./release-plane-backend-phase-6.md).
+3. New product-surface plans authored as needed; reference the wiring slices for cockpit shape.
 
 _Historical P0 priority order (all landed): command manifest, `feature.not_wired` fallback, protocol/schema/codegen parity, declarative config/capability control-plane, session model/context telemetry, review taxonomy cleanup, profile policy enforcement, auth/WS security, CI validation gates._
 

@@ -3,7 +3,7 @@ id: plans.f4-baseline-alarm-date-lock-2026-05-09
 title: 'F4 baseline alarm date-lock'
 priority: P1
 area: perf-tooling
-status: deferred  # active handoff; date-locked until 2026-05-21
+status: closed  # 2026-05-10: superseded by warmup-safe strict flip
 owners:
   - tools
   - web
@@ -11,6 +11,8 @@ created: 2026-05-09
 ---
 
 # F4 baseline alarm date-lock audit — 2026-05-09
+
+> **Closeout 2026-05-10:** date-lock superseded by warmup-safe strict gate (`MIN_STRICT_WINDOW = 5` in `scripts/perf-baseline-compare.mjs`). The mitigation behind this lock — preventing premature alerting noise from undersized baseline windows — is now enforced in code rather than calendar. See `docs/plans/wiring/f4-refresh-plan-2026-05-09.md` closeout note. Original lock rationale retained below for archaeology.
 
 Status: skipped intentionally.
 

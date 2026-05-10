@@ -3,7 +3,7 @@ id: wiring.f4-refresh-plan-2026-05-09
 title: 'F4 refresh plan'
 priority: P1
 area: closeout
-status: draft  # 2026-05-09: date-locked until 2026-05-21; Phase H dry-run is informational only
+status: closed  # 2026-05-10: strict flip executed early with warmup-safe gating
 owners:
   - web
   - tools
@@ -15,7 +15,9 @@ depends_on:
 
 # F4 refresh plan (2026-05-09)
 
-> **Status 2026-05-09:** draft. F4 remains date-locked until 2026-05-21. Phase H dry-run is informational only because `apps/web/tsconfig.base.json` already enables the relevant strict flags through the existing baseline. The blocker is persisted baseline history, not a web TypeScript cleanup.
+> **Closeout 2026-05-10:** strict flip landed early under user direction. Date-lock waived because the compare script now self-loosens during baseline warmup (`MIN_STRICT_WINDOW = 5` in `scripts/perf-baseline-compare.mjs`): with fewer than 5 prior entries the script reports findings but exits 0 even with `--strict`. Once the rolling history accumulates ≥ 5 entries (expected ~5 weeks at the current weekly cron cadence), the strict gate becomes effective without further workflow change. The `continue-on-error: true` shim was removed from `.github/workflows/perf.yml`; the perf workflow now genuinely gates the run on regressions once warmup ends. Original status note kept below for archaeology.
+>
+> **Status 2026-05-09 (historical):** draft. F4 remains date-locked until 2026-05-21. Phase H dry-run is informational only because `apps/web/tsconfig.base.json` already enables the relevant strict flags through the existing baseline. The blocker is persisted baseline history, not a web TypeScript cleanup.
 
 ## Workflow-as-code control plane
 

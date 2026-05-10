@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   perf:
-    name: Backend SLO perf harness (measurement-only)
+    name: Backend SLO perf harness (strict baseline gate)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -46,9 +46,12 @@ jobs:
             perf-baseline-history-
       - name: Build perf harness (real scenarios)
         run: cargo build -p perf --release --features real_scenarios
-      - name: Run perf harness (real scenarios, measurement-only)
+      - name: Run perf harness (real scenarios)
         run: cargo run -p perf --release --features real_scenarios -- --duration 60 --output perf-results.json
       - name: Check measurements vs budgets (measurement-only)
+        # SLO budget gate stays measurement-only: budgets are static targets,
+        # not historical comparisons. Rolling baseline gate below is the F4
+        # strict-flip surface.
         run: node scripts/check-slo-measurements.mjs perf-results.json --measurement-only
       - name: Archive perf baseline
         env:
@@ -60,9 +63,13 @@ jobs:
         with:
           path: .perf-baseline/history.jsonl
           key: perf-baseline-history-${{ github.run_id }}
-      - name: Compare against rolling perf baseline
-        continue-on-error: true
-        run: node scripts/perf-baseline-compare.mjs --window 10 --threshold 25
+      - name: Compare against rolling perf baseline (F4 strict gate)
+        # F4 strict flip 2026-05-10. The compare script self-loosens during
+        # baseline warmup (window < 5 entries), so this step only fails the
+        # workflow once history.jsonl has accumulated enough samples for
+        # statistically meaningful gating. See scripts/perf-baseline-compare.mjs
+        # MIN_STRICT_WINDOW.
+        run: node scripts/perf-baseline-compare.mjs --window 10 --threshold 25 --strict
       - name: Upload perf baseline history
         if: always()
         uses: actions/upload-artifact@v7
