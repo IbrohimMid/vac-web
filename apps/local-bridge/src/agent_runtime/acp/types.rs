@@ -155,7 +155,7 @@ pub struct SetSessionModeResponse {
 pub struct SetConfigOptionRequest {
     #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(rename = "optionId")]
+    #[serde(rename = "configId")]
     pub option_id: String,
     pub value: Value,
 }
@@ -163,6 +163,8 @@ pub struct SetConfigOptionRequest {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetConfigOptionResponse {
+    #[serde(default)]
+    pub config_options: Value,
     #[serde(default, rename = "_meta")]
     pub meta: Value,
 }
@@ -352,5 +354,58 @@ impl SessionNotification {
             .into_iter()
             .map(|raw| AcpPlanEntry { raw })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn set_config_option_request_serializes_config_id() {
+        let req = SetConfigOptionRequest {
+            session_id: "sess-acp".to_string(),
+            option_id: "model".to_string(),
+            value: json!("gpt-5"),
+        };
+
+        let encoded = serde_json::to_value(req).expect("serialize set config option request");
+        assert_eq!(
+            encoded,
+            json!({
+                "sessionId": "sess-acp",
+                "configId": "model",
+                "value": "gpt-5",
+            })
+        );
+        assert!(encoded.get("optionId").is_none());
+    }
+
+    #[test]
+    fn set_config_option_response_deserializes_config_options() {
+        let decoded: SetConfigOptionResponse = serde_json::from_value(json!({
+            "configOptions": [
+                {
+                    "id": "model",
+                    "type": "select",
+                    "currentValue": "gpt-5",
+                    "options": [{ "value": "gpt-5", "name": "GPT-5" }]
+                }
+            ]
+        }))
+        .expect("deserialize set config option response");
+
+        assert_eq!(
+            decoded.config_options,
+            json!([
+                {
+                    "id": "model",
+                    "type": "select",
+                    "currentValue": "gpt-5",
+                    "options": [{ "value": "gpt-5", "name": "GPT-5" }]
+                }
+            ])
+        );
     }
 }

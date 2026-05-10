@@ -79,6 +79,29 @@ function asArray(raw: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
+function optionIdOf(option: Record<string, unknown>): string | null {
+  return asString(option.id) ?? asString(option.option_id) ?? asString(option.optionId) ?? asString(option.name) ?? asString(option.key);
+}
+
+function modelChoicesFromConfigOptions(raw: unknown): Array<Record<string, unknown>> {
+  const modelOption = asArray(raw).find((entry) => optionIdOf(entry) === 'model');
+  if (!modelOption) return [];
+  for (const key of ['values', 'choices', 'options', 'items', 'available', 'enum', 'models']) {
+    const value = modelOption[key];
+    if (Array.isArray(value)) {
+      return value
+        .map((item, index): Record<string, unknown> | null => {
+          if (typeof item === 'string' && item.trim()) return { id: item, name: item, value: item };
+          if (item && typeof item === 'object') return item as Record<string, unknown>;
+          return { id: `model-${index + 1}`, name: `model-${index + 1}` };
+        })
+        .filter((item): item is Record<string, unknown> => item !== null);
+    }
+  }
+  const current = modelOption.value ?? modelOption.currentValue ?? modelOption.current_value;
+  return typeof current === 'string' && current.trim() ? [{ id: current, name: current, value: current }] : [];
+}
+
 function modelIdOf(entry: Record<string, unknown>, fallback: string): string {
   for (const key of ['id', 'modelId', 'model_id', 'modeId', 'mode_id', 'name', 'value']) {
     const value = entry[key];
@@ -105,7 +128,7 @@ function contextLimitOf(entry: Record<string, unknown>): number | null {
 function contextLimitForModel(modelId: string | null, sources: unknown[]): number | null {
   if (!modelId) return null;
   for (const source of sources) {
-    const entries = asArray(source);
+    const entries = [...asArray(source), ...modelChoicesFromConfigOptions(source)];
     const match = entries.find((entry, index) => modelIdOf(entry, `entry-${index + 1}`) === modelId);
     if (match) {
       const limit = contextLimitOf(match);
@@ -117,8 +140,7 @@ function contextLimitForModel(modelId: string | null, sources: unknown[]): numbe
 
 function modelValueFromOptions(raw: unknown): string | null {
   for (const option of asArray(raw)) {
-    const id = asString(option.id) ?? asString(option.option_id) ?? asString(option.optionId) ?? asString(option.name);
-    if (id === 'model') return asString(option.value) ?? asString(option.currentValue) ?? asString(option.current_value);
+    if (optionIdOf(option) === 'model') return asString(option.value) ?? asString(option.currentValue) ?? asString(option.current_value);
   }
   return null;
 }
@@ -177,15 +199,17 @@ export function registerSessionHandlers(transport: TransportHandle): () => void 
       if (p?.workflow_id) {
         useSession.getState().setWorkflowMeta(p.workflow_id, p.workflow_name ?? null);
       }
+      const configOptions = p?.config_options ?? p?.configOptions ?? null;
+      const currentModelId = p?.model_id ?? p?.modelId ?? p?.model ?? modelValueFromOptions(configOptions);
       useSession.getState().setAcpModelSnapshot({
         models: p?.models ?? null,
         modes: p?.modes ?? null,
-        configOptions: p?.config_options ?? p?.configOptions ?? null,
-        currentModelId: p?.model_id ?? p?.modelId ?? p?.model ?? null,
+        configOptions,
+        currentModelId,
         contextUsed: asNumber(p?.context_used ?? p?.contextUsed),
         contextLimit:
           asNumber(p?.context_limit ?? p?.contextLimit) ??
-          contextLimitForModel(p?.model_id ?? p?.modelId ?? p?.model ?? null, [p?.modes, p?.models]),
+          contextLimitForModel(currentModelId, [p?.modes, p?.models, configOptions]),
       });
     }),
   );

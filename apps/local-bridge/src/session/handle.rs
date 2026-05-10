@@ -2571,7 +2571,48 @@ impl SessionHandle {
                 mcp_servers: opts.agent.mcp_servers.clone(),
             };
             match acp_runtime.client.load_session(load_req).await {
-                Ok(_resp) => {
+                Ok(resp) => {
+                    let has_models = !resp.models.is_null();
+                    let has_modes = !resp.modes.is_null();
+                    let has_config_options = !resp.config_options.is_null();
+                    if has_models || has_modes || has_config_options {
+                        let mut ready_payload = crate::translator::session_ready_payload(&handle);
+                        if let Some(obj) = ready_payload.as_object_mut() {
+                            if has_models {
+                                obj.insert("models".into(), resp.models.clone());
+                            }
+                            if has_modes {
+                                obj.insert("modes".into(), resp.modes.clone());
+                            }
+                            if has_config_options {
+                                obj.insert("config_options".into(), resp.config_options.clone());
+                            }
+                        }
+                        let ready = ServerEvent {
+                            seq: 0,
+                            session_id: handle.id.clone(),
+                            event_type: "session.ready".into(),
+                            payload: ready_payload,
+                            v: 1,
+                            ts: chrono::Utc::now().to_rfc3339(),
+                        };
+                        emit_event(&handle, ready).await;
+                    }
+                    if has_config_options {
+                        let config_options = ServerEvent {
+                            seq: 0,
+                            session_id: handle.id.clone(),
+                            event_type: "session.config_options.updated".into(),
+                            payload: serde_json::json!({
+                                "options": resp.config_options,
+                                "source": "agent",
+                            }),
+                            v: 1,
+                            ts: chrono::Utc::now().to_rfc3339(),
+                        };
+                        emit_event(&handle, config_options).await;
+                    }
+
                     // Synthetic marker on the persistent transcript so
                     // post-mortem readers can see the native handoff
                     // happened before any new turn traffic.

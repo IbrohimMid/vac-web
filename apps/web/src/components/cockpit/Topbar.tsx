@@ -111,6 +111,13 @@ function modelChoicesFromConfigOptions(raw: unknown): Array<Record<string, unkno
   return typeof current === 'string' && current.trim() ? [{ id: current, name: current, value: current }] : [];
 }
 
+function modelValueFromConfigOptions(raw: unknown): string | null {
+  const option = asModelArray(raw).find((entry) => modelOptionId(entry) === 'model');
+  if (!option) return null;
+  const current = option.value ?? option.currentValue ?? option.current_value;
+  return typeof current === 'string' && current.trim() ? current : null;
+}
+
 function getModelId(model: Record<string, unknown>, fallback: string): string {
   for (const key of ['id', 'modelId', 'model_id', 'value', 'name']) {
     const value = model[key];
@@ -169,7 +176,7 @@ function ModelContextChip({ transport }: { transport: TransportHandle | null }) 
   const choices = modes.length > 0 ? modes : models.length > 0 ? models : configModelChoices;
   const source = modes.length > 0 ? 'mode' : 'model';
   if (agentKind !== 'acp' && choices.length === 0 && !acpModel.currentModelId) return null;
-  const current = acpModel.currentModelId ?? (choices[0] ? getModelId(choices[0], 'model') : 'model unknown');
+  const current = acpModel.currentModelId ?? modelValueFromConfigOptions(acpModel.configOptions) ?? (choices[0] ? getModelId(choices[0], 'model') : 'model unknown');
   const context = formatContextWindow(acpModel.contextUsed, acpModel.contextLimit);
   // Slice 33 follow-up: route the model/mode picker through the declarative
   // affordance catalog (`topbar.model.select`). The catalog gates visibility

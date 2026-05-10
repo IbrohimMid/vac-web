@@ -93,8 +93,18 @@ describe('session handlers', () => {
         { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_window: 500000 },
       ],
       modes: [{ id: 'gemini-2.5-pro', context_window: 1000000 }, { id: 'gemini-2.5-flash', context_window: 500000 }],
-      config_options: [{ id: 'model', value: 'gemini-2.5-pro' }],
-      model_id: 'gemini-2.5-pro',
+      config_options: [
+        {
+          id: 'model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gemini-2.5-pro',
+          options: [
+            { value: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 },
+            { value: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_window: 500000 },
+          ],
+        },
+      ],
     });
 
     expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-pro');
@@ -130,9 +140,31 @@ describe('session handlers', () => {
     expect(useSession.getState().acpModel.contextUsed).toBe(157000);
     expect(useSession.getState().acpModel.contextLimit).toBe(500000);
 
-    emit('session.config_options.updated', { options: [{ id: 'model', value: 'gemini-2.5-flash' }] });
+    emit('session.config_options.updated', {
+      options: [
+        {
+          id: 'model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gemini-2.5-flash',
+          options: [
+            { value: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 },
+            { value: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_window: 500000 },
+          ],
+        },
+      ],
+    });
     expect(useSession.getState().acpModel.configOptions).toEqual([
-      { id: 'model', value: 'gemini-2.5-flash' },
+      {
+        id: 'model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'gemini-2.5-flash',
+        options: [
+          { value: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', context_window: 1000000 },
+          { value: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', context_window: 500000 },
+        ],
+      },
     ]);
     expect(useSession.getState().acpModel.currentModelId).toBe('gemini-2.5-flash');
     expect(useSession.getState().acpModel.contextUsed).toBe(157000);

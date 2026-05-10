@@ -92,16 +92,18 @@ describe('cockpit Topbar', () => {
       sessionId: 'sess_02',
       agentKind: 'acp',
       acpModel: {
-        currentModelId: 'gpt-5',
+        currentModelId: null,
         models: null,
         modes: null,
         configOptions: [
           {
             id: 'model',
-            value: 'gpt-5',
-            values: [
-              { value: 'gpt-5', label: 'GPT-5', context_window: 1000000 },
-              { value: 'gpt-5-mini', label: 'GPT-5 Mini', context_window: 200000 },
+            category: 'model',
+            type: 'select',
+            currentValue: 'gpt-5',
+            options: [
+              { value: 'gpt-5', name: 'GPT-5', context_window: 1000000 },
+              { value: 'gpt-5-mini', name: 'GPT-5 Mini', context_window: 200000 },
             ],
           },
         ],
@@ -114,6 +116,7 @@ describe('cockpit Topbar', () => {
 
     const select = screen.getByLabelText('ACP model');
     expect(select).toBeEnabled();
+    expect(select).toHaveValue('gpt-5');
     expect(screen.getByRole('option', { name: 'GPT-5 Mini' })).toBeInTheDocument();
 
     fireEvent.change(select, { target: { value: 'gpt-5-mini' } });

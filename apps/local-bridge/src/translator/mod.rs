@@ -21,7 +21,7 @@ mod assessment;
 mod assessment_query;
 pub mod assessment_schema;
 
-fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
+pub(crate) fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
     let mut payload = json!({
         "id": handle.id,
         "session_id": handle.id,
@@ -773,12 +773,17 @@ pub async fn dispatch_command(
                 })
                 .await
             {
-                Ok(_) => {
+                Ok(resp) => {
+                    let payload = if resp.config_options.is_null() {
+                        json!({ "option_id": option_id, "value": value, "source": "client" })
+                    } else {
+                        json!({ "options": resp.config_options, "source": "agent" })
+                    };
                     events.push(ServerEvent {
                         seq: 0,
                         session_id: cmd.session_id.clone(),
                         event_type: "session.config_options.updated".into(),
-                        payload: json!({ "option_id": option_id, "value": value, "source": "client" }),
+                        payload,
                         v: 1,
                         ts: chrono::Utc::now().to_rfc3339(),
                     });
