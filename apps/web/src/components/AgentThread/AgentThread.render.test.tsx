@@ -631,4 +631,73 @@ describe('AgentThread renderer', () => {
     expect(screen.getByTestId('agent-final-answer')).toBeInTheDocument();
   });
 
+
+  it('renders Trae-style workspace layer with task header sidebar context PR surface activity summary and sub-agent headline', () => {
+    useSession.setState({
+      sessionId: 'sess1',
+      agentId: 'opencode-acp',
+      agentInfo: {
+        git: {
+          branch: 'trae/solo-agent-TLYBfs',
+          pullRequestUrl: 'https://github.com/IbrohimMid/vac-web/pull/123',
+        },
+      },
+      acpModel: {
+        currentModelId: 'opencode',
+        models: null,
+        modes: null,
+        configOptions: null,
+        contextUsed: 190000,
+        contextLimit: 1000000,
+      },
+    });
+    const s = useAgentSession.getState();
+    s.beginTurn({
+      sessionId: 'sess1',
+      userText: 'Prio 2 — Phase 0.5 Dev School Seeding',
+      provider: 'opencode-acp',
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    const base = {
+      sessionId: 'sess1',
+      status: 'completed' as const,
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:01Z',
+    };
+    s.upsertToolCall({ ...base, toolCallId: 'tc_create', kind: 'edit', title: 'create_directory', rawInput: { path: 'apps/web/src/new', create: true } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_edit', kind: 'edit', title: 'apply_patch', rawInput: { path: 'apps/web/src/components/AgentThread.tsx' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_read', kind: 'read', title: 'read_file', rawInput: { path: 'apps/web/src/components/AgentThread.tsx' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_search', kind: 'read', title: 'grep', rawInput: { pattern: 'AgentThread', path: 'apps/web/src' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_run', kind: 'execute', title: 'bash', rawInput: { command: 'pnpm test' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_web', kind: 'read', title: 'webfetch', rawInput: { url: 'https://example.com' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_subagent', kind: 'other', title: 'task', subagentType: 'coding', rawInput: { description: 'Dev School Seeding', subagent_type: 'coding' } });
+    s.appendAssistantDelta('sess1', '**Task complete**\n\n- Ready for review', '2026-01-01T00:00:02Z');
+    s.completeTextBlocks('sess1', '2026-01-01T00:00:03Z');
+
+    render(<AgentThread sessionId="sess1" />);
+
+    expect(screen.getByTestId('agent-task-header')).toHaveTextContent('Task 1: Prio 2 — Phase 0.5 Dev School Seeding');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Created 1 files');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Edited 1 files');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Read 1 files');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Browsed 1 sources');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Searched 1 times');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Ran 1 commands');
+    expect(screen.getByTestId('agent-activity-summary')).toHaveTextContent('Delegated 1 sub-agents');
+    expect(screen.getByTestId('agent-subagent-headline')).toHaveTextContent('Sub Coding Agent');
+    expect(screen.getByTestId('agent-subagent-headline')).toHaveTextContent('coding');
+    expect(screen.getByTestId('agent-workspace-sidebar')).toBeInTheDocument();
+    expect(screen.getByText('Todo')).toBeInTheDocument();
+    expect(screen.getAllByText(/Task 1: Prio 2/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Context')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-context-meter')).toHaveTextContent('19%');
+    expect(screen.getByText('ctx 190k/1m')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-branch-pill')).toHaveTextContent('trae/solo-agent-TLYBfs');
+    expect(screen.getByRole('button', { name: 'AI Create PR' })).not.toBeDisabled();
+    expect(screen.getByTestId('agent-final-answer').querySelector('strong')?.textContent).toBe('Task complete');
+  });
+
 });

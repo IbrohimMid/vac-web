@@ -10,6 +10,22 @@ export interface AgentTurnTraceEntry {
   label: string;
 }
 
+export interface AgentActivityCounts {
+  created: number;
+  edited: number;
+  read: number;
+  browsed: number;
+  searched: number;
+  ran: number;
+  delegated: number;
+}
+
+export interface AgentContextStats {
+  files: number;
+  skills: number;
+  other: number;
+}
+
 export interface AgentTurnComposition {
   reasoning: AgentTextBlock[];
   finalAnswers: AgentTextBlock[];
@@ -17,11 +33,88 @@ export interface AgentTurnComposition {
   childrenByParent: Map<string, AgentToolCall[]>;
   toolGroups: AgentToolGroup[];
   toolSummary: string;
+  activityCounts: AgentActivityCounts;
+  activitySummary: string;
+  contextStats: AgentContextStats;
+  subagentLabels: string[];
   rawTimeline: AgentTurnTraceEntry[];
 }
 
 function present<T>(value: T | null | undefined): value is T {
   return value != null;
+}
+
+function rawInputRecord(tool: AgentToolCall): Record<string, unknown> | null {
+  return tool.rawInput && typeof tool.rawInput === 'object' && !Array.isArray(tool.rawInput)
+    ? tool.rawInput as Record<string, unknown>
+    : null;
+}
+
+function toolPath(tool: AgentToolCall): string | null {
+  const firstLocation = tool.locations[0]?.path;
+  if (firstLocation) return firstLocation;
+  const raw = rawInputRecord(tool);
+  const path = raw?.path ?? raw?.filePath ?? raw?.file_path ?? raw?.directory;
+  return typeof path === 'string' && path.length > 0 ? path : null;
+}
+
+function isCreateEdit(tool: AgentToolCall): boolean {
+  const title = tool.title?.toLowerCase() ?? '';
+  const raw = rawInputRecord(tool);
+  return title.includes('create') || Boolean(raw?.mkdirp) || Boolean(raw?.create);
+}
+
+function buildActivityCounts(groups: AgentToolGroup[]): AgentActivityCounts {
+  const counts: AgentActivityCounts = { created: 0, edited: 0, read: 0, browsed: 0, searched: 0, ran: 0, delegated: 0 };
+  for (const group of groups) {
+    if (group.id === 'search') counts.searched += group.count;
+    if (group.id === 'read') counts.read += group.count;
+    if (group.id === 'command') counts.ran += group.count;
+    if (group.id === 'browser') counts.browsed += group.count;
+    if (group.id === 'subagent') counts.delegated += group.count;
+    if (group.id === 'edit') {
+      counts.created += group.tools.filter(isCreateEdit).length;
+      counts.edited += group.tools.filter((tool) => !isCreateEdit(tool)).length;
+    }
+  }
+  return counts;
+}
+
+function summarizeActivity(counts: AgentActivityCounts): string {
+  const parts = [
+    ['Created', counts.created, 'files'],
+    ['Edited', counts.edited, 'files'],
+    ['Read', counts.read, 'files'],
+    ['Browsed', counts.browsed, 'sources'],
+    ['Searched', counts.searched, 'times'],
+    ['Ran', counts.ran, 'commands'],
+    ['Delegated', counts.delegated, 'sub-agents'],
+  ] as const;
+  const nonZero = parts.filter(([, count]) => count > 0);
+  if (nonZero.length === 0) return 'No tool activity yet';
+  return nonZero.map(([label, count, noun]) => `${label} ${count} ${noun}`).join(', ');
+}
+
+function buildContextStats(tools: AgentToolCall[]): AgentContextStats {
+  const files = new Set<string>();
+  let skills = 0;
+  let other = 0;
+  for (const tool of tools) {
+    const path = toolPath(tool);
+    if (path) files.add(path);
+    const title = tool.title?.toLowerCase() ?? '';
+    if (title.includes('skill')) skills += 1;
+    if (!path && !title.includes('skill')) other += 1;
+  }
+  return { files: files.size, skills, other };
+}
+
+function subagentLabels(tools: AgentToolCall[]): string[] {
+  const labels = new Set<string>();
+  for (const tool of tools) {
+    if (tool.subagentType) labels.add(tool.subagentType);
+  }
+  return [...labels];
 }
 
 export function composeAgentTurn(args: {
@@ -48,6 +141,7 @@ export function composeAgentTurn(args: {
 
   const topLevelTools = tools.filter((tool) => !tool.parentToolCallId || !toolByCallId.has(tool.parentToolCallId));
   const toolGroups = groupAgentTools(topLevelTools);
+  const activityCounts = buildActivityCounts(toolGroups);
 
   const rawTimeline: AgentTurnTraceEntry[] = [
     ...reasoning.map((thought) => ({
@@ -83,6 +177,10 @@ export function composeAgentTurn(args: {
     childrenByParent,
     toolGroups,
     toolSummary: summarizeToolGroups(toolGroups),
+    activityCounts,
+    activitySummary: summarizeActivity(activityCounts),
+    contextStats: buildContextStats(tools),
+    subagentLabels: subagentLabels(tools),
     rawTimeline,
   };
 }

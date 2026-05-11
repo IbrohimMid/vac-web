@@ -17,6 +17,8 @@ import type { TransportHandle } from '../../transport';
 import { FinalAnswerBlock } from './FinalAnswerBlock';
 import { ReasoningSection } from './ReasoningSection';
 import { ToolActivitySection } from './ToolActivitySection';
+import { AgentPrSurface, gitMetadataFromAgentInfo } from './AgentPrSurface';
+import { AgentWorkspaceSidebar } from './AgentWorkspaceSidebar';
 import { composeAgentTurn, type AgentTurnTraceEntry } from './turnComposition';
 import '../../styles/transcript.css';
 
@@ -620,11 +622,13 @@ function RawTimelineDebug({ entries }: { entries: AgentTurnTraceEntry[] }) {
 
 function AgentTurnCard({
   turn,
+  turnIndex,
   sessionId,
   transport,
   onOpenTab,
 }: {
   turn: AgentTurn;
+  turnIndex: number;
   sessionId: string;
   transport?: TransportHandle | null;
   onOpenTab?: AgentThreadActions['onOpenTab'];
@@ -659,6 +663,14 @@ function AgentTurnCard({
     <article className={`agent-turn ${isActive ? 'active' : ''}`} aria-label="Agent turn">
       <div className="agent-turn-rail" aria-hidden="true" />
       <div className="agent-turn-body">
+        <div className="agent-task-header" data-testid="agent-task-header">
+          <div>
+            <div className="agent-task-kicker">Task {turnIndex + 1}</div>
+            <h3>{turn.userText ? `Task ${turnIndex + 1}: ${turn.userText}` : `Task ${turnIndex + 1}: Agent turn`}</h3>
+            <p>{composition.activitySummary}</p>
+          </div>
+          <span className={`agent-status ${turnStatusClass(turn.status)}`}>{turn.status}</span>
+        </div>
         <div className="agent-turn-header">
           <span>{meta.label}</span>
           <span className={`agent-status ${turnStatusClass(turn.status)}`}>{turn.status}</span>
@@ -732,6 +744,8 @@ function AgentTurnCard({
           <ToolActivitySection
             groups={composition.toolGroups}
             summary={composition.toolSummary}
+            activitySummary={composition.activitySummary}
+            subagentLabels={composition.subagentLabels}
             renderTool={(tool) => (
               <ToolCallCard
                 key={tool.id}
@@ -831,6 +845,8 @@ export function AgentThread({
   const turnsState = useAgentSession((s) => s.turns);
   const turnOrder = useAgentSession((s) => s.turnOrder);
   const telemetry = useAgentSession((s) => (sid ? s.telemetry.get(sid) : undefined));
+  const acpModel = useSession((s) => s.acpModel);
+  const agentInfo = useSession((s) => s.agentInfo);
   // selectAgentTurns reads turnsState/turnOrder transitively via the
   // zustand store; ESLint flags them as "unnecessary" because the
   // memo body doesn't dereference them directly. They MUST stay in
@@ -864,12 +880,28 @@ export function AgentThread({
       .filter((item): item is AgentThreadItem => item != null);
   }, [itemsById, order, sid]);
 
+  const sidebarTurns = useMemo(() => {
+    const state = useAgentSession.getState();
+    return turns.map((turn) => ({
+      turn,
+      composition: composeAgentTurn({
+        turn,
+        assistants: turn.assistantBlockIds.map((id) => state.assistants.get(id)),
+        thoughts: turn.thinkingBlockIds.map((id) => state.thoughts.get(id)),
+        tools: turn.toolCallIds.map((id) => state.tools.get(id)),
+        plan: turn.planId ? state.plans.get(turn.planId) : null,
+      }),
+    }));
+  }, [turns, turnsState]);
+  const prMetadata = useMemo(() => gitMetadataFromAgentInfo(agentInfo), [agentInfo]);
+
   if (!sid || (turns.length === 0 && items.length === 0 && !telemetry)) return null;
 
   return (
-    <section className="agent-thread" aria-label="Rich agent thread">
+    <section className="agent-thread agent-thread-workspace" aria-label="Rich agent thread">
       <div className="agent-thread-header">
         <AgentTelemetryBadge sessionId={sid} provider={provider} />
+        <AgentPrSurface metadata={prMetadata} />
       </div>
       {devWarning && (
         <div
@@ -880,18 +912,24 @@ export function AgentThread({
           ⚠️ {devWarning}
         </div>
       )}
-      {turns.length > 0
-        ? turns.map((turn) => (
-            <AgentTurnCard
-              key={turn.id}
-              turn={turn}
-              sessionId={sid}
-              transport={transport ?? null}
-              onOpenTab={onOpenTab ?? null}
-            />
-          ))
-        : items.map((item) => <AgentThreadItemRow key={item.id} item={item} onOpenTab={onOpenTab ?? null} />)}
-      <AcpDebugPanel sessionId={sid} />
+      <div className="agent-workspace-grid">
+        <div className="agent-workspace-main">
+          {turns.length > 0
+            ? turns.map((turn, index) => (
+                <AgentTurnCard
+                  key={turn.id}
+                  turn={turn}
+                  turnIndex={index}
+                  sessionId={sid}
+                  transport={transport ?? null}
+                  onOpenTab={onOpenTab ?? null}
+                />
+              ))
+            : items.map((item) => <AgentThreadItemRow key={item.id} item={item} onOpenTab={onOpenTab ?? null} />)}
+          <AcpDebugPanel sessionId={sid} />
+        </div>
+        <AgentWorkspaceSidebar turns={sidebarTurns} acpModel={acpModel} />
+      </div>
     </section>
   );
 }

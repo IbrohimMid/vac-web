@@ -5,10 +5,14 @@ import type { AgentToolGroup } from './toolGrouping';
 export function ToolActivitySection({
   groups,
   summary,
+  activitySummary,
+  subagentLabels,
   renderTool,
 }: {
   groups: AgentToolGroup[];
   summary: string;
+  activitySummary: string;
+  subagentLabels: string[];
   renderTool: (tool: AgentToolCall) => ReactNode;
 }) {
   if (groups.length === 0) return null;
@@ -19,6 +23,14 @@ export function ToolActivitySection({
         <span>Tool activity</span>
         <span className="agent-card-meta">{summary}</span>
       </summary>
+      <div className="agent-activity-sentence" data-testid="agent-activity-summary">{activitySummary}</div>
+      {subagentLabels.length > 0 && (
+        <div className="agent-subagent-headline" data-testid="agent-subagent-headline">
+          <span className="agent-subagent-icon" aria-hidden="true">✦</span>
+          <span>Sub Coding Agent</span>
+          <span className="agent-card-meta">{subagentLabels.join(', ')}</span>
+        </div>
+      )}
       <div className="agent-tool-groups">
         {groups.map((group) => (
           <details
