@@ -16,13 +16,13 @@ describe('AgentThread renderer', () => {
   beforeEach(reset);
   afterEach(cleanup);
 
-  it('renders thought block collapsed and expandable', () => {
+  it('renders reasoning section collapsed and expandable', () => {
     useAgentSession.getState().appendThoughtDelta('sess1', 'I should inspect context.');
     render(<AgentThread sessionId="sess1" />);
 
-    const details = screen.getByText(/Thinking/).closest('details');
+    const details = screen.getByTestId('agent-reasoning-section');
     expect(details).not.toHaveAttribute('open');
-    fireEvent.click(screen.getByText(/Thinking/));
+    fireEvent.click(details.querySelector('summary')!);
     expect(screen.getByText('I should inspect context.')).toBeInTheDocument();
   });
 
@@ -162,7 +162,7 @@ describe('AgentThread renderer', () => {
     expect(working).toBeInTheDocument();
     expect(working).toHaveAttribute('role', 'status');
     expect(working.textContent ?? '').toMatch(/Gemini is working/);
-    expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-reasoning-section')).not.toBeInTheDocument();
   });
 
   it('shows the empty-turn fallback when a turn completes with no events', () => {
@@ -336,7 +336,7 @@ describe('AgentThread renderer', () => {
     expect(screen.getByTestId('agent-subagent-copy-description')).not.toBeDisabled();
   });
 
-  it('X.5h.4: tool dispatched before assistant text renders ABOVE the assistant message in the timeline', () => {
+  it('X.5h.4 composed: final answer stays below tool activity even when tool was dispatched first', () => {
     // Repro of the visual bug the user reported: when an agent dispatches a
     // sub-agent and only afterwards writes its summary text, the timeline
     // must place the tool card ABOVE the text (chronologically). Before
@@ -375,19 +375,17 @@ describe('AgentThread renderer', () => {
 
     const timelineEl = screen.getByTestId('agent-turn-timeline');
     const children = Array.from(timelineEl.children) as HTMLElement[];
-    // Pick out the indices of the tool card vs the assistant block.
-    const toolIdx = children.findIndex((el) =>
-      el.matches('details.agent-card.tool'),
+    const toolActivityIdx = children.findIndex((el) =>
+      el.getAttribute('data-testid') === 'agent-tool-activity-section',
     );
-    const assistantIdx = children.findIndex((el) =>
-      el.getAttribute('data-testid') === 'agent-assistant-block',
+    const finalIdx = children.findIndex((el) =>
+      el.getAttribute('data-testid') === 'agent-final-answer',
     );
-    expect(toolIdx).toBeGreaterThanOrEqual(0);
-    expect(assistantIdx).toBeGreaterThanOrEqual(0);
-    expect(toolIdx).toBeLessThan(assistantIdx);
+    expect(toolActivityIdx).toBeGreaterThanOrEqual(0);
+    expect(finalIdx).toBeGreaterThan(toolActivityIdx);
   });
 
-  it('X.5h.4: thinking block streamed AFTER an early tool call still renders below it', () => {
+  it('X.5h.4 composed: reasoning stays in dedicated section while tool activity stays below it', () => {
     // Belt-and-braces: the chronological invariant must hold for thoughts too.
     const s = useAgentSession.getState();
     s.beginTurn({
@@ -417,16 +415,14 @@ describe('AgentThread renderer', () => {
 
     const timelineEl = screen.getByTestId('agent-turn-timeline');
     const children = Array.from(timelineEl.children) as HTMLElement[];
-    const toolIdx = children.findIndex((el) =>
-      el.matches('details.agent-card.tool'),
+    const reasoningIdx = children.findIndex((el) =>
+      el.getAttribute('data-testid') === 'agent-reasoning-section',
     );
-    // ThinkingBlock renders a <details> with summary "Thinking".
-    const thinkingIdx = children.findIndex((el) =>
-      el.tagName === 'DETAILS' && el.textContent?.includes('Thinking'),
+    const toolActivityIdx = children.findIndex((el) =>
+      el.getAttribute('data-testid') === 'agent-tool-activity-section',
     );
-    expect(toolIdx).toBeGreaterThanOrEqual(0);
-    expect(thinkingIdx).toBeGreaterThanOrEqual(0);
-    expect(toolIdx).toBeLessThan(thinkingIdx);
+    expect(reasoningIdx).toBeGreaterThanOrEqual(0);
+    expect(toolActivityIdx).toBeGreaterThan(reasoningIdx);
   });
 
   it('X.5h.3: deep-nested sub-agent cards (depth >= 2) start collapsed by default', () => {
@@ -489,4 +485,150 @@ describe('AgentThread renderer', () => {
     expect(depth2.getAttribute('data-depth')).toBe('2');
     expect(depth2).not.toHaveAttribute('open');
   });
+
+  it('renders composed turn with collapsed reasoning, grouped tools, markdown final answer at the bottom, and collapsed raw timeline', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({
+      sessionId: 'sess1',
+      userText: 'compose the turn',
+      provider: 'opencode-acp',
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    s.appendThoughtDelta('sess1', 'Need to inspect files first.', '2026-01-01T00:00:01.000Z');
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_grep',
+      kind: 'read',
+      title: 'grep',
+      status: 'completed',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      rawInput: { pattern: 'AgentThread', path: 'apps/web/src' },
+      updatedAt: '2026-01-01T00:00:02.000Z',
+    });
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_bash',
+      kind: 'execute',
+      title: 'bash',
+      status: 'completed',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      rawInput: { command: 'pnpm test' },
+      updatedAt: '2026-01-01T00:00:03.000Z',
+    });
+    s.appendAssistantDelta(
+      'sess1',
+      '**Done**\n\n- Final answer stays last\n- Markdown renders',
+      '2026-01-01T00:00:04.000Z',
+    );
+    s.completeTextBlocks('sess1', '2026-01-01T00:00:05.000Z');
+
+    render(<AgentThread sessionId="sess1" />);
+
+    const timelineEl = screen.getByTestId('agent-turn-timeline');
+    const children = Array.from(timelineEl.children) as HTMLElement[];
+    const reasoningIdx = children.findIndex((el) => el.getAttribute('data-testid') === 'agent-reasoning-section');
+    const toolActivityIdx = children.findIndex((el) => el.getAttribute('data-testid') === 'agent-tool-activity-section');
+    const finalIdx = children.findIndex((el) => el.getAttribute('data-testid') === 'agent-final-answer');
+    const rawIdx = children.findIndex((el) => el.getAttribute('data-testid') === 'agent-raw-timeline-debug');
+    expect(reasoningIdx).toBeGreaterThanOrEqual(0);
+    expect(toolActivityIdx).toBeGreaterThan(reasoningIdx);
+    expect(finalIdx).toBeGreaterThan(toolActivityIdx);
+    expect(rawIdx).toBeGreaterThan(finalIdx);
+
+    expect(screen.getByTestId('agent-reasoning-section')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('agent-tool-activity-section')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('agent-tool-group-search')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('agent-tool-group-command')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('agent-raw-timeline-debug')).not.toHaveAttribute('open');
+
+    const final = screen.getByTestId('agent-final-answer');
+    expect(final.querySelector('strong')?.textContent).toBe('Done');
+    expect(final.textContent ?? '').not.toContain('**Done**');
+    expect(final.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  it('keeps final answer below tool activity after a late tool update', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'late update', provider: 'opencode-acp', at: '2026-01-01T00:00:00.000Z' });
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_late',
+      kind: 'execute',
+      title: 'terminal',
+      status: 'in_progress',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:01.000Z',
+    });
+    s.appendAssistantDelta('sess1', 'final text', '2026-01-01T00:00:02.000Z');
+    s.upsertToolCall({
+      sessionId: 'sess1',
+      toolCallId: 'tc_late',
+      kind: 'execute',
+      title: 'terminal',
+      status: 'completed',
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:10.000Z',
+    });
+
+    render(<AgentThread sessionId="sess1" />);
+    const timelineEl = screen.getByTestId('agent-turn-timeline');
+    const children = Array.from(timelineEl.children) as HTMLElement[];
+    const toolActivityIdx = children.findIndex((el) => el.getAttribute('data-testid') === 'agent-tool-activity-section');
+    const finalIdx = children.findIndex((el) => el.getAttribute('data-testid') === 'agent-final-answer');
+    expect(toolActivityIdx).toBeGreaterThanOrEqual(0);
+    expect(finalIdx).toBeGreaterThan(toolActivityIdx);
+  });
+
+  it('groups read edit browser sub-agent and other tool activity separately while keeping tool output plain', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'group tools', provider: 'opencode-acp' });
+    const base = {
+      sessionId: 'sess1',
+      status: 'completed' as const,
+      locations: [],
+      agentId: 'opencode',
+      agentKind: 'opencode',
+      approvedByApprovalId: null,
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    s.upsertToolCall({ ...base, toolCallId: 'tc_read', kind: 'read', title: 'read_file', rawInput: { path: 'a.ts' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_edit', kind: 'edit', title: 'apply_patch', rawInput: { path: 'a.ts' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_web', kind: 'read', title: 'webfetch', rawInput: { url: 'https://example.com' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_sub', kind: 'other', title: 'task', subagentType: 'general', rawInput: { description: 'delegate' } });
+    s.upsertToolCall({ ...base, toolCallId: 'tc_other', kind: 'other', title: 'unknown', rawOutput: '**raw output stays plain**' });
+
+    render(<AgentThread sessionId="sess1" />);
+    expect(screen.getByTestId('agent-tool-group-read')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-tool-group-edit')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-tool-group-browser')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-tool-group-subagent')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-tool-group-other')).toBeInTheDocument();
+    expect(screen.getByText('**raw output stays plain**')).toBeInTheDocument();
+    expect(screen.queryByText('raw output stays plain')).not.toBeInTheDocument();
+  });
+
+  it('hides reasoning and tool activity sections when a turn has no thought or tools', () => {
+    const s = useAgentSession.getState();
+    s.beginTurn({ sessionId: 'sess1', userText: 'no tools', provider: 'gemini-acp' });
+    s.appendAssistantDelta('sess1', 'plain answer');
+    s.completeTextBlocks('sess1');
+
+    render(<AgentThread sessionId="sess1" />);
+    expect(screen.queryByTestId('agent-reasoning-section')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('agent-tool-activity-section')).not.toBeInTheDocument();
+    expect(screen.getByTestId('agent-final-answer')).toBeInTheDocument();
+  });
+
 });

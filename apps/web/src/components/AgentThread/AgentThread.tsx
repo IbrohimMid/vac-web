@@ -14,6 +14,10 @@ import {
 } from '../../stores/agentSession';
 import { useSession } from '../../stores/session';
 import type { TransportHandle } from '../../transport';
+import { FinalAnswerBlock } from './FinalAnswerBlock';
+import { ReasoningSection } from './ReasoningSection';
+import { ToolActivitySection } from './ToolActivitySection';
+import { composeAgentTurn, type AgentTurnTraceEntry } from './turnComposition';
 import '../../styles/transcript.css';
 
 // X.5f.3 Patch B: shared shape for the optional plumbing the cockpit
@@ -321,7 +325,7 @@ export function ToolCallCard({
   // them manually; depth is also exposed via data-depth so styles
   // and tests can target it.
   const startsOpen =
-    (tool.status === 'in_progress' || tool.status === 'completed')
+    tool.status !== 'completed'
     && depth < SUBAGENT_DEFAULT_OPEN_DEPTH;
   return (
     <details
@@ -593,6 +597,27 @@ function AcpDebugRow({ message }: { message: AgentDebugMessage }) {
   );
 }
 
+function RawTimelineDebug({ entries }: { entries: AgentTurnTraceEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <details className="agent-card raw-timeline" data-testid="agent-raw-timeline-debug">
+      <summary className="agent-card-title">
+        <span>Raw chronological timeline</span>
+        <span className="agent-card-meta">Debug · collapsed</span>
+      </summary>
+      <ol className="agent-raw-timeline-list">
+        {entries.map((entry) => (
+          <li key={entry.key}>
+            <code>{entry.sortAt}</code>
+            <span>{entry.kind}</span>
+            <span>{entry.label}</span>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
 function AgentTurnCard({
   turn,
   sessionId,
@@ -620,81 +645,11 @@ function AgentTurnCard({
     () => turn.toolCallIds.map((id) => toolsById.get(id)).filter(Boolean),
     [toolsById, turn.toolCallIds],
   );
-  // X.5h.1 — Trae-style nested sub-agent tree.
-  // Top-level tools are those whose parent is unknown to this turn (either
-  // missing or pointing at a tool we don't have in scope). Children are
-  // rendered nested inside their parent task card and skipped at the top
-  // level so the timeline stays a clean sub-agent→child tree instead of a
-  // flat list with duplicates.
-  const toolByCallId = useMemo(() => {
-    const m = new Map<string, AgentToolCall>();
-    for (const t of tools) if (t) m.set(t.toolCallId, t);
-    return m;
-  }, [tools]);
-  const topLevelTools = useMemo(
-    () =>
-      tools.filter((t) => {
-        if (!t) return false;
-        const parent = t.parentToolCallId;
-        return !parent || !toolByCallId.has(parent);
-      }),
-    [tools, toolByCallId],
+  const composition = useMemo(
+    () => composeAgentTurn({ turn, assistants, thoughts, tools, plan }),
+    [turn, assistants, thoughts, tools, plan],
   );
-  const childrenByParent = useMemo(() => {
-    const m = new Map<string, AgentToolCall[]>();
-    for (const t of tools) {
-      if (!t || !t.parentToolCallId) continue;
-      const arr = m.get(t.parentToolCallId) ?? [];
-      arr.push(t);
-      m.set(t.parentToolCallId, arr);
-    }
-    return m;
-  }, [tools]);
-  // X.5h.4 — chronological timeline.
-  //
-  // Before X.5h.4 the AgentTurnCard rendered thoughts → assistants →
-  // plan → tools in a fixed order regardless of when each item arrived.
-  // That made a sub-agent dispatch (which the agent typically issues
-  // BEFORE writing its summary text) appear UNDER the summary, which
-  // misrepresents causality and confuses the reader.
-  //
-  // We now build a single ordered list keyed by `createdAt` (ISO-8601
-  // strings, lexicographically sortable) so a tool that was created
-  // before the assistant's text block renders above it. Children of a
-  // top-level tool stay nested via `childrenByParent` and are NOT
-  // emitted at the top level (consistent with the X.5h.1 invariant).
-  type TimelineEntry =
-    | { kind: 'thought'; key: string; sortAt: string; ref: typeof thoughts[number] }
-    | { kind: 'assistant'; key: string; sortAt: string; ref: typeof assistants[number] }
-    | { kind: 'plan'; key: string; sortAt: string; ref: NonNullable<typeof plan> }
-    | { kind: 'tool'; key: string; sortAt: string; ref: AgentToolCall };
-  const timeline = useMemo<TimelineEntry[]>(() => {
-    const items: TimelineEntry[] = [];
-    for (const t of thoughts) {
-      if (!t) continue;
-      items.push({ kind: 'thought', key: `thought:${t.id}`, sortAt: t.createdAt, ref: t });
-    }
-    for (const a of assistants) {
-      if (!a) continue;
-      items.push({ kind: 'assistant', key: `assistant:${a.id}`, sortAt: a.createdAt, ref: a });
-    }
-    if (plan) {
-      items.push({ kind: 'plan', key: `plan:${plan.id}`, sortAt: plan.updatedAt, ref: plan });
-    }
-    for (const tool of topLevelTools) {
-      if (!tool) continue;
-      // `createdAt` is the X.5h.4 sticky-preserved first-observed timestamp.
-      // Fall back to `updatedAt` for legacy snapshots / fixtures that predate
-      // the field so the timeline still has a deterministic anchor.
-      const sortAt = tool.createdAt ?? tool.updatedAt;
-      items.push({ kind: 'tool', key: `tool:${tool.id}`, sortAt, ref: tool });
-    }
-    // Stable sort: ISO-8601 string compare gives chronological order;
-    // identical timestamps fall back to insertion order (which already
-    // matches the order each block was first observed by the store).
-    items.sort((a, b) => (a.sortAt < b.sortAt ? -1 : a.sortAt > b.sortAt ? 1 : 0));
-    return items;
-  }, [thoughts, assistants, plan, topLevelTools]);
+  const { childrenByParent } = composition;
   const meta = providerMeta(turn.provider);
   const isActive = turn.status === 'working' || turn.status === 'streaming';
   const emptyResponse = assistants.length === 0 && thoughts.length === 0 && tools.length === 0 && !plan;
@@ -772,62 +727,35 @@ function AgentTurnCard({
             </span>
           </div>
         )}
-        {/* X.5h.4 — chronological render: each entry dispatches based
-            on its kind, but the outer order is sortAt-driven so a tool
-            call dispatched before the assistant text renders above it. */}
         <div className="agent-turn-timeline" data-testid="agent-turn-timeline">
-          {timeline.map((entry) => {
-            if (entry.kind === 'thought') {
-              return (
-                <ThinkingBlock
-                  key={entry.key}
-                  content={entry.ref!.content}
-                  active={isActive}
-                />
-              );
-            }
-            if (entry.kind === 'assistant') {
-              const assistant = entry.ref!;
-              return (
-                <div
-                  key={entry.key}
-                  className={`agent-message ${isActive ? 'streaming' : ''}`}
-                  data-testid="agent-assistant-block"
-                >
-                  {assistant.content}
-                  {isActive && <span className="streaming-cursor">▍</span>}
-                  {!isActive && assistant.content && (
-                    <div
-                      className="agent-card-actions"
-                      role="group"
-                      aria-label="Assistant actions"
-                    >
-                      <button
-                        type="button"
-                        className="agent-action"
-                        onClick={() => void copyToClipboard(assistant.content)}
-                        title="Copy assistant response to clipboard"
-                      >
-                        Copy response
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            if (entry.kind === 'plan') {
-              return <PlanCard key={entry.key} entries={entry.ref.entries} />;
-            }
-            // entry.kind === 'tool'
-            return (
+          <ReasoningSection thoughts={composition.reasoning} active={isActive} />
+          <ToolActivitySection
+            groups={composition.toolGroups}
+            summary={composition.toolSummary}
+            renderTool={(tool) => (
               <ToolCallCard
-                key={entry.key}
-                tool={entry.ref}
+                key={tool.id}
+                tool={tool}
                 onOpenTab={onOpenTab}
                 childrenByParent={childrenByParent}
               />
-            );
-          })}
+            )}
+          />
+          {plan && (
+            <details className="agent-card plan-section" data-testid="agent-plan-section">
+              <summary className="agent-card-title">
+                <span>Plan</span>
+                <span className="agent-card-meta">{plan.entries.length} steps · collapsed</span>
+              </summary>
+              <PlanCard entries={plan.entries} />
+            </details>
+          )}
+          <FinalAnswerBlock
+            assistants={composition.finalAnswers}
+            active={isActive}
+            onCopy={copyToClipboard}
+          />
+          <RawTimelineDebug entries={composition.rawTimeline} />
         </div>
         {/* X.5f.3 Patch D: when the provider streamed assistant text but
             emitted no rich (thinking/tool/diff/terminal/plan) events for
@@ -872,7 +800,7 @@ function AgentThreadItemRow({ item, onOpenTab }: { item: AgentThreadItem; onOpen
   const plan = useAgentSession((s) => s.plans.get(item.refId));
 
   if (item.kind === 'assistant' && assistant?.content) {
-    return <div className="agent-message">{assistant.content}</div>;
+    return <FinalAnswerBlock assistants={[assistant]} onCopy={copyToClipboard} />;
   }
   if (item.kind === 'thought' && thought?.content) {
     return <ThinkingBlock content={thought.content} />;

@@ -634,3 +634,85 @@
 	letter-spacing: 0.01em;
 	white-space: nowrap;
 }
+
+/* Agent turn trace layout — Trae/Zed inspired composed turn. */
+.agent-card.reasoning,
+.agent-card.tool-activity,
+.agent-card.plan-section,
+.agent-card.raw-timeline {
+  background: var(--surface-2, var(--bg-sunken));
+}
+.agent-card.reasoning > summary,
+.agent-card.tool-activity > summary,
+.agent-card.plan-section > summary,
+.agent-card.raw-timeline > summary {
+  cursor: pointer;
+}
+.agent-card.tool-activity:not([open]) {
+  border-style: dashed;
+}
+.agent-tool-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.65rem;
+}
+.agent-tool-group {
+  border: 1px solid var(--border, var(--line));
+  border-radius: 9px;
+  background: var(--surface-1, var(--panel));
+  overflow: hidden;
+}
+.agent-tool-group > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-weight: 650;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0.55rem 0.7rem;
+}
+.agent-tool-group.active > summary {
+  background: var(--info-soft, rgba(59, 130, 246, 0.1));
+}
+.agent-tool-group.failed > summary {
+  background: var(--crit-soft, rgba(239, 68, 68, 0.1));
+}
+.agent-tool-group-body {
+  border-top: 1px solid var(--border, var(--line));
+  padding: 0.6rem;
+}
+.agent-tool-group-body > .agent-card.tool:last-child {
+  margin-bottom: 0;
+}
+.agent-message.final-answer {
+  white-space: normal;
+}
+.agent-message.final-answer .markdown-body,
+.agent-message.final-answer p {
+  margin-top: 0;
+}
+.agent-message.final-answer p:last-child,
+.agent-message.final-answer ul:last-child,
+.agent-message.final-answer ol:last-child,
+.agent-message.final-answer pre:last-child {
+  margin-bottom: 0;
+}
+.agent-raw-timeline-list {
+  border-top: 1px solid var(--border, var(--line));
+  color: var(--text-2, var(--ink-3));
+  display: grid;
+  gap: 0.35rem;
+  list-style: decimal;
+  margin: 0;
+  padding: 0.7rem 0.85rem 0.85rem 2rem;
+}
+.agent-raw-timeline-list li {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: minmax(12rem, auto) 6rem minmax(0, 1fr);
+}
+.agent-raw-timeline-list code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
+}
