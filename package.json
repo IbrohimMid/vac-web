@@ -35,7 +35,8 @@
   },
   "pnpm": {
     "overrides": {
-      "html-encoding-sniffer": "^4.0.0"
+      "html-encoding-sniffer": "^4.0.0",
+      "@types/node": "22.19.18"
     }
   },
   "devDependencies": {

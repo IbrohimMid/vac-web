@@ -2,8 +2,8 @@
 #
 # This file is the source of truth for every event the bridge or web cockpit
 # emits or consumes. Generated bindings live in:
-#   * apps/local-bridge/src/generated/event_catalog.rs (planned)
-#   * apps/web/src/generated/eventCatalog.ts            (planned)
+#   * apps/local-bridge/src/generated/event_catalog.rs
+#   * apps/web/src/generated/eventCatalog.ts
 #
 # Migration rule:
 #   1. New events must land here BEFORE being emitted in code.
@@ -13,7 +13,7 @@
 #      consume IDs from the generated TS catalog, not inline strings.
 
 version: 1
-status: planned # codegen pipeline not yet implemented
+status: shipped # generated bindings are enforced by scripts/verify-codegen.sh
 
 events:
   # ---- session lifecycle -------------------------------------------------
@@ -46,6 +46,24 @@ events:
     consumers:
       - SessionPicker
       - capabilities.sessionLifecycle
+
+  - id: session.persistence_degraded
+    owner: bridge
+    status: implemented
+    producer: session.persistence.sink
+    consumers:
+      - capabilities.persistenceEvents
+      - domain.sessions.history
+      - NotifyLane
+  - id: session.mcp_server_drift
+    owner: bridge
+    status: implemented
+    producer: translator.session_resume
+    consumers:
+      - capabilities.registryEvents
+      - domain.sessions.history
+      - ResumeStatus
+      - PersistentSessions
 
   # ---- review taxonomy ---------------------------------------------------
   - id: review.changeset_updated
@@ -135,6 +153,32 @@ events:
     internal: true
     consumers:
       - capabilities.workflowEvents
+
+  # ---- tool activity -----------------------------------------------------
+  - id: tool.observed
+    owner: bridge
+    status: implemented
+    producer: session.handle.tool_activity
+    consumers:
+      - domain.toolActivity.handlers
+      - stores.toolActivity
+      - workflows.adapters
+  - id: tool.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.tool_activity
+    consumers:
+      - domain.toolActivity.handlers
+      - stores.toolActivity
+      - workflows.adapters
+  - id: tool.failed
+    owner: bridge
+    status: implemented
+    producer: session.handle.tool_activity
+    consumers:
+      - domain.toolActivity.handlers
+      - stores.toolActivity
+      - workflows.adapters
 
   # ---- shell / terminal --------------------------------------------------
   - id: shell.started

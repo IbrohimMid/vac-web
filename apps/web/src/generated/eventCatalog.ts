@@ -58,11 +58,16 @@ export type EventId =
   | 'runtime.job_started'
   | 'session.closed'
   | 'session.context.updated'
+  | 'session.mcp_server_drift'
+  | 'session.persistence_degraded'
   | 'session.renamed'
   | 'session.started'
   | 'shell.output'
   | 'shell.started'
   | 'terminal.activity'
+  | 'tool.failed'
+  | 'tool.observed'
+  | 'tool.updated'
   | 'workflow.artifact.created'
   | 'workflow.completed'
   | 'workflow.failed'
@@ -118,11 +123,16 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'runtime.job_started', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),
   Object.freeze({ id: 'session.closed', status: 'implemented', owner: 'bridge', producer: "translator.session_closed", consumers: Object.freeze(["domain.sessions.handlers", "capabilities.sessionLifecycle"]) }),
   Object.freeze({ id: 'session.context.updated', status: 'implemented', owner: 'bridge', producer: "session.handle.prompt_response_usage", consumers: Object.freeze(["domain.sessions.handlers", "Topbar.ModelContextChip"]) }),
+  Object.freeze({ id: 'session.mcp_server_drift', status: 'implemented', owner: 'bridge', producer: "translator.session_resume", consumers: Object.freeze(["capabilities.registryEvents", "domain.sessions.history", "ResumeStatus", "PersistentSessions"]) }),
+  Object.freeze({ id: 'session.persistence_degraded', status: 'implemented', owner: 'bridge', producer: "session.persistence.sink", consumers: Object.freeze(["capabilities.persistenceEvents", "domain.sessions.history", "NotifyLane"]) }),
   Object.freeze({ id: 'session.renamed', status: 'implemented', owner: 'bridge', producer: "translator.session_renamed", consumers: Object.freeze(["SessionPicker", "capabilities.sessionLifecycle"]) }),
   Object.freeze({ id: 'session.started', status: 'implemented', owner: 'bridge', producer: "translator.session_started", consumers: Object.freeze(["domain.sessions.handlers", "SessionPicker", "capabilities.sessionLifecycle"]) }),
   Object.freeze({ id: 'shell.output', status: 'not_wired', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
   Object.freeze({ id: 'shell.started', status: 'not_wired', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
   Object.freeze({ id: 'terminal.activity', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
+  Object.freeze({ id: 'tool.failed', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
+  Object.freeze({ id: 'tool.observed', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
+  Object.freeze({ id: 'tool.updated', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
   Object.freeze({ id: 'workflow.artifact.created', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.failed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),

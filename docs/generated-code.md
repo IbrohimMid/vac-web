@@ -24,12 +24,15 @@ top-level comment / `$comment` field.
 | Generated file | Source | Generator |
 | --- | --- | --- |
 | `apps/local-bridge/src/generated/command_catalog.rs` | `config/control-plane/command-manifest.yaml` | `scripts/codegen-command-catalog.mjs` |
+| `apps/local-bridge/src/generated/mod.rs` | generated Rust catalog modules | `scripts/codegen.sh` and catalog generators |
 | `apps/web/src/generated/commandCatalog.ts` | `config/control-plane/command-manifest.yaml` | `scripts/codegen-command-catalog.mjs` |
-| `apps/web/src/generated/eventCatalog.ts` _(planned, slice 32)_ | `config/control-plane/event-catalog.yaml` | _planned_ `scripts/codegen-event-catalog.mjs` |
-| `apps/local-bridge/src/generated/event_catalog.rs` _(planned, slice 32)_ | `config/control-plane/event-catalog.yaml` | _planned_ `scripts/codegen-event-catalog.mjs` |
-| `apps/local-bridge/src/generated/error_taxonomy.rs` _(planned, slice 40)_ | `schema/error-taxonomy.yaml` _(planned)_ | _planned_ `scripts/codegen-error-taxonomy.mjs` |
-| `apps/web/src/generated/errorTaxonomy.ts` _(planned, slice 40)_ | `schema/error-taxonomy.yaml` _(planned)_ | _planned_ `scripts/codegen-error-taxonomy.mjs` |
-| `tools/mock-engine/src/generated/scenario_catalog.rs` _(planned, slice 34)_ | `tools/mock-engine/scenarios/*.yaml` + `schema/mock-scenario.schema.json` | _planned_ `scripts/codegen-mock-scenarios.mjs` |
+| `apps/web/src/generated/eventCatalog.ts` | `config/control-plane/event-catalog.yaml` | `scripts/codegen-event-catalog.mjs` |
+| `apps/web/src/generated/eventCatalog.test.ts` | `apps/web/src/generated/eventCatalog.ts` | hand-authored generated-output parity test |
+| `apps/local-bridge/src/generated/event_catalog.rs` | `config/control-plane/event-catalog.yaml` | `scripts/codegen-event-catalog.mjs` |
+| `apps/local-bridge/src/generated/error_taxonomy_catalog.rs` | `schema/error-taxonomy.yaml` | `scripts/codegen-error-taxonomy.mjs` |
+| `apps/web/src/generated/errorTaxonomyCatalog.ts` | `schema/error-taxonomy.yaml` | `scripts/codegen-error-taxonomy.mjs` |
+| `tools/mock-engine/src/generated/scenario_catalog.rs` | `tools/mock-engine/scenarios/*.yaml` + `schema/mock-scenario.schema.json` | `scripts/codegen-mock-scenarios.mjs` |
+| `tools/mock-engine/src/generated/mod.rs` | generated mock-engine modules | `scripts/codegen-mock-scenarios.mjs` |
 
 ## Manifest
 

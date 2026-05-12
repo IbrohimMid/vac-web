@@ -20,7 +20,7 @@ pub struct EventEntry {
 }
 
 #[rustfmt::skip]
-pub const EVENT_CATALOG: [EventEntry; 58] = [
+pub const EVENT_CATALOG: [EventEntry; 63] = [
     EventEntry { id: "activity.appended", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_received", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_rejected", status: EventStatus::Implemented },
@@ -62,11 +62,16 @@ pub const EVENT_CATALOG: [EventEntry; 58] = [
     EventEntry { id: "runtime.job_started", status: EventStatus::Implemented },
     EventEntry { id: "session.closed", status: EventStatus::Implemented },
     EventEntry { id: "session.context.updated", status: EventStatus::Implemented },
+    EventEntry { id: "session.mcp_server_drift", status: EventStatus::Implemented },
+    EventEntry { id: "session.persistence_degraded", status: EventStatus::Implemented },
     EventEntry { id: "session.renamed", status: EventStatus::Implemented },
     EventEntry { id: "session.started", status: EventStatus::Implemented },
     EventEntry { id: "shell.output", status: EventStatus::NotWired },
     EventEntry { id: "shell.started", status: EventStatus::NotWired },
     EventEntry { id: "terminal.activity", status: EventStatus::Implemented },
+    EventEntry { id: "tool.failed", status: EventStatus::Implemented },
+    EventEntry { id: "tool.observed", status: EventStatus::Implemented },
+    EventEntry { id: "tool.updated", status: EventStatus::Implemented },
     EventEntry { id: "workflow.artifact.created", status: EventStatus::Implemented },
     EventEntry { id: "workflow.completed", status: EventStatus::Implemented },
     EventEntry { id: "workflow.failed", status: EventStatus::Implemented },

@@ -4,9 +4,31 @@
   "description": "Inventory of generated files and the codegen scripts that produce them. Used by drift CI (scripts/verify-codegen.sh) and by the docs at docs/generated-code.md.",
   "entries": [
     {
+      "id": "protocol-ts-v1",
+      "output": "packages/protocol-ts/src/v1/generated",
+      "sources": [
+        "packages/protocol/v1/*.schema.json"
+      ],
+      "generator": "scripts/codegen.sh",
+      "status": "shipped",
+      "language": "typescript"
+    },
+    {
+      "id": "protocol-rs-v1",
+      "output": "packages/protocol-rs/src/v1/generated",
+      "sources": [
+        "packages/protocol/v1/*.schema.json"
+      ],
+      "generator": "scripts/codegen.sh",
+      "status": "shipped",
+      "language": "rust"
+    },
+    {
       "id": "command-catalog-rs",
       "output": "apps/local-bridge/src/generated/command_catalog.rs",
-      "sources": ["config/control-plane/command-manifest.yaml"],
+      "sources": [
+        "config/control-plane/command-manifest.yaml"
+      ],
       "generator": "scripts/codegen-command-catalog.mjs",
       "status": "shipped",
       "language": "rust"
@@ -14,7 +36,9 @@
     {
       "id": "command-catalog-ts",
       "output": "apps/web/src/generated/commandCatalog.ts",
-      "sources": ["config/control-plane/command-manifest.yaml"],
+      "sources": [
+        "config/control-plane/command-manifest.yaml"
+      ],
       "generator": "scripts/codegen-command-catalog.mjs",
       "status": "shipped",
       "language": "typescript"
@@ -22,17 +46,21 @@
     {
       "id": "event-catalog-ts",
       "output": "apps/web/src/generated/eventCatalog.ts",
-      "sources": ["config/control-plane/event-catalog.yaml"],
+      "sources": [
+        "config/control-plane/event-catalog.yaml"
+      ],
       "generator": "scripts/codegen-event-catalog.mjs",
-      "status": "planned",
+      "status": "shipped",
       "language": "typescript"
     },
     {
       "id": "event-catalog-rs",
       "output": "apps/local-bridge/src/generated/event_catalog.rs",
-      "sources": ["config/control-plane/event-catalog.yaml"],
+      "sources": [
+        "config/control-plane/event-catalog.yaml"
+      ],
       "generator": "scripts/codegen-event-catalog.mjs",
-      "status": "planned",
+      "status": "shipped",
       "language": "rust"
     },
     {
@@ -43,24 +71,58 @@
         "schema/mock-scenario.schema.json"
       ],
       "generator": "scripts/codegen-mock-scenarios.mjs",
-      "status": "planned",
+      "status": "shipped",
       "language": "rust"
     },
     {
       "id": "error-taxonomy-ts",
-      "output": "apps/web/src/generated/errorTaxonomy.ts",
-      "sources": ["schema/error-taxonomy.yaml"],
+      "output": "apps/web/src/generated/errorTaxonomyCatalog.ts",
+      "sources": [
+        "schema/error-taxonomy.yaml"
+      ],
       "generator": "scripts/codegen-error-taxonomy.mjs",
-      "status": "planned",
+      "status": "shipped",
       "language": "typescript"
     },
     {
       "id": "error-taxonomy-rs",
-      "output": "apps/local-bridge/src/generated/error_taxonomy.rs",
-      "sources": ["schema/error-taxonomy.yaml"],
+      "output": "apps/local-bridge/src/generated/error_taxonomy_catalog.rs",
+      "sources": [
+        "schema/error-taxonomy.yaml"
+      ],
       "generator": "scripts/codegen-error-taxonomy.mjs",
-      "status": "planned",
+      "status": "shipped",
       "language": "rust"
+    },
+    {
+      "id": "local-bridge-generated-mod-rs",
+      "output": "apps/local-bridge/src/generated/mod.rs",
+      "sources": [
+        "apps/local-bridge/src/generated/*.rs"
+      ],
+      "generator": "scripts/codegen.sh and catalog generators",
+      "status": "shipped",
+      "language": "rust"
+    },
+    {
+      "id": "mock-engine-generated-mod-rs",
+      "output": "tools/mock-engine/src/generated/mod.rs",
+      "sources": [
+        "tools/mock-engine/src/generated/*.rs"
+      ],
+      "generator": "scripts/codegen-mock-scenarios.mjs",
+      "status": "shipped",
+      "language": "rust"
+    },
+    {
+      "id": "event-catalog-ts-test",
+      "output": "apps/web/src/generated/eventCatalog.test.ts",
+      "sources": [
+        "apps/web/src/generated/eventCatalog.ts"
+      ],
+      "generator": "hand-authored generated-output parity test",
+      "status": "shipped",
+      "language": "typescript"
     }
   ]
 }

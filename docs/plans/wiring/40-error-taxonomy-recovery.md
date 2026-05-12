@@ -36,8 +36,8 @@ sources:
   - docs/ux-grammar.md
 outputs:
   - schema/error-taxonomy.yaml
-  - apps/web/src/generated/errorTaxonomy.ts
-  - apps/local-bridge/src/generated/error_taxonomy.rs
+  - apps/web/src/generated/errorTaxonomyCatalog.ts
+  - apps/local-bridge/src/generated/error_taxonomy_catalog.rs
 steps:
   - id: step_01
     do: 'Inventory all error codes emitted by bridge and profile-core.'
