@@ -26,6 +26,8 @@ use crate::AppState;
 #[derive(Debug, Deserialize)]
 pub struct BridgeDialParams {
     pub device_id: String,
+    #[serde(default)]
+    pub bridge_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +58,27 @@ pub async fn bridge_dial_ws(
     State(state): State<AppState>,
     Query(q): Query<BridgeDialParams>,
 ) -> Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    // AUDIT-012: authenticate the bridge before allowing it to register
+    // a device entry. Without this check, any caller knowing a device_id
+    // can hijack frames bound for that device.
+    if let Some(secret) = state.security.bridge_secret.as_deref() {
+        let Some(token) = q.bridge_token.as_deref() else {
+            tracing::warn!(device_id = %q.device_id, "bridge dial rejected: missing bridge_token");
+            return (StatusCode::UNAUTHORIZED, "missing bridge_token").into_response();
+        };
+        if let Err(reason) = crate::tokens::verify_bridge_dial_token(token, secret, &q.device_id) {
+            tracing::warn!(device_id = %q.device_id, %reason, "bridge dial rejected");
+            return (StatusCode::UNAUTHORIZED, reason).into_response();
+        }
+    } else if !state.security.allow_unsigned_dial {
+        tracing::warn!(
+            device_id = %q.device_id,
+            "bridge dial rejected: relay started without RELAY_BRIDGE_SECRET"
+        );
+        return (StatusCode::SERVICE_UNAVAILABLE, "bridge auth disabled").into_response();
+    }
     ws.on_upgrade(move |socket| bridge_dial_loop(socket, state, q.device_id))
 }
 

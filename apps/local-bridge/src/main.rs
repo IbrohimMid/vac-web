@@ -1,5 +1,6 @@
 //! vac-bridge daemon entry point.
 
+use anyhow::Context;
 use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
@@ -234,7 +235,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         started_at: Instant::now(),
         sessions,
-        auth: AuthState::new_dev(),
+        auth: resolve_auth_state()?,
         audit,
         pairing: PairingStore::new(),
         profile_root,
@@ -262,6 +263,33 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, "vac-bridge started");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// AUDIT-011: production daemon must NOT silently fall back to anonymous
+/// auth. We load a per-install JWT secret from the standard config path
+/// (generated on first run with OS CSPRNG). Dev/test runs that need the
+/// anonymous fallback must opt-in via `VAC_DEV_ANONYMOUS_AUTH=1`, which
+/// emits a loud stderr banner and tracing warn.
+fn resolve_auth_state() -> anyhow::Result<local_bridge::auth::AuthState> {
+    let want_dev = std::env::var("VAC_DEV_ANONYMOUS_AUTH")
+        .map(|v| {
+            let t = v.trim().to_ascii_lowercase();
+            t == "1" || t == "true" || t == "yes"
+        })
+        .unwrap_or(false);
+    if want_dev {
+        eprintln!("============================================================");
+        eprintln!("VAC_DEV_ANONYMOUS_AUTH=1 -- anonymous WS allowed (DEV ONLY)");
+        eprintln!("  Never set this env var in production deployments.");
+        eprintln!("============================================================");
+        tracing::warn!(
+            "VAC_DEV_ANONYMOUS_AUTH=1 -- using AuthState::new_dev() (anonymous WS allowed)"
+        );
+        return Ok(local_bridge::auth::AuthState::new_dev());
+    }
+    let secret = local_bridge::auth::secret::load_or_create()
+        .context("failed to load or create bridge JWT secret")?;
+    Ok(local_bridge::auth::AuthState::new(secret))
 }
 
 fn default_engine_bin() -> PathBuf {

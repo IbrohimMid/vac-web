@@ -9,6 +9,7 @@
 
 mod jwt;
 mod pairing;
+pub mod secret;
 
 use crate::audit;
 use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};

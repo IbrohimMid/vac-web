@@ -135,13 +135,50 @@ fn short_code_from(nonce: &str) -> String {
 pub struct MintParams {
     pub device_id: String,
     pub session_id: String,
+    #[serde(default)]
+    pub admin_token: Option<String>,
 }
 
 pub async fn mint_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<MintParams>,
-) -> Json<TeleportToken> {
-    Json(state.tokens.mint(&q.device_id, &q.session_id))
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if let Err(resp) = crate::auth::check_admin_auth(&state, &headers, q.admin_token.as_deref()) {
+        return resp;
+    }
+    Json(state.tokens.mint(&q.device_id, &q.session_id)).into_response()
+}
+
+/// Verify a bridge dial token of the form
+/// `{device_id}.{exp_unix}.{hex(hmac_sha256(secret, "device_id.exp_unix"))}`.
+/// Returns Ok if well-formed, not expired, and binds to `expected_device`.
+pub fn verify_bridge_dial_token(
+    token: &str,
+    secret: &[u8],
+    expected_device: &str,
+) -> Result<(), &'static str> {
+    use crate::hmac::{ct_eq, hmac_sha256};
+    let parts: Vec<&str> = token.splitn(3, '.').collect();
+    if parts.len() != 3 {
+        return Err("token_malformed");
+    }
+    let (device_id, exp_str, sig_hex) = (parts[0], parts[1], parts[2]);
+    if device_id != expected_device {
+        return Err("device_mismatch");
+    }
+    let exp: i64 = exp_str.parse().map_err(|_| "exp_invalid")?;
+    if exp < chrono::Utc::now().timestamp() {
+        return Err("token_expired");
+    }
+    let payload = format!("{device_id}.{exp}");
+    let expected_sig = hmac_sha256(secret, payload.as_bytes());
+    let presented = hex::decode(sig_hex).map_err(|_| "sig_invalid_hex")?;
+    if !ct_eq(&presented, &expected_sig) {
+        return Err("sig_mismatch");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -201,5 +238,46 @@ mod tests {
     fn short_code_deterministic_for_nonce() {
         assert_eq!(short_code_from("nonce-a"), short_code_from("nonce-a"));
         assert_ne!(short_code_from("nonce-a"), short_code_from("nonce-b"));
+    }
+
+    #[test]
+    fn verify_bridge_dial_token_round_trip() {
+        let secret = b"test-bridge-secret-32bytes-min!!";
+        let exp = chrono::Utc::now().timestamp() + 60;
+        let payload = format!("devX.{exp}");
+        let sig = hex::encode(crate::hmac::hmac_sha256(secret, payload.as_bytes()));
+        let token = format!("devX.{exp}.{sig}");
+        assert!(verify_bridge_dial_token(&token, secret, "devX").is_ok());
+    }
+
+    #[test]
+    fn verify_bridge_dial_token_rejects_device_mismatch() {
+        let secret = b"test-bridge-secret-32bytes-min!!";
+        let exp = chrono::Utc::now().timestamp() + 60;
+        let payload = format!("devX.{exp}");
+        let sig = hex::encode(crate::hmac::hmac_sha256(secret, payload.as_bytes()));
+        let token = format!("devX.{exp}.{sig}");
+        assert!(verify_bridge_dial_token(&token, secret, "devY").is_err());
+    }
+
+    #[test]
+    fn verify_bridge_dial_token_rejects_expired() {
+        let secret = b"test-bridge-secret-32bytes-min!!";
+        let exp = chrono::Utc::now().timestamp() - 60;
+        let payload = format!("devX.{exp}");
+        let sig = hex::encode(crate::hmac::hmac_sha256(secret, payload.as_bytes()));
+        let token = format!("devX.{exp}.{sig}");
+        assert!(verify_bridge_dial_token(&token, secret, "devX").is_err());
+    }
+
+    #[test]
+    fn verify_bridge_dial_token_rejects_bad_sig() {
+        let token = "devX.99999999999.deadbeef";
+        assert!(verify_bridge_dial_token(token, b"key", "devX").is_err());
+    }
+
+    #[test]
+    fn verify_bridge_dial_token_rejects_malformed() {
+        assert!(verify_bridge_dial_token("not.enough", b"k", "devX").is_err());
     }
 }
