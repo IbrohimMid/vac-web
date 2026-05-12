@@ -34,7 +34,19 @@ describe('classifyNotifyError', () => {
 		expect(classifyNotifyError('handoff.created').kind).toBe('handoff_event');
 	});
 
-	it('classifies session lifecycle event types', () => {
+	it('classifies persistence and MCP drift before generic session lifecycle', () => {
+		const persistence = classifyNotifyError('session.persistence_degraded');
+		expect(persistence.kind).toBe('persistence_event');
+		expect(persistence.sticky).toBe(true);
+		expect(persistence.isTransport).toBe(false);
+
+		const drift = classifyNotifyError('session.mcp_server_drift');
+		expect(drift.kind).toBe('registry_event');
+		expect(drift.sticky).toBe(true);
+		expect(drift.isTransport).toBe(false);
+	});
+
+	it('classifies ordinary session lifecycle event types', () => {
 		expect(classifyNotifyError('session.resumed').kind).toBe('session_lifecycle');
 		expect(classifyNotifyError('session.renamed').kind).toBe('session_lifecycle');
 	});

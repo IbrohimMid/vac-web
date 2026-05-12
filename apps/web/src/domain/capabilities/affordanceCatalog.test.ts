@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { commandStatus } from '../../generated/commandCatalog';
 import { affordanceFor, listAffordances } from './affordanceCatalog';
 
 describe('affordanceFor', () => {
@@ -76,6 +77,13 @@ describe('affordanceFor', () => {
 		for (const spec of listAffordances()) {
 			expect(typeof spec.disabledCopy).toBe('string');
 			expect(spec.disabledCopy.length).toBeGreaterThan(0);
+		}
+	});
+
+	it('every backend command in the affordance catalog exists in the generated command catalog', () => {
+		for (const spec of listAffordances()) {
+			if (spec.command == null) continue;
+			expect(commandStatus(spec.command), spec.id).toBeDefined();
 		}
 	});
 
@@ -179,23 +187,35 @@ describe('affordanceFor', () => {
 		expect(d.command).toBeNull();
 	});
 
-	it('enables approvals.decide and exposes approval.respond command', () => {
-		const d = affordanceFor('approvals.decide', {
+	it('enables approvals.approve and exposes approval.approve command', () => {
+		const d = affordanceFor('approvals.approve', {
 			commandStatus: 'implemented',
 			hasTransport: true,
 			hasSessionId: true,
 		});
 		expect(d.enabled).toBe(true);
-		expect(d.command).toBe('approval.respond');
+		expect(d.command).toBe('approval.approve');
 	});
 
-	it('disables approvals.decide when approval.respond is not_wired', () => {
-		const d = affordanceFor('approvals.decide', {
-			commandStatus: 'not_wired',
+	it('enables approvals.reject and exposes approval.reject command', () => {
+		const d = affordanceFor('approvals.reject', {
+			commandStatus: 'implemented',
 			hasTransport: true,
 			hasSessionId: true,
 		});
-		expect(d.enabled).toBe(false);
+		expect(d.enabled).toBe(true);
+		expect(d.command).toBe('approval.reject');
+	});
+
+	it('disables approval decision affordances when the bridge command is not_wired', () => {
+		for (const id of ['approvals.approve', 'approvals.reject']) {
+			const d = affordanceFor(id, {
+				commandStatus: 'not_wired',
+				hasTransport: true,
+				hasSessionId: true,
+			});
+			expect(d.enabled).toBe(false);
+		}
 	});
 
 	// Release-plane closeout 2026-05-10: the command surface is now wired.

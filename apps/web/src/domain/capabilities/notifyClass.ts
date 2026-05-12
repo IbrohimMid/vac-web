@@ -28,6 +28,8 @@ import { isApprovalError } from './approvalErrors';
 import { isHandoffEvent } from './handoffErrors';
 import { isSessionLifecycleEvent } from './sessionLifecycle';
 import { isConnectionLevelAuthError, isSessionLevelAuthError } from './wsAuthError';
+import { isPersistenceEvent, persistenceEventCopyFor } from './persistenceEvents';
+import { isRegistryEvent, registryEventCopyFor } from './registryEvents';
 
 export type NotifyErrorKind =
 	| 'profile_denial'
@@ -38,6 +40,8 @@ export type NotifyErrorKind =
 	| 'session_lifecycle'
 	| 'auth_error'
 	| 'audit_write_failed'
+	| 'persistence_event'
+	| 'registry_event'
 	| 'unknown';
 
 export interface NotifyClassification {
@@ -106,6 +110,32 @@ export function classifyNotifyError(code: string): NotifyClassification {
 			code,
 			kind: 'approval_error',
 			sticky: false,
+			isStub: false,
+			isTransport: false,
+		};
+	}
+
+	// AUDIT-007: these are `session.*` event types, but they are trust
+	// signals rather than ordinary lifecycle notifications. Classify them
+	// before the generic `session.*` lifecycle bucket so they remain sticky
+	// and actionable in notify-lane surfaces.
+	if (isPersistenceEvent(code)) {
+		const copy = persistenceEventCopyFor(code);
+		return {
+			code,
+			kind: 'persistence_event',
+			sticky: copy.sticky,
+			isStub: false,
+			isTransport: false,
+		};
+	}
+
+	if (isRegistryEvent(code)) {
+		const copy = registryEventCopyFor(code);
+		return {
+			code,
+			kind: 'registry_event',
+			sticky: copy.blocking,
 			isStub: false,
 			isTransport: false,
 		};

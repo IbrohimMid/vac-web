@@ -137,6 +137,6 @@ export const useTranscript = create<TranscriptSlice>((set) => ({
   },
 
   clear() {
-    set({ messages: new Map(), order: [], hotWindowIds: new Set() });
+    set({ messages: new Map(), order: [], hotWindowIds: new Set(), mode: 'live' });
   },
 }));

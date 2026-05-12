@@ -6,6 +6,7 @@ function reset() {
     messages: new Map(),
     order: [],
     hotWindowIds: new Set(),
+    mode: 'live',
   });
 }
 
@@ -144,5 +145,22 @@ describe('transcript store', () => {
     expect(useTranscript.getState().mode).toBe('frozen');
     setMode('live');
     expect(useTranscript.getState().mode).toBe('live');
+  });
+
+  it('clear removes content and resets rendering mode to live', () => {
+    useTranscript.getState().upsert({
+      id: 'm1',
+      role: 'assistant',
+      content: 'old replay content',
+      state: 'completed',
+      createdAt: 't',
+    });
+    useTranscript.getState().setMode('replay');
+    useTranscript.getState().clear();
+    const s = useTranscript.getState();
+    expect(s.messages.size).toBe(0);
+    expect(s.order).toEqual([]);
+    expect(s.hotWindowIds.size).toBe(0);
+    expect(s.mode).toBe('live');
   });
 });

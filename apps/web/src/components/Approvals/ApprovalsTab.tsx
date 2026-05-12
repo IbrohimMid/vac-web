@@ -118,7 +118,7 @@ export function ApprovalsTab({ transport }: Props) {
             <strong>{pendingOrder.length} pending</strong>
             {(() => {
               // Slice 33 follow-up: "Approve all" is frontend-owned (it loops
-              // and dispatches `approval.respond` per row). Catalog gates the
+              // and dispatches the real `approval.approve` command per row). Catalog gates the
               // surface on transport so disabled-copy stays consistent.
               const decision = affordanceFor('approvals.approve_all', {
                 commandStatus: 'frontend_owned',
@@ -226,34 +226,40 @@ function ApprovalRow({
         Inspect
       </button>
       {(() => {
-        // Slice 33 follow-up: per-row Approve/Reject buttons drive the
-        // `approval.respond` command. The row is only mounted inside the
-        // approvals tab when transport is live, so `hasTransport: true` is
-        // a safe static assumption — local `busy` (deciding) still gates
-        // double-clicks. Catalog provides the disabled tooltip if a future
-        // refactor re-tags the command as not_wired.
-        const decision = affordanceFor('approvals.decide', {
+        // Slice 33 follow-up: per-row Approve/Reject buttons dispatch the
+        // real bridge commands (`approval.approve` / `approval.reject`).
+        // The row is only mounted inside the approvals tab when transport
+        // is live, so `hasTransport: true` is a safe static assumption —
+        // local `busy` (deciding) still gates double-clicks. Catalog provides
+        // per-command disabled tooltips if either command is re-tagged.
+        const approveDecision = affordanceFor('approvals.approve', {
           commandStatus: 'implemented',
           hasTransport: true,
           hasSessionId: true,
         });
-        const disabled = busy || !decision.enabled;
+        const rejectDecision = affordanceFor('approvals.reject', {
+          commandStatus: 'implemented',
+          hasTransport: true,
+          hasSessionId: true,
+        });
+        const approveDisabled = busy || !approveDecision.enabled;
+        const rejectDisabled = busy || !rejectDecision.enabled;
         return (
           <>
             <button
               onClick={() => onDecide(tc.approvalId, 'approved')}
-              disabled={disabled}
-              data-affordance-id={decision.affordanceId}
-              title={decision.disabledReason ?? undefined}
+              disabled={approveDisabled}
+              data-affordance-id={approveDecision.affordanceId}
+              title={approveDecision.disabledReason ?? undefined}
               aria-label="Approve"
             >
               Approve
             </button>
             <button
               onClick={() => onDecide(tc.approvalId, 'rejected')}
-              disabled={disabled}
-              data-affordance-id={decision.affordanceId}
-              title={decision.disabledReason ?? undefined}
+              disabled={rejectDisabled}
+              data-affordance-id={rejectDecision.affordanceId}
+              title={rejectDecision.disabledReason ?? undefined}
               aria-label="Reject"
             >
               Reject
