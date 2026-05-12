@@ -91,6 +91,13 @@ pub struct FsConfig {
     pub write: String,
     #[serde(default)]
     pub scoped_paths: Vec<String>,
+    /// AUDIT-015: explicit list of absolute (or `~`-prefixed) directories
+    /// that `fs.read == "project_and_docs"` is permitted to read from
+    /// outside the project root. An empty list means strict project-only
+    /// read scope even in `project_and_docs` mode. Entries are resolved
+    /// at enforcement time and canonicalized; deny_globs still apply.
+    #[serde(default)]
+    pub docs_roots: Vec<String>,
     #[serde(default)]
     pub deny_globs: Vec<String>,
     #[serde(default = "default_max_read")]
@@ -113,6 +120,7 @@ impl Default for FsConfig {
             read: default_fs_read(),
             write: default_fs_write(),
             scoped_paths: vec![],
+            docs_roots: vec![],
             deny_globs: vec![],
             max_bytes_per_read: default_max_read(),
             max_bytes_per_write: 0,
@@ -277,6 +285,16 @@ fn merge_with_parent(
         for g in child.fs.deny_globs {
             if !out.fs.deny_globs.contains(&g) {
                 out.fs.deny_globs.push(g);
+            }
+        }
+    }
+    // AUDIT-015: docs_roots union (additive). A child profile can extend
+    // the parent's allowed out-of-project read roots but cannot remove
+    // any. Default-empty means strict project-only scope.
+    if !child.fs.docs_roots.is_empty() {
+        for r in child.fs.docs_roots {
+            if !out.fs.docs_roots.contains(&r) {
+                out.fs.docs_roots.push(r);
             }
         }
     }

@@ -120,18 +120,49 @@ pub fn enforce_shell(p: &CapabilityProfile, bin: &str, args: &[&str]) -> Decisio
 }
 
 /// Canonicalized file-read enforcement: reject paths outside scope or matching deny_globs.
+///
+/// AUDIT-015 — `project_and_docs` semantics: the canonical path must lie
+/// either under the canonical project root or under one of the canonical
+/// `fs.docs_roots` entries. With an empty `docs_roots`, the mode behaves
+/// identically to `project_root` for reads (strict project-only scope).
+/// `deny_globs` continues to apply on top as a deny-wins filter.
 pub fn enforce_fs_read(p: &CapabilityProfile, path: &Path, project_root: &Path) -> Decision {
     if p.fs.read == "none" {
         return Decision::deny("profile.fs_read_disabled", "fs.read is 'none'");
     }
     let canon_p = canonicalize_best_effort(path);
     let canon_root = canonicalize_best_effort(project_root);
-    if !canon_p.starts_with(&canon_root) && p.fs.read != "project_and_docs" {
+    let under_project = canon_p.starts_with(&canon_root);
+
+    let in_scope = match p.fs.read.as_str() {
+        "project_root" => under_project,
+        "project_and_docs" => {
+            under_project
+                || p.fs.docs_roots.iter().any(|d| {
+                    let canon_d = canonicalize_best_effort(&expand_user(d));
+                    !canon_d.as_os_str().is_empty() && canon_p.starts_with(&canon_d)
+                })
+        }
+        // Unknown modes deny-by-default; keeps invalid YAML from silently
+        // widening read scope.
+        other => {
+            return Decision::deny(
+                "profile.fs_read_unknown",
+                format!("unknown fs.read mode: {other}"),
+            )
+        }
+    };
+
+    if !in_scope {
         return Decision::deny(
             "profile.fs_out_of_scope",
-            format!("path {:?} not under project_root {:?}", canon_p, canon_root),
+            format!(
+                "path {:?} not under project_root {:?} or any configured docs_roots",
+                canon_p, canon_root
+            ),
         );
     }
+
     if glob_deny_match(&p.fs.deny_globs, &canon_p, &canon_root) {
         return Decision::deny(
             "profile.fs_deny_glob",
@@ -139,6 +170,24 @@ pub fn enforce_fs_read(p: &CapabilityProfile, path: &Path, project_root: &Path) 
         );
     }
     Decision::allow()
+}
+
+/// Expand a leading `~` to the user's home dir. Returns the path unchanged
+/// when no `~` prefix is present or when `HOME` is unset (in which case the
+/// caller-supplied literal path is kept and will simply fail to match real
+/// canonical paths, which is the safe fallback).
+fn expand_user(raw: &str) -> PathBuf {
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    if raw == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    PathBuf::from(raw)
 }
 
 /// Canonicalized file-write enforcement.

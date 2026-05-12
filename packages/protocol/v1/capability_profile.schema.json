@@ -49,6 +49,8 @@
         "read": {
           "type": "string",
           "enum": ["none", "project_root", "project_and_docs"],
+          "description": "Read scope. 'project_and_docs' additionally permits reading paths under any directory listed in fs.docs_roots; with an empty docs_roots list it is equivalent to 'project_root' for read enforcement.",
+          "_audit": "AUDIT-015",
           "default": "project_root"
         },
         "write": {
@@ -57,7 +59,11 @@
           "default": "none"
         },
         "scoped_paths": { "type": "array", "items": { "type": "string" } },
-        "deny_globs": { "type": "array", "items": { "type": "string" } },
+        "docs_roots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "AUDIT-015: allowlist of read-only directories outside project_root that fs.read='project_and_docs' may read. Empty (default) = strict project-only scope. Inheritance is additive (child profiles may extend, never remove). Entries are canonicalized at enforce time; '~/...' expands to $HOME."
+        },
         "max_bytes_per_read": { "type": "integer", "default": 10485760 },
         "max_bytes_per_write": { "type": "integer", "default": 5242880 }
       }

@@ -158,6 +158,28 @@ fn rt_033_profile_hash_mismatch() {
 // --- Extended coverage beyond the mandatory 5 ---
 
 #[test]
+fn rt_018_ext_arbitrary_outside_project_read_denied() {
+    // AUDIT-015 red-team extension: project_and_docs must not allow
+    // arbitrary out-of-project reads when docs_roots is empty (default
+    // for every shipped assessor profile today).
+    let p = load(RT_018.profile);
+    let tmp = synth_project_root();
+    let root = tmp.path();
+    // /etc/passwd is the canonical out-of-project arbitrary-read probe.
+    let d = enforce_fs_read(&p, std::path::Path::new("/etc/passwd"), root);
+    assert!(d.is_deny(), "RT-018 ext: /etc/passwd must be denied");
+    // Sibling-directory read is the typical traversal exploit.
+    let sibling = synth_project_root();
+    std::fs::write(sibling.path().join("secret.txt"), "x").unwrap();
+    let d = enforce_fs_read(&p, &sibling.path().join("secret.txt"), root);
+    assert!(d.is_deny(), "RT-018 ext: sibling-dir read must be denied");
+    eprintln!(
+        "[{}-ext] \u{2713} arbitrary outside-project reads denied (AUDIT-015)",
+        RT_018.id
+    );
+}
+
+#[test]
 fn rt_extension_assessor_cannot_invoke_connector_writes() {
     let p = load("assessor.rtd@1.0.0");
     for tool in [

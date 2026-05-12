@@ -8,7 +8,7 @@
     "assessment_finding.schema.json": "sha256:df723d7aac02f216de233fd2faca03097f885e1073a94742f12c6f3331987193",
     "assessment_run.schema.json": "sha256:fac0efdfe4495e5ec82c9e8bbd24c967ec3111104ec8660eeb911fcfbe6f2a4c",
     "assessment_verdict.schema.json": "sha256:88cb83e7eb40700589409413271c39c0fa8ac1527db2920190cc71ff72508d07",
-    "capability_profile.schema.json": "sha256:bea3b64d93627a09953bde4bd7d4c396e8908049d16715e0c102f46051a12405",
+    "capability_profile.schema.json": "sha256:d009580c40f077343408988aa421b7a6f2ddd9229e121d17a2d8ac9a2cc4f0ca",
     "command.schema.json": "sha256:af9a7bdbf6425801c5d520b4bb455b18fd46451d2f3237e4bc2a0e072946adf8",
     "event.schema.json": "sha256:13caff81520fef078d75add75e281bd369c6981dca29b00a63d7534f19593403",
     "evidence_ref.schema.json": "sha256:0823a9612029522587dcfe7403aa2b3913d0e436bda5b8629e35dbb6589bd075",

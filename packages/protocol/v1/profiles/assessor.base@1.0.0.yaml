@@ -70,6 +70,12 @@ shell_allowlist:
 fs:
   read: project_and_docs
   write: none
+  # AUDIT-015: explicit allowlist of read-only directories outside the project
+  # root. Empty list = strict project-only read scope even in
+  # `project_and_docs` mode. Child profiles may extend (additive union),
+  # never remove. Entries are canonicalized at enforcement time; `~/...`
+  # expands to $HOME.
+  docs_roots: []
   deny_globs:
     - ".env*"
     - "**/*.key"
