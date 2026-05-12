@@ -12,8 +12,16 @@ export type DeployStatus =
   | 'queued'
   | 'deploying'
   | 'deployed'
+  | 'dry_run'
   | 'failed'
   | 'rolled_back';
+
+// Phase 3 (AUDIT-013) — release executor provider label, mirrored from the
+// bridge `release.targets` payload. `'not_wired'` means deploy/publish
+// will be denied; `'dry_run'` means a single fake event is emitted
+// instead of a real ship. The cockpit must label both so users do not
+// mistake a no-op for production confidence.
+export type ReleaseProvider = 'not_wired' | 'dry_run';
 
 export type PublishStatus = 'idle' | 'queued' | 'publishing' | 'published' | 'failed';
 
@@ -25,6 +33,8 @@ export interface DeployTarget {
   last_status: DeployStatus;
   last_commit?: string;
   last_deployed_at?: string;
+  /** Phase 3 (AUDIT-013) — truthful provider label from the bridge. */
+  provider?: ReleaseProvider;
 }
 
 export interface DeployEvent {

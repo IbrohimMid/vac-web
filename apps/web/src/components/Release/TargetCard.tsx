@@ -64,6 +64,25 @@ interface Props {
   transport: TransportHandle | null;
 }
 
+// Phase 3 (AUDIT-013) - provider chip styling. Two flavors:
+// not_wired -> warn tone (deploy will be denied), dry_run -> info tone.
+const providerBadgeBase: CSSProperties = {
+  fontSize: 10.5,
+  padding: '1px 6px',
+  borderRadius: 4,
+  marginLeft: 4,
+};
+const providerBadgeNotWired: CSSProperties = {
+  ...providerBadgeBase,
+  background: 'var(--warn-bg, rgba(201,138,19,0.18))',
+  color: 'var(--warn, #c98a13)',
+};
+const providerBadgeDryRun: CSSProperties = {
+  ...providerBadgeBase,
+  background: 'var(--info-bg, rgba(58,142,219,0.18))',
+  color: 'var(--info, #3a8edb)',
+};
+
 export function TargetCard({ targetId, transport }: Props) {
   const target = useRelease((s) => s.targets.get(targetId));
   const gates = useGates((s) => s.gates);
@@ -139,6 +158,24 @@ export function TargetCard({ targetId, transport }: Props) {
         <strong style={labelStyle}>
           {target.label} <span style={envStyle}>({target.environment})</span>
         </strong>
+        {target.provider ? (
+          <span
+            data-testid={`release-target-${target.id}-provider`}
+            data-provider={target.provider}
+            style={
+              target.provider === 'not_wired'
+                ? providerBadgeNotWired
+                : providerBadgeDryRun
+            }
+            aria-label={
+              target.provider === 'not_wired'
+                ? 'Release executor not wired - deploy will be denied'
+                : 'Release executor in dry-run mode - no real ship'
+            }
+          >
+            {target.provider === 'not_wired' ? 'not wired' : 'dry-run'}
+          </span>
+        ) : null}
         <button
           onClick={deploy}
           disabled={!deployDecision.enabled}

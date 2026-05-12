@@ -3,7 +3,7 @@
 use anyhow::Context;
 use local_bridge::agent_runtime::{synth_legacy_registry, AgentRuntimeRegistry, ConfigSource};
 use local_bridge::audit::AuditFacility;
-use local_bridge::auth::{AuthState, PairingStore};
+use local_bridge::auth::PairingStore;
 use local_bridge::config::{
     loader as config_loader, resume_policy, ConfigSnapshot, LoadOutcome, LoaderPaths,
     SessionResumePolicy,
@@ -232,6 +232,18 @@ async fn main() -> anyhow::Result<()> {
     };
     let config_snapshot = Arc::new(RwLock::new(initial_snapshot));
 
+    // AUDIT-013: gate release.deploy / release.publish on a typed
+    // provider. Default (unset env) -> NotWired so the bridge cannot
+    // fabricate "deployed" telemetry. Explicit opt-in
+    // VAC_RELEASE_PROVIDER=dry_run flips to a single, clearly labelled
+    // demo event.
+    let release_provider = local_bridge::release::ReleaseProvider::from_env();
+    if release_provider == local_bridge::release::ReleaseProvider::DryRun {
+        tracing::warn!(
+            provider = release_provider.label(),
+            "release provider running in dry-run mode; no real deploys will be performed"
+        );
+    }
     let state = Arc::new(AppState {
         started_at: Instant::now(),
         sessions,
@@ -245,6 +257,7 @@ async fn main() -> anyhow::Result<()> {
         assessment_index,
         resume_policy,
         config_snapshot,
+        release_provider,
     });
 
     // Optional outbound-dial tunnel (Phase 7): opt-in via VAC_RELAY_URL. When

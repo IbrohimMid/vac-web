@@ -251,6 +251,7 @@ mod tests {
                 read: read.into(),
                 write: write.into(),
                 scoped_paths: vec![],
+                docs_roots: vec![],
                 deny_globs: vec![".env*".into(), "**/secrets/**".into()],
                 max_bytes_per_read: 1024,
                 max_bytes_per_write: 512,

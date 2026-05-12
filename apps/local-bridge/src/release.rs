@@ -5,7 +5,7 @@ use crate::session::handle::SessionHandleRef;
 use crate::session::persistence::{PersistedServerEvent, SessionPersistence};
 use crate::translator::emit_session_event;
 use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -14,6 +14,47 @@ use std::process::Command;
 use std::sync::{Arc, Mutex as StdMutex};
 use tracing::warn;
 use ulid::Ulid;
+
+/// AUDIT-013 — Release provider abstraction. Default `NotWired` makes
+/// `release.deploy` / `release.publish` ack as `release.provider_not_wired`
+/// without emitting fabricated progress or telemetry. `DryRun` is an
+/// explicit opt-in (`VAC_RELEASE_PROVIDER=dry_run`) that emits a single
+/// `release.deploy_progress` event with `status: "dry_run"` and
+/// `dry_run: true` so the cockpit can label the action as a demo without
+/// claiming a real deployment happened. No real provider is wired yet so
+/// fake `status: "deployed"` events and the hardcoded sentry-flavoured
+/// `release.post_deploy_observation` have been removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseProvider {
+    NotWired,
+    DryRun,
+}
+
+impl ReleaseProvider {
+    pub fn from_env() -> Self {
+        match std::env::var("VAC_RELEASE_PROVIDER")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+        {
+            Some("dry_run") | Some("dryrun") | Some("dry-run") => Self::DryRun,
+            _ => Self::NotWired,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotWired => "not_wired",
+            Self::DryRun => "dry_run",
+        }
+    }
+}
+
+impl Default for ReleaseProvider {
+    fn default() -> Self {
+        Self::NotWired
+    }
+}
 
 const DEFAULT_TARGETS: &[(&str, &str, &str)] = &[
     ("staging", "Staging", "staging"),
@@ -258,7 +299,10 @@ pub async fn handle_list_targets(
             seq: 0,
             session_id: cmd.session_id.clone(),
             event_type: "release.targets".into(),
-            payload: json!({ "targets": targets }),
+            payload: json!({
+                "targets": targets,
+                "provider": state.release_provider.label(),
+            }),
             v: 1,
             ts: now_iso(),
         }],
@@ -386,7 +430,33 @@ pub async fn handle_deploy(
     let Some(target_id) = cmd.payload.get("target_id").and_then(|v| v.as_str()) else {
         return release_target_error(cmd, "target id is required");
     };
-    let (deploying, deployed, deploy_id, started_at, finished_at) = {
+    // AUDIT-013: when no real release provider is wired, refuse the
+    // deploy with a typed deny code instead of fabricating progress.
+    if state.release_provider == ReleaseProvider::NotWired {
+        log_tool_event(
+            state,
+            &cmd.session_id,
+            "release",
+            json!({
+                "command": "release.deploy",
+                "target_id": target_id,
+                "decision": "deny",
+                "reason": "release.provider_not_wired",
+            }),
+        );
+        return (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "release.provider_not_wired".into(),
+                    message: "no release provider is wired; set VAC_RELEASE_PROVIDER=dry_run to enable explicit demo mode".into(),
+                }),
+            },
+            Vec::new(),
+        );
+    }
+    let (event, deploy_id, ts) = {
         let mut release_guard = match handle.release_state.lock() {
             Ok(g) => g,
             Err(_) => return release_internal_error(cmd, "release state lock poisoned"),
@@ -404,6 +474,7 @@ pub async fn handle_deploy(
         };
         let required = gate::required_gate_ids_for_environment(&target_environment);
         let (ready, missing) = gate::missing_gate_ids(&gate_guard, required);
+        drop(gate_guard);
         if !ready {
             return (
                 ServerAck {
@@ -419,33 +490,26 @@ pub async fn handle_deploy(
         }
         let commit = current_commit_short(&handle.project_root).unwrap_or_else(|| "unknown".into());
         let deploy_id = format!("dep_{}", Ulid::new());
-        let packet_id = cmd.id.clone();
-        let started_at = now_iso();
-        let finished_at = (Utc::now() + Duration::seconds(8)).to_rfc3339();
-        let deploying = DeployEvent {
+        let ts = now_iso();
+        // AUDIT-013: DryRun emits a single truthful event — no fake
+        // `deploying`->`deployed` transition, no future-dated finished_at,
+        // no synthetic post-deploy observation.
+        let event = DeployEvent {
             id: deploy_id.clone(),
             target_id: target_id.to_string(),
             commit: commit.clone(),
-            status: "deploying".into(),
-            started_at: started_at.clone(),
-            finished_at: None,
-            packet_id: Some(packet_id.clone()),
+            status: "dry_run".into(),
+            started_at: ts.clone(),
+            finished_at: Some(ts.clone()),
+            packet_id: Some(cmd.id.clone()),
         };
-        let deployed = DeployEvent {
-            id: deploy_id.clone(),
-            target_id: target_id.to_string(),
-            commit: commit.clone(),
-            status: "deployed".into(),
-            started_at: started_at.clone(),
-            finished_at: Some(finished_at.clone()),
-            packet_id: Some(packet_id.clone()),
-        };
-        release_guard.apply_deploy(deploying.clone());
+        release_guard.apply_deploy(event.clone());
         if let Some(target) = release_guard.targets.get_mut(target_id) {
-            target.last_status = "deploying".into();
+            target.last_status = "dry_run".into();
             target.last_commit = Some(commit.clone());
+            target.last_deployed_at = Some(ts.clone());
         }
-        (deploying, deployed, deploy_id, started_at, finished_at)
+        (event, deploy_id, ts)
     };
     log_tool_event(
         state,
@@ -456,6 +520,7 @@ pub async fn handle_deploy(
             "target_id": target_id,
             "deploy_id": deploy_id,
             "decision": "allow",
+            "provider": state.release_provider.label(),
         }),
     );
     emit_session_event(
@@ -465,78 +530,18 @@ pub async fn handle_deploy(
             session_id: handle.id.clone(),
             event_type: "release.deploy_progress".into(),
             payload: json!({
-                "deploy_id": deploying.id,
-                "target_id": deploying.target_id,
-                "commit": deploying.commit,
-                "status": deploying.status,
-                "started_at": deploying.started_at,
-                "packet_id": deploying.packet_id,
+                "deploy_id": event.id,
+                "target_id": event.target_id,
+                "commit": event.commit,
+                "status": event.status,
+                "started_at": event.started_at,
+                "finished_at": event.finished_at,
+                "packet_id": event.packet_id,
+                "provider": state.release_provider.label(),
+                "dry_run": true,
             }),
             v: 1,
-            ts: started_at.clone(),
-        },
-    )
-    .await;
-    {
-        let mut release_guard = match handle.release_state.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                return (
-                    ServerAck {
-                        ack_of: cmd.id.clone(),
-                        ok: false,
-                        error: Some(ErrorInfo {
-                            code: "persistence.write_failed".into(),
-                            message: "release state lock poisoned".into(),
-                        }),
-                    },
-                    Vec::new(),
-                );
-            }
-        };
-        release_guard.apply_deploy(deployed.clone());
-        if let Some(target) = release_guard.targets.get_mut(target_id) {
-            target.last_status = "deployed".into();
-            target.last_commit = Some(deployed.commit.clone());
-            target.last_deployed_at = Some(finished_at.clone());
-        }
-    }
-    emit_session_event(
-        &handle,
-        ServerEvent {
-            seq: 0,
-            session_id: handle.id.clone(),
-            event_type: "release.deploy_progress".into(),
-            payload: json!({
-                "deploy_id": deployed.id,
-                "target_id": deployed.target_id,
-                "commit": deployed.commit,
-                "status": deployed.status,
-                "started_at": deployed.started_at,
-                "finished_at": deployed.finished_at,
-                "packet_id": deployed.packet_id,
-            }),
-            v: 1,
-            ts: finished_at.clone(),
-        },
-    )
-    .await;
-    emit_session_event(
-        &handle,
-        ServerEvent {
-            seq: 0,
-            session_id: handle.id.clone(),
-            event_type: "release.post_deploy_observation".into(),
-            payload: json!({
-                "id": format!("obs_{}_1", deploy_id),
-                "target_id": target_id,
-                "connector": "sentry",
-                "severity": "info",
-                "message": "no new issues in 5-minute window",
-                "observed_at": (Utc::now() + Duration::minutes(5)).to_rfc3339(),
-            }),
-            v: 1,
-            ts: now_iso(),
+            ts,
         },
     )
     .await;
@@ -570,7 +575,32 @@ pub async fn handle_publish(
     let Some(target_id) = cmd.payload.get("target_id").and_then(|v| v.as_str()) else {
         return release_target_error(cmd, "target id is required");
     };
-    let (event, deploy_id, finished_at) = {
+    // AUDIT-013: NotWired refuses publish with a typed deny code.
+    if state.release_provider == ReleaseProvider::NotWired {
+        log_tool_event(
+            state,
+            &cmd.session_id,
+            "release",
+            json!({
+                "command": "release.publish",
+                "target_id": target_id,
+                "decision": "deny",
+                "reason": "release.provider_not_wired",
+            }),
+        );
+        return (
+            ServerAck {
+                ack_of: cmd.id.clone(),
+                ok: false,
+                error: Some(ErrorInfo {
+                    code: "release.provider_not_wired".into(),
+                    message: "no release provider is wired; set VAC_RELEASE_PROVIDER=dry_run to enable explicit demo mode".into(),
+                }),
+            },
+            Vec::new(),
+        );
+    }
+    let (event, deploy_id, ts) = {
         let mut release_guard = match handle.release_state.lock() {
             Ok(g) => g,
             Err(_) => return release_internal_error(cmd, "release state lock poisoned"),
@@ -601,24 +631,23 @@ pub async fn handle_publish(
         }
         let commit = current_commit_short(&handle.project_root).unwrap_or_else(|| "unknown".into());
         let deploy_id = format!("pub_{}_{}", target_id, Ulid::new());
-        let started_at = now_iso();
-        let finished_at = (Utc::now() + Duration::seconds(5)).to_rfc3339();
+        let ts = now_iso();
         let event = DeployEvent {
             id: deploy_id.clone(),
             target_id: target_id.to_string(),
             commit: commit.clone(),
-            status: "deployed".into(),
-            started_at: started_at.clone(),
-            finished_at: Some(finished_at.clone()),
+            status: "dry_run".into(),
+            started_at: ts.clone(),
+            finished_at: Some(ts.clone()),
             packet_id: Some(cmd.id.clone()),
         };
         release_guard.apply_deploy(event.clone());
         if let Some(target) = release_guard.targets.get_mut(target_id) {
-            target.last_status = "deployed".into();
+            target.last_status = "dry_run".into();
             target.last_commit = Some(commit.clone());
-            target.last_deployed_at = Some(finished_at.clone());
+            target.last_deployed_at = Some(ts.clone());
         }
-        (event, deploy_id, finished_at)
+        (event, deploy_id, ts)
     };
     log_tool_event(
         state,
@@ -629,6 +658,7 @@ pub async fn handle_publish(
             "target_id": target_id,
             "deploy_id": deploy_id,
             "decision": "allow",
+            "provider": state.release_provider.label(),
         }),
     );
     emit_session_event(
@@ -645,9 +675,11 @@ pub async fn handle_publish(
                 "started_at": event.started_at,
                 "finished_at": event.finished_at,
                 "packet_id": event.packet_id,
+                "provider": state.release_provider.label(),
+                "dry_run": true,
             }),
             v: 1,
-            ts: finished_at,
+            ts,
         },
     )
     .await;

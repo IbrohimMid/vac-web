@@ -107,6 +107,7 @@ fn session_bootstrap_events(
 pub async fn dispatch_command(
     cmd: ClientCommand,
     state: AppStateHandle,
+    principal: Option<String>,
 ) -> (ServerAck, Vec<ServerEvent>) {
     let mut events = vec![];
 
@@ -231,9 +232,11 @@ pub async fn dispatch_command(
             crate::extensions::handlers::handle_list_approvals(&cmd, &state).await
         }
         "gate.evaluate" => crate::gate::handle_evaluate(&cmd, &state).await,
-        "gate.signoff" => crate::gate::handle_signoff(&cmd, &state).await,
-        "gate.override" => crate::gate::handle_override(&cmd, &state).await,
-        "gate.revoke_override" => crate::gate::handle_revoke_override(&cmd, &state).await,
+        "gate.signoff" => crate::gate::handle_signoff(&cmd, &state, principal.clone()).await,
+        "gate.override" => crate::gate::handle_override(&cmd, &state, principal.clone()).await,
+        "gate.revoke_override" => {
+            crate::gate::handle_revoke_override(&cmd, &state, principal.clone()).await
+        }
         "perf.latest_run" => crate::perf::handle_latest_run(&cmd, &state).await,
         "release.list_targets" => crate::release::handle_list_targets(&cmd, &state).await,
         "release.generate_notes" => crate::release::handle_generate_notes(&cmd, &state).await,

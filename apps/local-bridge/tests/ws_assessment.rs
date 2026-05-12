@@ -82,6 +82,7 @@ fn make_state(
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
         )),
+        release_provider: local_bridge::release::ReleaseProvider::default(),
     })
 }
 

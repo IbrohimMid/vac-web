@@ -479,6 +479,7 @@ pub async fn handle_evaluate(
 pub async fn handle_signoff(
     cmd: &ClientCommand,
     state: &AppStateHandle,
+    principal: Option<String>,
 ) -> (ServerAck, Vec<ServerEvent>) {
     let Some(handle) = state.sessions.get(&cmd.session_id) else {
         return error_ack(
@@ -498,14 +499,23 @@ pub async fn handle_signoff(
     if gate_id.is_empty() {
         return error_ack(cmd, "gate.not_found", "gate id is required");
     }
-    let signer = cmd
-        .payload
-        .get("signer")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("anonymous")
-        .to_string();
+    // Phase 3 (AUDIT-014) — `signer` is bound to the authenticated
+    // principal resolved by the WS hello handshake. The legacy
+    // `payload.signer` field is ignored to prevent a caller from
+    // impersonating an arbitrary user. When no principal is present
+    // (auth-required + no anonymous fallback) we reject the signoff
+    // with a dedicated code so the cockpit can surface a reauth
+    // affordance instead of silently degrading to anonymous.
+    let signer = match principal.as_ref() {
+        Some(p) if !p.trim().is_empty() => p.clone(),
+        _ => {
+            return error_ack(
+                cmd,
+                "gate.signer_required",
+                "gate.signoff requires an authenticated principal",
+            );
+        }
+    };
     let snapshot = {
         let mut guard = match handle.gate_state.lock() {
             Ok(g) => g,
@@ -543,6 +553,7 @@ pub async fn handle_signoff(
 pub async fn handle_override(
     cmd: &ClientCommand,
     state: &AppStateHandle,
+    principal: Option<String>,
 ) -> (ServerAck, Vec<ServerEvent>) {
     let Some(handle) = state.sessions.get(&cmd.session_id) else {
         return error_ack(
@@ -601,6 +612,11 @@ pub async fn handle_override(
         touch_gate(snapshot);
         snapshot.clone()
     };
+    let actor = principal
+        .as_ref()
+        .map(|p| p.as_str())
+        .unwrap_or("anonymous")
+        .to_string();
     log_tool_event(
         state,
         &cmd.session_id,
@@ -610,6 +626,7 @@ pub async fn handle_override(
             "gate_id": gate_id,
             "reason": reason,
             "decision": "allow",
+            "actor": actor,
         }),
     );
     emit_session_event(&handle, gate_snapshot_event(handle.id.clone(), &snapshot)).await;
@@ -619,6 +636,7 @@ pub async fn handle_override(
 pub async fn handle_revoke_override(
     cmd: &ClientCommand,
     state: &AppStateHandle,
+    principal: Option<String>,
 ) -> (ServerAck, Vec<ServerEvent>) {
     let Some(handle) = state.sessions.get(&cmd.session_id) else {
         return error_ack(
@@ -654,6 +672,11 @@ pub async fn handle_revoke_override(
         touch_gate(snapshot);
         snapshot.clone()
     };
+    let actor = principal
+        .as_ref()
+        .map(|p| p.as_str())
+        .unwrap_or("anonymous")
+        .to_string();
     log_tool_event(
         state,
         &cmd.session_id,
@@ -662,6 +685,7 @@ pub async fn handle_revoke_override(
             "command": "gate.revoke_override",
             "gate_id": gate_id,
             "decision": "allow",
+            "actor": actor,
         }),
     );
     emit_session_event(&handle, gate_snapshot_event(handle.id.clone(), &snapshot)).await;

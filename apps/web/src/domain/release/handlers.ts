@@ -15,6 +15,7 @@ function asDeployStatus(raw: string | undefined): DeployStatus {
     raw === 'queued' ||
     raw === 'deploying' ||
     raw === 'deployed' ||
+    raw === 'dry_run' ||
     raw === 'failed' ||
     raw === 'rolled_back'
   )

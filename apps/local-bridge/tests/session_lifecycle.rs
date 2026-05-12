@@ -53,6 +53,7 @@ async fn start_bridge() -> (String, Arc<AppState>) {
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
         )),
+        release_provider: local_bridge::release::ReleaseProvider::default(),
     });
     std::mem::forget(tmp); // keep audit dir alive for test duration
     let app = build_app(Arc::clone(&state));

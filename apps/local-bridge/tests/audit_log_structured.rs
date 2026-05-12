@@ -68,6 +68,7 @@ fn make_audit_harness() -> AuditHarness {
         assessment_index: None,
         resume_policy: Arc::new(SessionResumePolicy::default()),
         config_snapshot: Arc::new(tokio::sync::RwLock::new(ConfigSnapshot::default())),
+        release_provider: local_bridge::release::ReleaseProvider::default(),
     });
     AuditHarness { state, audit_dir }
 }

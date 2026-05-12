@@ -4,6 +4,7 @@ use crate::audit::AuditFacility;
 use crate::auth::{AuthState, PairingStore};
 use crate::config::{ConfigSnapshot, SessionResumePolicy};
 use crate::handoff::HandoffService;
+use crate::release::ReleaseProvider;
 use crate::session::persistence::{PersistenceHealth, SharedPersistence};
 use crate::session::SessionRegistry;
 use crate::storage::AssessmentIndex;
@@ -19,6 +20,11 @@ pub struct AppState {
     pub started_at: Instant,
     pub sessions: SessionRegistry,
     pub auth: AuthState,
+    /// AUDIT-013 — release provider mode loaded from
+    /// `VAC_RELEASE_PROVIDER` (default `NotWired`). `release.deploy` /
+    /// `release.publish` reject by default; set `dry_run` for an
+    /// explicit demo mode.
+    pub release_provider: ReleaseProvider,
     pub audit: Arc<AuditFacility>,
     pub pairing: PairingStore,
     pub profile_root: std::path::PathBuf,

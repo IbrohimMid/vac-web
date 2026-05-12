@@ -1701,6 +1701,7 @@ mod tests {
             assessment_index,
             resume_policy: Arc::new(SessionResumePolicy::default()),
             config_snapshot: Arc::new(RwLock::new(ConfigSnapshot::default())),
+            release_provider: crate::release::ReleaseProvider::default(),
         })
     }
 

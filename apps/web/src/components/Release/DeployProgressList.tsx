@@ -13,8 +13,18 @@ const STATUS_COLOR: Record<string, string> = {
   queued: 'var(--info, #3a8edb)',
   deploying: 'var(--warn, #c98a13)',
   deployed: 'var(--success, #3aab66)',
+  // Phase 3 (AUDIT-013) - dry-run is a no-op event, render in info tone
+  // so it never reads as a successful ship.
+  dry_run: 'var(--info, #3a8edb)',
   failed: 'var(--error, #d04444)',
   rolled_back: 'var(--warn, #c98a13)',
+};
+
+// Phase 3 (AUDIT-013) - badge style for the dry-run annotation in deploy rows.
+const dryRunBadgeStyle: CSSProperties = {
+  marginLeft: 6,
+  fontSize: 10.5,
+  opacity: 0.9,
 };
 
 interface Props {
@@ -49,6 +59,15 @@ export function DeployProgressList(props: Props) {
           return (
             <li key={id} style={itemStyle} data-status={d.status}>
               <code>{d.commit.slice(0, 8)}</code> → {d.target_id} · {d.status}
+              {d.status === 'dry_run' ? (
+                <span
+                  data-testid={`deploy-${id}-dry-run`}
+                  style={dryRunBadgeStyle}
+                  aria-label="Dry-run deploy: no real release was performed"
+                >
+                  {' (no real ship)'}
+                </span>
+              ) : null}
               {d.finished_at ? ` · ${d.finished_at}` : ''}
             </li>
           );

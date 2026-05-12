@@ -92,6 +92,11 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
             .namespaced("ws.device", json!(device_id.clone()))
             .expect("ws.device is an allowed namespaced key");
     let _ = audit::log_structured(&state, "ws", connected_builder);
+    // Phase 3 (AUDIT-014) — resolve principal once per connection and thread
+    // it through every handle_incoming dispatch so gate signoffs/overrides
+    // can bind their actor to the authenticated identity instead of trusting
+    // payload-supplied strings.
+    let principal = principal_for_device(&device_id);
 
     // 3. Send welcome. Advertise the live agent runtime registry so the
     // cockpit can render a provider picker and route `session.create`
@@ -138,7 +143,15 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
     while let Some(msg) = rx.next().await {
         match msg {
             Ok(Message::Text(t)) => {
-                handle_incoming(t.to_string(), &state, &out_tx, &client_id, &mut subscribed).await;
+                handle_incoming(
+                    t.to_string(),
+                    &state,
+                    &out_tx,
+                    &client_id,
+                    &mut subscribed,
+                    principal.as_ref(),
+                )
+                .await;
             }
             Ok(Message::Binary(_)) => { /* phase 3 (shell) */ }
             Ok(Message::Close(_)) | Err(_) => break,
@@ -162,6 +175,7 @@ async fn handle_incoming(
     out_tx: &tokio::sync::mpsc::Sender<String>,
     client_id: &str,
     subscribed: &mut std::collections::HashSet<String>,
+    principal: Option<&String>,
 ) {
     // Try replay first (has distinct field pattern).
     if let Ok(r) = serde_json::from_str::<ReplayRequest>(&line) {
@@ -201,7 +215,7 @@ async fn handle_incoming(
 
     debug!(%client_id, cmd_id = %cmd.id, cmd_type = %cmd.cmd_type, "dispatch");
     let cmd_type = cmd.cmd_type.clone();
-    let (ack, events) = dispatch_command(cmd, state.clone()).await;
+    let (ack, events) = dispatch_command(cmd, state.clone(), principal.cloned()).await;
     let _ = out_tx.send(serde_ack_from(ack)).await;
     for ev in events {
         // When session.create returns session.ready (or session.resume
@@ -320,6 +334,20 @@ fn authenticate(auth: &Option<AuthFrame>, state: &AppStateHandle) -> Result<Stri
                 Err("auth.required")
             }
         }
+    }
+}
+
+/// Phase 3 (AUDIT-014) — derive a stable principal string from the device
+/// id resolved by `authenticate`. Authenticated devices become
+/// `device:{device_id}`; the anonymous developer fallback (only reached
+/// when `AuthState::allow_anonymous` is true) becomes `dev:anonymous`.
+/// Threaded through `dispatch_command` so gate signoffs / overrides
+/// record who acted instead of trusting the payload-supplied signer.
+fn principal_for_device(device_id: &str) -> Option<String> {
+    if device_id == "anon" {
+        Some("dev:anonymous".to_string())
+    } else {
+        Some(format!("device:{device_id}"))
     }
 }
 

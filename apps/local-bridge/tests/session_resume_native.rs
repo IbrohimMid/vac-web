@@ -171,6 +171,7 @@ async fn start_bridge_with_persistence(extra_mock_args: Vec<String>) -> Harness 
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
         )),
+        release_provider: local_bridge::release::ReleaseProvider::default(),
     });
 
     let app = build_app(Arc::clone(&state));
