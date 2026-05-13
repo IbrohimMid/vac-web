@@ -1,14 +1,9 @@
-// QR-based pairing surface. Desktop TUI runs `vac pair --relay <url>` which
-// mints a TeleportToken + prints a QR-friendly string; the browser side only
-// needs to consume the short code (typed by hand) or a full paste, then
-// reconstruct the relay URL.
-//
-// We render a minimal QR here with a pure-TS encoder (no new deps) so the
-// web UI can *mint* a shareable pair URL from the session it's already in.
-// For the happy path (phone attaches desktop-session) the desktop mints and
-// the browser just reads `?relay=…&device=…&session=…&token=…` from the URL.
+// Copy-only pairing surface. The bridge/CLI owns QR generation when it is
+// available; this browser surface mints or consumes a relay pairing URL and
+// shows a masked, copyable value so token-bearing URLs are not exposed as a
+// fake scannable QR.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 
 interface Props {
   relayUrl: string;
@@ -16,10 +11,44 @@ interface Props {
   sessionId: string;
 }
 
+const sectionStyle: CSSProperties = { border: '1px solid #334155', padding: 12, borderRadius: 10 };
+const headingStyle: CSSProperties = { marginTop: 0 };
+const errorStyle: CSSProperties = { color: '#fca5a5' };
+const helpStyle: CSSProperties = { color: '#94a3b8', marginBottom: 8 };
+const urlBoxStyle: CSSProperties = { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', background: '#0f172a', padding: 8, borderRadius: 8 };
+const codeStyle: CSSProperties = { fontSize: 18 };
+const rowStyle: CSSProperties = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' };
+const noteStyle: CSSProperties = { color: '#94a3b8', fontSize: 12 };
+
+export function maskPairingUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const token = url.searchParams.get('token');
+    if (token) {
+      const suffix = token.slice(-4);
+      url.searchParams.set('token', `••••${suffix}`);
+    }
+    return url.toString();
+  } catch {
+    return raw.replace(/([?&]token=)[^&\s]+/i, '$1••••');
+  }
+}
+
+async function copyPairingUrl(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) return false;
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function PairingRelay({ relayUrl, deviceId, sessionId }: Props) {
   const [token, setToken] = useState<string | null>(null);
   const [shortCode, setShortCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -50,93 +79,43 @@ export function PairingRelay({ relayUrl, deviceId, sessionId }: Props) {
     });
     return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
   }, [relayUrl, deviceId, sessionId, token]);
+  const maskedAttachUrl = attachUrl ? maskPairingUrl(attachUrl) : null;
 
   return (
-    <section
-      aria-label="Pair remote device"
-      style={{
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-        padding: 12,
-        margin: 8,
-      }}
-    >
-      <h3 style={{ margin: '0 0 8px 0' }}>Pair a remote device</h3>
-      {error && <p style={{ color: 'var(--sev-error)' }}>{error}</p>}
-      {!attachUrl ? (
+    <section aria-label="Pair remote device" style={sectionStyle}>
+      <h3 style={headingStyle}>Pair a remote device</h3>
+      {error && <p style={errorStyle}>{error}</p>}
+      {!attachUrl || !maskedAttachUrl ? (
         <p>Requesting token…</p>
       ) : (
         <>
-          <p style={{ fontSize: 12, color: 'var(--text-2)' }}>
-            Open this URL on the remote device (QR scan or hand-type the short
-            code):
+          <p style={helpStyle}>
+            Copy this pairing URL into the remote device. QR rendering is not available in this web surface.
           </p>
-          <pre
-            style={{
-              background: 'var(--bg-2, #111)',
-              padding: 8,
-              borderRadius: 4,
-              fontSize: 11,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-            }}
-          >
-            {attachUrl}
+          <pre style={urlBoxStyle} aria-label="Masked pairing URL">
+            {maskedAttachUrl}
           </pre>
-          {shortCode && (
-            <p>
-              Short code: <code style={{ fontSize: 18 }}>{shortCode}</code>
-            </p>
-          )}
-          <QrPlaceholder text={attachUrl} />
+          <div style={rowStyle}>
+            <button
+              type="button"
+              onClick={() => {
+                void copyPairingUrl(attachUrl).then((ok) => setCopyStatus(ok ? 'Pairing URL copied.' : 'Copy unavailable; use the CLI token source.'));
+              }}
+            >
+              Copy full pairing URL
+            </button>
+            {shortCode && (
+              <span>
+                Short code: <code style={codeStyle}>{shortCode}</code>
+              </span>
+            )}
+          </div>
+          <p style={noteStyle}>
+            The visible URL masks its token. Copy uses the full token-bearing URL for this one-time pairing flow.
+          </p>
+          {copyStatus && <p role="status">{copyStatus}</p>}
         </>
       )}
     </section>
   );
 }
-
-/**
- * Minimal QR placeholder: renders a monospace hash-style preview of the URL
- * so the pairing flow is demonstrable without pulling in a QR library.
- * Real QR rendering lands with the dedicated encoder in a 7.5-hotfix (the
- * wire format for pairing data does not change).
- */
-function QrPlaceholder({ text }: { text: string }) {
-  const grid = useMemo(() => {
-    const size = 16;
-    const cells: boolean[] = [];
-    let h = 0;
-    for (let i = 0; i < text.length; i++) {
-      h = (h * 131 + text.charCodeAt(i)) >>> 0;
-    }
-    for (let i = 0; i < size * size; i++) {
-      h = (h * 1103515245 + 12345) >>> 0;
-      cells.push(Boolean(h & 1));
-    }
-    return { size, cells };
-  }, [text]);
-  return (
-    <div
-      aria-label="pairing QR preview"
-      style={{
-        display: 'inline-grid',
-        gridTemplateColumns: `repeat(${grid.size}, 10px)`,
-        gap: 0,
-        padding: 8,
-        background: 'white',
-      }}
-    >
-      {grid.cells.map((on, i) => (
-        <div
-          key={i}
-          style={{
-            width: 10,
-            height: 10,
-            background: on ? 'black' : 'white',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-

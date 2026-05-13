@@ -45,6 +45,19 @@ describe('markdown sanitizer', () => {
     });
   }
 
+
+  it('blocks file URI anchors in generic markdown output', () => {
+    const out = sanitize('<a href="file:///etc/passwd">local</a>');
+    expect(out).not.toMatch(/href="file:/i);
+    expect(out).toContain('local');
+  });
+
+  it('blocks file URI images in generic markdown output', () => {
+    const out = sanitize('<img src="file:///etc/passwd" alt="local file">');
+    expect(out).not.toMatch(/src="file:/i);
+    expect(out).toContain('alt="local file"');
+  });
+
   it('preserves safe markdown output', () => {
     const input =
       '<p><strong>bold</strong> <em>italic</em> <a href="https://example.com">link</a></p>';

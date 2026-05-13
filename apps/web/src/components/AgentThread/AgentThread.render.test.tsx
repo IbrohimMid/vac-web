@@ -331,7 +331,10 @@ describe('AgentThread renderer', () => {
     expect(actionsRow.getAttribute('data-tool-call-id')).toBe('tc_task_root');
 
     expect(screen.getByTestId('agent-subagent-cancel')).toBeDisabled();
+    expect(screen.getByTestId('agent-subagent-cancel')).toHaveTextContent(/unavailable/i);
     expect(screen.getByTestId('agent-subagent-retry')).toBeDisabled();
+    expect(screen.getByTestId('agent-subagent-retry')).toHaveTextContent(/unavailable/i);
+    expect(screen.getByTestId('agent-subagent-unavailable-copy')).toHaveTextContent(/not wired/i);
     // Copy is enabled because inputSummary derives from raw_input.description.
     expect(screen.getByTestId('agent-subagent-copy-description')).not.toBeDisabled();
   });

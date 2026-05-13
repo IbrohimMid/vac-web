@@ -431,20 +431,25 @@ export function ToolCallCard({
             type="button"
             className="agent-action"
             disabled
+            aria-describedby={`subagent-unavailable-${tool.toolCallId}`}
             data-testid="agent-subagent-cancel"
-            title="Per-task cancel is not yet wired through the bridge. Use the turn-level Cancel above to abort the whole turn."
+            title="Per-task cancel is not wired through the bridge."
           >
-            Cancel sub-task
+            Cancel sub-task unavailable
           </button>
           <button
             type="button"
             className="agent-action"
             disabled
+            aria-describedby={`subagent-unavailable-${tool.toolCallId}`}
             data-testid="agent-subagent-retry"
-            title="Per-task retry is not yet wired through the bridge. Use the turn-level Retry above to resubmit the original prompt."
+            title="Per-task retry is not wired through the bridge."
           >
-            Retry sub-task
+            Retry sub-task unavailable
           </button>
+          <span id={`subagent-unavailable-${tool.toolCallId}`} className="agent-card-meta" data-testid="agent-subagent-unavailable-copy">
+            Per-task cancel/retry is not wired yet; use turn-level controls for now.
+          </span>
           <button
             type="button"
             className="agent-action"

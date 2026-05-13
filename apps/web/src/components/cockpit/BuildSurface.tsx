@@ -8,7 +8,7 @@
 // Memory) ship presentational placeholders pending upstream stores in a
 // later phase — they're flagged inline.
 
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useState, type KeyboardEvent } from 'react';
 import { Composer } from '../Composer/Composer';
 import { AgentThread } from '../AgentThread/AgentThread';
 import { useShell } from '../../stores/shell';
@@ -63,6 +63,23 @@ const WB_TABS: WBTab[] = [
   { id: 'vwfd', label: 'VWFD' },
   { id: 'memory', label: 'Memory' },
 ];
+
+function workbenchTabId(tab: WBTabId): string {
+  return `workbench-tab-${tab}`;
+}
+
+function workbenchPanelId(tab: WBTabId): string {
+  return `workbench-panel-${tab}`;
+}
+
+function nextWorkbenchTab(current: WBTabId, key: string): WBTabId | null {
+  const idx = WB_TABS.findIndex((tab) => tab.id === current);
+  if (key === 'ArrowRight' || key === 'ArrowDown') return WB_TABS[(idx + 1) % WB_TABS.length]!.id;
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return WB_TABS[(idx - 1 + WB_TABS.length) % WB_TABS.length]!.id;
+  if (key === 'Home') return WB_TABS[0]!.id;
+  if (key === 'End') return WB_TABS[WB_TABS.length - 1]!.id;
+  return null;
+}
 
 interface Props {
   transport: TransportHandle;
@@ -178,26 +195,40 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport, collapsed,
     return null;
   };
 
+  const activateTab = (id: WBTabId) => {
+    if (collapsed) setCollapsed(false);
+    setTab(id);
+  };
+  const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, id: WBTabId) => {
+    const next = nextWorkbenchTab(id, event.key);
+    if (!next) return;
+    event.preventDefault();
+    activateTab(next);
+    requestAnimationFrame(() => document.getElementById(workbenchTabId(next))?.focus());
+  };
+
   return (
     <div className={`workbench ${collapsed ? 'is-collapsed' : ''}`}>
-      <div className="tabs">
+      <div className="tabs" role="tablist" aria-label="Workbench sections">
         {WB_TABS.map((t) => {
           const c = countFor(t.id);
           const isActive = tab === t.id && !collapsed;
           return (
-            <div
+            <button
               key={t.id}
+              id={workbenchTabId(t.id)}
+              type="button"
               className={`tab ${isActive ? 'active' : ''}`}
-              onClick={() => {
-                if (collapsed) setCollapsed(false);
-                setTab(t.id);
-              }}
+              onClick={() => activateTab(t.id)}
+              onKeyDown={(event) => onTabKeyDown(event, t.id)}
               role="tab"
+              tabIndex={isActive ? 0 : -1}
               aria-selected={isActive}
+              aria-controls={workbenchPanelId(t.id)}
             >
               {t.label}
               {c != null && <span className="count">{c}</span>}
-            </div>
+            </button>
           );
         })}
         <div className="spacer"></div>
@@ -220,7 +251,7 @@ function Workbench({ tab, setTab, shellOpen, setShellOpen, transport, collapsed,
         </button>
       </div>
       {!collapsed && (
-      <div className="wb-body">
+      <div className="wb-body" id={workbenchPanelId(tab)} role="tabpanel" aria-labelledby={workbenchTabId(tab)}>
         <Suspense fallback={<TabFallback />}>
           {tab === 'approvals' && <ApprovalsTab transport={transport} />}
           {tab === 'review' && <ReviewTab transport={transport} />}

@@ -3,6 +3,7 @@
 // Context shows connector inventory + last touched files (existing stores);
 // Memory shows session metadata.
 
+import { type KeyboardEvent } from 'react';
 import { useActivity } from '../../stores/activity';
 import { useCockpit, type RailTab } from '../../stores/cockpit';
 import { useConnectors, type ConnectorHealth } from '../../stores/connectors';
@@ -14,21 +15,51 @@ import { Icon, type IconName } from './primitives';
 
 const TABS: RailTab[] = ['Activity', 'Notify', 'Context', 'Memory'];
 
+function railPanelId(tab: RailTab): string {
+  return `rail-panel-${tab.toLowerCase()}`;
+}
+
+function railTabId(tab: RailTab): string {
+  return `rail-tab-${tab.toLowerCase()}`;
+}
+
+function nextRailTab(current: RailTab, key: string): RailTab | null {
+  const idx = TABS.indexOf(current);
+  if (key === 'ArrowRight' || key === 'ArrowDown') return TABS[(idx + 1) % TABS.length]!;
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return TABS[(idx - 1 + TABS.length) % TABS.length]!;
+  if (key === 'Home') return TABS[0]!;
+  if (key === 'End') return TABS[TABS.length - 1]!;
+  return null;
+}
+
 export function Rail() {
   const tab = useCockpit((s) => s.railTab);
   const setTab = useCockpit((s) => s.setRailTab);
   const stickyCount = useNotify((s) => s.sticky.size);
 
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: RailTab) => {
+    const next = nextRailTab(current, event.key);
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    requestAnimationFrame(() => document.getElementById(railTabId(next))?.focus());
+  };
+
   return (
     <aside className="rail">
-      <div className="rail-tabs">
+      <div className="rail-tabs" role="tablist" aria-label="Cockpit rail sections">
         {TABS.map((t) => (
-          <div
+          <button
             key={t}
+            id={railTabId(t)}
+            type="button"
             className={`rail-tab ${tab === t ? 'active' : ''}`}
             onClick={() => setTab(t)}
+            onKeyDown={(event) => onKeyDown(event, t)}
             role="tab"
+            tabIndex={tab === t ? 0 : -1}
             aria-selected={tab === t}
+            aria-controls={railPanelId(t)}
           >
             {t}
             {t === 'Activity' && (
@@ -41,10 +72,15 @@ export function Rail() {
             {t === 'Notify' && stickyCount > 0 && (
               <span className="badge crit rail-badge-tight">!</span>
             )}
-          </div>
+          </button>
         ))}
       </div>
-      <div className="rail-body">
+      <div
+        className="rail-body"
+        id={railPanelId(tab)}
+        role="tabpanel"
+        aria-labelledby={railTabId(tab)}
+      >
         {tab === 'Activity' && <RailActivity />}
         {tab === 'Notify' && <RailNotify />}
         {tab === 'Context' && <RailContext />}

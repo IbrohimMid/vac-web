@@ -21,7 +21,7 @@ const ALLOWED_ATTR = [
 
 const FORBID_ATTR = ['style', 'onerror', 'onload', 'onclick', 'onmouseover'];
 
-const ALLOWED_URI_REGEXP = /^(?:(?:https?|mailto|file):|\/|#|$)/i;
+const ALLOWED_URI_REGEXP = /^(?:(?:https?|mailto):|\/|#|$)/i;
 
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if ('target' in node && node.tagName === 'A') {
