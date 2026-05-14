@@ -429,3 +429,22 @@
 .codeworkspace-task-agent-card span { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
 .codeworkspace-task-agent-card strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .codeworkspace-task-agent-card small { color: var(--fg-muted); font-size: 10px; }
+
+/* Phase 9 - First-run coding onboarding. */
+.codeworkspace-onboarding { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr); gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg-panel, var(--bg)); margin: 0 0 10px; }
+.codeworkspace-onboarding-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.codeworkspace-onboarding-kicker { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.codeworkspace-onboarding-copy p { margin: 0; color: var(--fg-muted); font-size: 12px; line-height: 1.4; }
+.codeworkspace-onboarding-steps { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.codeworkspace-onboarding-steps li { display: flex; gap: 7px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 7px; background: var(--bg-sunken); min-width: 0; }
+.codeworkspace-onboarding-steps li > span { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; border: 1px solid var(--line); font-size: 11px; flex: 0 0 auto; }
+.codeworkspace-onboarding-steps li[data-state='done'] > span { color: var(--success); border-color: var(--success); }
+.codeworkspace-onboarding-steps div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.codeworkspace-onboarding-steps small { color: var(--fg-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codeworkspace-onboarding-actions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 6px; }
+.codeworkspace-onboarding-actions button { text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg-sunken); color: var(--fg); display: flex; flex-direction: column; gap: 3px; }
+.codeworkspace-onboarding-actions button:disabled { opacity: 0.55; cursor: not-allowed; }
+.codeworkspace-onboarding-actions span { color: var(--fg-muted); font-size: 10px; line-height: 1.3; }
+.codeworkspace-onboarding-footer { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 1100px) { .codeworkspace-onboarding { grid-template-columns: 1fr; } .codeworkspace-onboarding-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .codeworkspace-onboarding-steps, .codeworkspace-onboarding-actions { grid-template-columns: 1fr; } }

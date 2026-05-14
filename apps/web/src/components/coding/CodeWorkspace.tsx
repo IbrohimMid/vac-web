@@ -11,6 +11,7 @@ import { ReviewQueue } from './ReviewQueue';
 import { ValidationPanel } from './ValidationPanel';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
+import { CodeOnboarding } from './CodeOnboarding';
 
 interface Props { transport: TransportHandle | null; }
 type CenterTab = 'code' | 'diff' | 'preview' | 'validation';
@@ -24,6 +25,13 @@ export function CodeWorkspace({ transport }: Props) {
   return (
     <div className="codeworkspace" data-route="code" role="region" aria-label="Code workspace">
       <WorkspaceTopbar transport={transport} />
+      <CodeOnboarding
+        sessionId={sessionId}
+        transport={transport}
+        onOpenBuild={goToBuild}
+        onOpenRuntime={openShell}
+        onSelectTab={setCenterTab}
+      />
       <WorkspaceLayout
         explorer={<ProjectExplorer sessionId={sessionId} transport={transport} />}
         center={<CenterPane tab={centerTab} setTab={setCenterTab} sessionId={sessionId} transport={transport} />}

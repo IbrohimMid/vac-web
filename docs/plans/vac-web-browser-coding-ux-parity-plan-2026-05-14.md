@@ -243,3 +243,10 @@ Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` 
 - TaskBoard now shows multi-task status counts, conflict signals for files touched by multiple active tasks, richer task chips, latest running command, and specialized agent cards from observed tool activity.
 - UX impact: users can see parallel task pressure and sub-agent activity from Code Workspace without enabling unsafe orchestration controls.
 - Residual risk: cancel/retry/focus orchestration controls remain intentionally absent/truthful-disabled until backend session semantics are authoritative.
+
+## Implementation log — Phase 9 (2026-05-15)
+- Added first-run Code Workspace onboarding scaffold.
+- New `CodeOnboarding` component shows a three-step checklist: connect bridge, select session, pick starter.
+- Starter actions route to Code, Diff, Preview, or Validation tabs without pretending backend support exists.
+- Recovery actions keep Build surface and runtime drawer one click away.
+- Residual risk: this is onboarding guidance only; full pairing/session redesign and e2e onboarding flow remain for later polish.

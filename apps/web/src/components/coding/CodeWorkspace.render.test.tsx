@@ -70,7 +70,7 @@ describe('CodeWorkspace shell', () => {
     useProject.getState().setTreeUnsupported('no bridge support yet');
     useCockpit.setState({ route: 'code' });
     render(<CodeWorkspace transport={transport} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open Build surface' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open Build surface' })[1]!);
     expect(useCockpit.getState().route).toBe('build');
   });
 
