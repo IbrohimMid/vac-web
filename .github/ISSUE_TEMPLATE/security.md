@@ -6,7 +6,6 @@ labels: security
 
 > **Please do not open a public issue for security vulnerabilities.**
 >
-> Follow `SECURITY.md` → private disclosure via GitHub Security Advisories
-> or the security email listed there.
+> Follow `SECURITY.md` → private disclosure via GitHub Security Advisories.
 >
 > This issue will be closed on sight.

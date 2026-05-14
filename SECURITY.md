@@ -6,10 +6,11 @@ the highest severity we care about.
 
 ## Reporting a vulnerability
 
-**Do not open a public issue.** Please report privately to:
+**Do not open a public issue.** Please report privately via GitHub Security Advisories:
 
-- Email: **`security@vac-web.invalid`** (replace with real address before v1.0.0 tag)
-- GitHub Security Advisories: <https://github.com/IbrohimMid/vac-web/security/advisories/new>
+- <https://github.com/IbrohimMid/vac-web/security/advisories/new>
+
+No separate monitored security email is published for this repository yet. If GitHub Security Advisories are unavailable to you, open a minimal public issue that asks a maintainer to enable a private disclosure path, but do **not** include vulnerability details in that issue.
 
 Please include:
 

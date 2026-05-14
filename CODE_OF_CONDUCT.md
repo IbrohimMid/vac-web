@@ -34,13 +34,19 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported by contacting the project team at
-**`conduct@vac-web.invalid`** (replace with real address before v1.0.0 tag).
+reported through a GitHub issue in this repository when the report can be
+shared publicly without exposing private information.
+
+This repository does not currently publish a monitored private conduct inbox.
+If your report requires confidentiality or includes personal/sensitive
+information, do **not** post those details publicly. Instead, open a minimal
+public issue asking the maintainers to provide a private reporting path, or use
+GitHub's platform reporting tools for abuse and harassment.
 
 All complaints will be reviewed and investigated and will result in a
 response that is deemed necessary and appropriate to the circumstances. The
 project team is obligated to maintain confidentiality with regard to the
-reporter of an incident.
+reporter of an incident whenever a private reporting path is used.
 
 ## Attribution
 
