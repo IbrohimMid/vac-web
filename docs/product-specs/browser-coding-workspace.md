@@ -184,3 +184,32 @@ If the bridge does not reply within 4 seconds (tree) or 6 seconds (file), the fr
 - Reveal-in-review / per-file action menu (Phase 3+).
 - Binary or large-file (> 1 MB) preview policy beyond the `truncated` flag.
 - Cross-session tree caching.
+
+## Phase 3 - Code viewer + file-level agent actions
+
+The Code Workspace center `Code` tab renders `CodePanel`. With no file selected the panel shows a truthful empty hint (`Pick a file from the explorer to view its contents.`) plus the existing `Unavailable: direct browser editing is not wired yet.` notice.
+
+When a file is selected via the explorer the panel renders content with line numbers. Clicking a line number selects that line; shift-clicking extends the selection. The selection is a `{ start, end }` line range stored in `useProject.selectedLines`; this is independent of any browser text selection to keep the outbound payload deterministic.
+
+### Toolbar actions
+
+Every action button is disabled with a truthful `title` attribute when its preconditions are not met (no session, no transport, no selection, no pending diff).
+
+| Action | Event emitted | Preconditions |
+|---|---|---|
+| Copy path | (clipboard only) | always |
+| Open related diff | (opens `diff_viewer` overlay) | path appears in `useReview.files` |
+| Ask agent about file | `coding.context.ask_about_file` | session + transport |
+| Ask about selection | `coding.context.ask_about_selection` | session + transport + selection + content |
+| Edit with agent | `coding.context.request_edit` | session + transport |
+| Generate tests | `coding.context.request_tests` | session + transport |
+
+After dispatching the user is routed to the Build surface so the agent response surface is visible (in-pane agent thread remains a placeholder until later phases).
+
+### Outbound payload shapes
+
+Excerpts are bounded: files longer than 80 lines emit head 60 + elision marker + tail 20, capped to 4000 chars. Selection text is capped to 4000 chars.
+
+### Bridge backend status
+
+Not yet implemented. The frontend dispatches but does not gate on a response; UX falls through to Build surface so the user can drive the agent manually.

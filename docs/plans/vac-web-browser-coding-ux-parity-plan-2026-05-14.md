@@ -136,3 +136,63 @@ Phase 1 is a shell. True Solo/Trae-like parity still depends on Phase 2+ project
 - 4s timeout is a UX guess; cold-start bridge latency > 4s would briefly flash "Unavailable" before override.
 - No file actions wired yet (open / copy / ask agent / run test / reveal in review) — Phase 3+.
 - `useProject` singleton store is shared; session-switch reset is a TODO for Phase 3.
+
+## Phase 3 implementation log (2026-05-14)
+
+Phase 3 lands the code viewer + diff overlay + file-level agent actions on top of the Phase 2 explorer scaffold.
+
+### Scope (delivered)
+
+- New `CodePanel` component renders the currently selected file with line numbers and click-to-select line ranges.
+- Selection state added to `useProject` (`selectedFilePath`, `selectedLines`, `selectPath`, `selectLines`, `clearSelection`).
+- File-level agent actions (toolbar buttons): `Copy path`, `Open related diff`, `Ask agent about file`, `Ask about selection`, `Edit with agent`, `Generate tests`.
+- Agent actions emit new outbound events `coding.context.*` and route the user to the Build surface so the agent response surface is visible.
+- New helper module `domain/coding/context.ts` builds excerpt-bounded payloads and runs `transport.send` with truthful error reporting.
+- `ProjectExplorer` entries are clickable; clicking a file selects it in the store and dispatches `project.file.request`. Files present in `useReview.files` show a `changed` badge.
+- Diff overlay reuses the existing `diff_viewer` overlay. When the selected file has no pending changes, the `Open related diff` button is disabled with truthful title copy.
+- Truthful disabled copy preserved: when transport or session is missing, every agent action button is disabled with `title` explaining why.
+- No freeform direct editing - the plan reserves that for a future safe-patch flow.
+
+### Truthful copy added
+
+- `No file selected` / `Pick a file from the explorer to view its contents.`
+- `Requesting file...` / `Waiting for the bridge to respond.`
+- `File preview` / `Unavailable: bridge does not support project file browsing yet.` (file-level)
+- `File error` + bridge error message + `Retry`
+- `Empty file` / `This file is zero bytes.`
+- `File truncated by bridge -- showing first chunk only.`
+- `pending diff` toolbar badge when file is in the review changeset.
+- `No pending changes for this file` title on the disabled `Open related diff` button.
+
+### Bridge contract additions (frontend-only; backend pending)
+
+Outbound (frontend -> bridge):
+
+- `coding.context.ask_about_file { session_id, path, excerpt?, lines? }`
+- `coding.context.ask_about_selection { session_id, path, start_line, end_line, selected_text }`
+- `coding.context.request_edit { session_id, path, hint? }`
+- `coding.context.request_tests { session_id, path }`
+
+The bridge backend is not yet expected to handle these events. Until it does, the frontend dispatches the event, navigates the user to the Build surface, and the existing agent thread is where the next interaction happens.
+
+### Files changed
+
+New:
+- `apps/web/src/domain/coding/context.ts`
+- `apps/web/src/domain/coding/context.test.ts`
+- `apps/web/src/components/coding/CodePanel.tsx`
+- `apps/web/src/components/coding/CodePanel.render.test.tsx`
+
+Modified:
+- `apps/web/src/stores/project.ts` (selection state + methods)
+- `apps/web/src/stores/project.test.ts` (selection tests)
+- `apps/web/src/components/coding/ProjectExplorer.tsx` (clickable + changed indicator)
+- `apps/web/src/components/coding/ProjectExplorer.render.test.tsx` (click + diff badge tests)
+- `apps/web/src/components/coding/CodeWorkspace.tsx` (code tab renders CodePanel)
+- `apps/web/src/styles/coding.css` (Phase 3 styles)
+- `docs/plans/vac-web-browser-coding-ux-parity-plan-2026-05-14.md` (this log)
+- `docs/product-specs/browser-coding-workspace.md` (Phase 3 contract)
+
+### Status
+
+Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` events deferred.
