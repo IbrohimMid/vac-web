@@ -24,8 +24,9 @@ use ulid::Ulid;
 /// claiming a real deployment happened. No real provider is wired yet so
 /// fake `status: "deployed"` events and the hardcoded sentry-flavoured
 /// `release.post_deploy_observation` have been removed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReleaseProvider {
+    #[default]
     NotWired,
     DryRun,
 }
@@ -47,12 +48,6 @@ impl ReleaseProvider {
             Self::NotWired => "not_wired",
             Self::DryRun => "dry_run",
         }
-    }
-}
-
-impl Default for ReleaseProvider {
-    fn default() -> Self {
-        Self::NotWired
     }
 }
 

@@ -9,6 +9,7 @@ use futures::{SinkExt, StreamExt};
 use local_bridge::audit::AuditFacility;
 use local_bridge::auth::{AuthState, PairingStore};
 use local_bridge::handoff::HandoffService;
+use local_bridge::release::ReleaseProvider;
 use local_bridge::server::{build_app, AppState};
 use local_bridge::session::persistence::PersistenceHealth;
 use local_bridge::session::SessionRegistry;
@@ -55,6 +56,7 @@ async fn start_bridge() -> String {
         config_snapshot: std::sync::Arc::new(tokio::sync::RwLock::new(
             local_bridge::config::ConfigSnapshot::default(),
         )),
+        release_provider: ReleaseProvider::NotWired,
     });
     std::mem::forget(tmp);
     let app = build_app(state);

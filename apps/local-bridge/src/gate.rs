@@ -612,11 +612,7 @@ pub async fn handle_override(
         touch_gate(snapshot);
         snapshot.clone()
     };
-    let actor = principal
-        .as_ref()
-        .map(|p| p.as_str())
-        .unwrap_or("anonymous")
-        .to_string();
+    let actor = principal.as_deref().unwrap_or("anonymous").to_string();
     log_tool_event(
         state,
         &cmd.session_id,
@@ -672,11 +668,7 @@ pub async fn handle_revoke_override(
         touch_gate(snapshot);
         snapshot.clone()
     };
-    let actor = principal
-        .as_ref()
-        .map(|p| p.as_str())
-        .unwrap_or("anonymous")
-        .to_string();
+    let actor = principal.as_deref().unwrap_or("anonymous").to_string();
     log_tool_event(
         state,
         &cmd.session_id,

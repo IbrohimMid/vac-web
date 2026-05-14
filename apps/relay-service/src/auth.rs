@@ -32,6 +32,7 @@ pub struct RevokeReply {
 /// Validates the admin bearer presented in either header or query against
 /// `state.security.admin_token`. When `admin_token` is `None` the relay was
 /// started with `RELAY_ALLOW_OPEN_ADMIN=1` and the call is allowed.
+#[allow(clippy::result_large_err)]
 pub fn check_admin_auth(
     state: &AppState,
     headers: &HeaderMap,
