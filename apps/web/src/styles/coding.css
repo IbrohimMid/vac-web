@@ -415,3 +415,17 @@
 .codeworkspace-validation-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .codeworkspace-validation-truth { margin: 0; }
 @media (max-width: 1100px) { .codeworkspace-validation-grid { grid-template-columns: 1fr; } }
+
+/* Phase 8 - Multi-task and specialized agent visibility. */
+.codeworkspace-task-orchestration { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg-sunken); }
+.codeworkspace-task-orchestration-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.codeworkspace-task-orchestration-counts span { border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 11px; color: var(--fg-muted); background: var(--bg); }
+.codeworkspace-task-conflicts { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--warn); border-radius: 8px; padding: 7px; color: var(--warn); background: var(--warn-soft); font-size: 11px; }
+.codeworkspace-task-chip { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.codeworkspace-task-chip small { color: var(--fg-muted); font-size: 10px; }
+.codeworkspace-task-agents { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg-sunken); }
+.codeworkspace-task-agent-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px; }
+.codeworkspace-task-agent-card { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 8px; padding: 7px; background: var(--bg); min-width: 0; }
+.codeworkspace-task-agent-card span { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.codeworkspace-task-agent-card strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codeworkspace-task-agent-card small { color: var(--fg-muted); font-size: 10px; }

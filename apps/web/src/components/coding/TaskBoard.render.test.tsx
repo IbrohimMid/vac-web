@@ -6,6 +6,8 @@ import { TaskBoard } from './TaskBoard';
 import { useApprovals } from '../../stores/approvals';
 import { useCockpit } from '../../stores/cockpit';
 import { useReview } from '../../stores/review';
+import { useRuntime } from '../../stores/runtime';
+import { useToolActivity } from '../../stores/toolActivity';
 import { useTasks } from '../../stores/tasks';
 import type { TransportHandle } from '../../transport';
 
@@ -24,6 +26,8 @@ describe('<TaskBoard/>', () => {
   beforeEach(() => {
     useTasks.getState().resetAll();
     useReview.getState().clear();
+    useRuntime.getState().clear();
+    useToolActivity.getState().clear();
     useApprovals.getState().clear();
     useCockpit.setState({ route: 'code' });
   });
@@ -75,7 +79,7 @@ describe('<TaskBoard/>', () => {
     seedTask();
     useTasks.getState().upsertTask({ taskId: 'task2', sessionId: 's1', title: 'Second task', status: 'blocked' });
     render(<TaskBoard sessionId="s1" transport={fakeTransport()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Second task' }));
+    fireEvent.click(screen.getByRole('button', { name: /Second task/i }));
     expect(screen.getAllByText('Second task').length).toBeGreaterThan(0);
     expect(useTasks.getState().activeTaskId).toBe('task2');
   });
@@ -105,4 +109,44 @@ describe('<TaskBoard/>', () => {
     expect(screen.getByRole('button', { name: /Continue execution/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Run validation/i })).toBeDisabled();
   });
+
+
+  it('renders multi-task orchestration counts and file conflicts', () => {
+    seedTask();
+    useTasks.getState().upsertTask({ taskId: 'task2', sessionId: 's1', title: 'Second task', status: 'blocked', changedFiles: ['apps/web/src/main.tsx'] });
+    useRuntime.getState().upsert({ id: 'job1', kind: 'execute', label: 'pnpm test', status: 'running', startedAt: '2026-05-14T00:00:00Z' });
+    render(<TaskBoard sessionId="s1" transport={fakeTransport()} />);
+    expect(screen.getByTestId('task-orchestration')).toHaveTextContent('Active: 1');
+    expect(screen.getByTestId('task-conflicts')).toHaveTextContent('apps/web/src/main.tsx shared by task1, task2');
+    expect(screen.getByText(/Running command: pnpm test/i)).toBeInTheDocument();
+    expect(screen.getByTestId('task-multitask-list')).toBeInTheDocument();
+  });
+
+  it('renders specialized agent activity summaries', () => {
+    seedTask();
+    useToolActivity.getState().applyToolObserved({
+      session_id: 's1',
+      agent_id: 'agent-code',
+      agent_kind: 'code',
+      tool_call_id: 'tool1',
+      kind: 'execute',
+      title: 'Run unit tests',
+      status: 'in_progress',
+      locations: [],
+      diffs: [],
+      approval_tool_call_hash: null,
+      raw_input_hash: null,
+      raw_input_redacted: null,
+      raw_output_redacted: null,
+      approved_by_approval_id: null,
+      ts: '2026-05-14T00:00:00Z',
+      outputTruncated: false,
+      outputRedacted: false,
+      seq: 1,
+    });
+    render(<TaskBoard sessionId="s1" transport={fakeTransport()} />);
+    expect(screen.getByTestId('task-agent-summary')).toHaveTextContent('agent-code');
+    expect(screen.getByText(/1 tools · 1 running · 0 failed/i)).toBeInTheDocument();
+  });
+
 });

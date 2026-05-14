@@ -236,3 +236,10 @@ Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` 
 - Validation target: `df -h .`, `pnpm -F web typecheck`, targeted validation/coding/runtime tests, and `git diff --check` before commit.
 - UX impact: users can request validation and inspect validation status without reading raw terminal logs first.
 - Residual risk: command execution and authoritative output still depend on bridge/runtime; no e2e validation spec added in this slice.
+
+## Implementation log — Phase 8 (2026-05-14)
+- Added frontend-only multi-task and specialized-agent visibility scaffold in `TaskBoard`.
+- Added task orchestration helpers for status buckets, same-file conflict detection, and per-agent tool activity summaries.
+- TaskBoard now shows multi-task status counts, conflict signals for files touched by multiple active tasks, richer task chips, latest running command, and specialized agent cards from observed tool activity.
+- UX impact: users can see parallel task pressure and sub-agent activity from Code Workspace without enabling unsafe orchestration controls.
+- Residual risk: cancel/retry/focus orchestration controls remain intentionally absent/truthful-disabled until backend session semantics are authoritative.
