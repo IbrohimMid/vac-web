@@ -9,6 +9,7 @@ export type Theme = 'light' | 'dark';
 export type Density = 'compact' | 'regular' | 'comfy';
 export type Route =
   | 'build'
+  | 'code'
   | 'assess'
   | 'handoff'
   | 'release'

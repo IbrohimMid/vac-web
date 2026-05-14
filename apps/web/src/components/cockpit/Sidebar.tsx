@@ -17,6 +17,7 @@ interface PlaneNav {
 
 const PLANES: PlaneNav[] = [
   { id: 'build', label: 'Build', icon: 'build' },
+  { id: 'code', label: 'Code Workspace', icon: 'file-code' },
   { id: 'assess', label: 'Assess', icon: 'assess' },
   { id: 'handoff', label: 'Handoff', icon: 'handoff' },
   { id: 'release', label: 'Release', icon: 'release' },

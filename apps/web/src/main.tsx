@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles/tokens.css';
 import './styles/cockpit.css';
+import './styles/coding.css';
 import { BridgeStatus } from './app/BridgeStatus';
 import { PairingPrompt } from './app/PairingPrompt';
 import { BuildSurface } from './components/cockpit/BuildSurface';
@@ -38,6 +39,9 @@ const ReleaseTab = lazy(() =>
 );
 const ArchiveTab = lazy(() =>
   import('./components/Archive/ArchiveTab').then((m) => ({ default: m.ArchiveTab })),
+);
+const CodeWorkspace = lazy(() =>
+  import('./components/coding/CodeWorkspace').then((m) => ({ default: m.CodeWorkspace })),
 );
 
 import { registerApprovalHandlers } from './domain/approvals/handlers';
@@ -113,6 +117,15 @@ function App() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === '`') {
         e.preventDefault();
         useShell.getState().setOpen(!useShell.getState().open);
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'j') {
+        // Cmd/Ctrl+J: runtime drawer alias for Code Workspace (Phase 1).
+        e.preventDefault();
+        useShell.getState().setOpen(!useShell.getState().open);
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'b') {
+        // Cmd/Ctrl+B: toggle cockpit sidebar (Phase 1; also wired in WorkspaceTopbar for explorer).
+        e.preventDefault();
+        const c = useCockpit.getState();
+        c.setSidebarCollapsed(!c.sidebarCollapsed);
       }
     };
     window.addEventListener('keydown', handler);
@@ -241,6 +254,7 @@ function App() {
             }
           >
             {route === 'build' && <BuildSurface transport={transport} />}
+            {route === 'code' && <CodeWorkspace transport={transport} />}
             {route === 'assess' && (
               <SurfacePage
                 title="Readiness"

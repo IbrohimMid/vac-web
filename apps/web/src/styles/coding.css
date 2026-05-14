@@ -1,0 +1,215 @@
+/* Code Workspace layout — Phase 1 shell. */
+
+.codeworkspace {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg, #fff);
+  color: var(--fg, #111);
+}
+
+.codeworkspace-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  background: var(--bg-soft, #fafafa);
+  flex-wrap: wrap;
+}
+
+.codeworkspace-topbar .cw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--bg, #fff);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fg-muted, #6b7280);
+}
+
+.codeworkspace-topbar .cw-pill strong {
+  color: var(--fg, #111);
+  font-weight: 500;
+}
+
+.codeworkspace-topbar .cw-pill.status-ready {
+  border-color: var(--ok, #0fb6a8);
+  color: var(--ok, #0fb6a8);
+}
+
+.codeworkspace-topbar .cw-pill.status-blocked {
+  border-color: var(--warn, #d97706);
+  color: var(--warn, #d97706);
+}
+
+.codeworkspace-topbar .cw-spacer {
+  flex: 1;
+}
+
+.codeworkspace-topbar button {
+  background: transparent;
+  border: 1px solid var(--border, #e5e7eb);
+  color: var(--fg, #111);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.codeworkspace-topbar button:hover:not(:disabled) {
+  background: var(--bg-soft, #fafafa);
+}
+
+.codeworkspace-topbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.codeworkspace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 240px) minmax(0, 1fr) minmax(0, 320px);
+  gap: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.codeworkspace-body[data-explorer-collapsed='true'] {
+  grid-template-columns: 0 minmax(0, 1fr) minmax(0, 320px);
+}
+
+.codeworkspace-pane {
+  border-right: 1px solid var(--border, #e5e7eb);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.codeworkspace-pane:last-child {
+  border-right: none;
+}
+
+.codeworkspace-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted, #6b7280);
+  background: var(--bg-soft, #fafafa);
+}
+
+.codeworkspace-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.codeworkspace-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 12px;
+  border: 1px dashed var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  color: var(--fg-muted, #6b7280);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.codeworkspace-empty .cw-empty-title {
+  font-weight: 600;
+  color: var(--fg, #111);
+}
+
+.codeworkspace-empty .cw-empty-hint {
+  font-size: 12px;
+  color: var(--fg-muted, #6b7280);
+}
+
+.codeworkspace-unsupported {
+  margin-top: 4px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--warn-soft, #fef3c7);
+  color: var(--warn, #92400e);
+  border: 1px solid var(--warn, #fde68a);
+}
+
+.codeworkspace-link-btn {
+  background: transparent;
+  border: 1px solid var(--border, #e5e7eb);
+  color: var(--fg, #111);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.codeworkspace-link-btn:hover {
+  background: var(--bg-soft, #fafafa);
+}
+
+.codeworkspace-tablist {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.codeworkspace-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom-color: var(--border, #e5e7eb);
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--fg-muted, #6b7280);
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+}
+
+.codeworkspace-tab[aria-selected='true'] {
+  color: var(--fg, #111);
+  border: 1px solid var(--border, #e5e7eb);
+  border-bottom-color: var(--bg, #fff);
+  background: var(--bg, #fff);
+}
+
+.codeworkspace-tab[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 1023px) {
+  .codeworkspace-body {
+    grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
+  }
+  .codeworkspace-pane.codeworkspace-pane-agent {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .codeworkspace-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .codeworkspace-pane.codeworkspace-pane-explorer,
+  .codeworkspace-pane.codeworkspace-pane-agent {
+    display: none;
+  }
+}
