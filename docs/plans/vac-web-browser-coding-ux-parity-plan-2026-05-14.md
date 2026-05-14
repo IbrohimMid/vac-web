@@ -104,3 +104,35 @@ Phase 1 is a shell. True Solo/Trae-like parity still depends on Phase 2+ project
   - pnpm -F web typecheck - passing
   - pnpm -F web test -- src/components/coding src/stores --run - passing
   - git diff --check - clean
+
+---
+
+## Implementation log — Phase 2 (2026-05-14)
+
+**Status:** Frontend scaffold landed. Bridge contract documented in product spec; bridge implementation still pending and explicitly out of scope.
+
+**Files added:**
+- `apps/web/src/stores/project.ts` — tree + per-file state machine (`idle | requesting | loaded | empty | error | unsupported`).
+- `apps/web/src/stores/project.test.ts` — state transition coverage.
+- `apps/web/src/domain/project/handlers.ts` — subscribes to `project.tree.*` and `project.file.*`; exports `requestProjectTree` and `requestProjectFile` with timeout-to-unsupported fallback.
+- `apps/web/src/domain/project/handlers.test.ts` — event handling + timeout fallback + send-rejection cases.
+- `apps/web/src/components/coding/ProjectExplorer.tsx` — renders all six states truthfully; auto-issues `project.tree.request` on mount when idle + session + transport.
+- `apps/web/src/components/coding/ProjectExplorer.render.test.tsx` — render-state coverage.
+
+**Files modified:**
+- `apps/web/src/components/coding/CodeWorkspace.tsx` — replaced inline `ExplorerPane` with `<ProjectExplorer/>`; replaced inline JSX style with CSS class `codeworkspace-agent-actions`; refined AgentPane copy to "until later phases".
+- `apps/web/src/components/coding/CodeWorkspace.render.test.tsx` — pre-seeds `useProject` unsupported state for truthful-copy assertions; adds a new test asserting that `project.tree.request` is auto-issued on mount.
+- `apps/web/src/main.tsx` — registers `registerProjectHandlers(transport)` alongside other domain handlers.
+- `apps/web/src/styles/coding.css` — tree list styles + agent-actions wrapper.
+
+**Bridge contract (frontend side only; backend not implemented):**
+- Outbound: `project.tree.request { session_id, root? }`, `project.file.request { session_id, path }`.
+- Inbound: `project.tree.updated`, `project.tree.unsupported`, `project.tree.error`, `project.file.loaded`, `project.file.unsupported`, `project.file.error`.
+- Timeout fallback: 4s tree / 6s file. On timeout, state flips to `unsupported` with reason `"no response from bridge within timeout"`.
+
+**UX impact:** The Code Workspace explorer column now shows a brief "Requesting project tree..." state on mount, then falls back to the same truthful "Unavailable" copy. When the bridge later implements the contract, no frontend change is required — entries will populate automatically.
+
+**Residual risk:**
+- 4s timeout is a UX guess; cold-start bridge latency > 4s would briefly flash "Unavailable" before override.
+- No file actions wired yet (open / copy / ask agent / run test / reveal in review) — Phase 3+.
+- `useProject` singleton store is shared; session-switch reset is a TODO for Phase 3.

@@ -60,6 +60,7 @@ import { registerRegressionHandlers } from './domain/regression/handlers';
 import { registerNotifyHandlers } from './domain/notify/handlers';
 import { registerReviewHandlers } from './domain/review/handlers';
 import { registerRuntimeHandlers } from './domain/runtime/handlers';
+import { registerProjectHandlers } from './domain/project/handlers';
 import { registerSessionHandlers } from './domain/sessions/handlers';
 import { registerSessionHistoryHandlers } from './domain/sessions/history';
 import { registerTranscriptHandlers } from './domain/transcript/handlers';
@@ -186,6 +187,7 @@ function App() {
         offs.push(registerSessionHandlers(t));
         offs.push(registerSessionHistoryHandlers(t));
         offs.push(registerRuntimeHandlers(t));
+        offs.push(registerProjectHandlers(t));
         offs.push(registerConnectorHandlers(t));
         offs.push(registerAssessmentHandlers(t));
         offs.push(registerGateHandlers(t));

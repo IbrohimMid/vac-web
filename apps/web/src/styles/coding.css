@@ -213,3 +213,13 @@
     display: none;
   }
 }
+
+/* Phase 2: project explorer states + agent actions */
+.codeworkspace-tree { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
+.codeworkspace-tree-item { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; padding: 2px 8px; font-size: 12px; line-height: 18px; color: var(--fg, #111); cursor: default; }
+.codeworkspace-tree-item[data-type='directory'] { font-weight: 500; }
+.codeworkspace-tree-icon { font-size: 11px; }
+.codeworkspace-tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codeworkspace-tree-meta { font-variant-numeric: tabular-nums; color: var(--fg-muted, #6b7280); font-size: 10px; }
+.codeworkspace-agent-actions { display: flex; gap: 6px; margin-top: 4px; }
+.cw-empty-detail { opacity: 0.7; font-size: 11px; }

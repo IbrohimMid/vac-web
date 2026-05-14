@@ -158,3 +158,29 @@ Runtime drawer: passing validation snapshot.
 - All unsupported coding controls visibly disabled with truthful copy.
 - No fake file/editor/preview data.
 - Targeted vitest passes; typecheck clean; `git diff --check` clean.
+
+---
+
+## Phase 2 bridge contract (project tree + file)
+
+### Outbound (frontend → bridge)
+- `project.tree.request` — payload `{ session_id, root?: string }`.
+- `project.file.request` — payload `{ session_id, path: string }`.
+
+### Inbound (bridge → frontend)
+- `project.tree.updated` — payload `{ session_id, entries: Array<{ path: string; type: 'file' | 'directory'; size?: number }> }`.
+- `project.tree.unsupported` — payload `{ session_id, reason?: string }`.
+- `project.tree.error` — payload `{ session_id, message: string }`.
+- `project.file.loaded` — payload `{ session_id, path: string, content: string, encoding?: string, size?: number, truncated?: boolean }`.
+- `project.file.unsupported` — payload `{ session_id, path: string, reason?: string }`.
+- `project.file.error` — payload `{ session_id, path: string, message: string }`.
+
+### Timeout fallback
+If the bridge does not reply within 4 seconds (tree) or 6 seconds (file), the frontend treats the request as unsupported and renders truthful disabled copy.
+
+### Out of scope for Phase 2
+- Recursive subtree expansion (single flat root listing only).
+- File writes / direct browser editing (Phase 3+).
+- Reveal-in-review / per-file action menu (Phase 3+).
+- Binary or large-file (> 1 MB) preview policy beyond the `truncated` flag.
+- Cross-session tree caching.
