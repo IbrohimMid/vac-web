@@ -3,6 +3,7 @@ import type { TransportHandle } from '../../transport';
 import { useCockpit } from '../../stores/cockpit';
 import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
+import { CodePanel } from './CodePanel';
 import { ProjectExplorer } from './ProjectExplorer';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
@@ -21,15 +22,15 @@ export function CodeWorkspace({ transport }: Props) {
       <WorkspaceTopbar transport={transport} />
       <WorkspaceLayout
         explorer={<ProjectExplorer sessionId={sessionId} transport={transport} />}
-        center={<CenterPane tab={centerTab} setTab={setCenterTab} sessionId={sessionId} />}
+        center={<CenterPane tab={centerTab} setTab={setCenterTab} sessionId={sessionId} transport={transport} />}
         agent={<AgentPane onGoToBuild={goToBuild} onOpenShell={openShell} />}
       />
     </div>
   );
 }
 
-interface CenterPaneProps { tab: CenterTab; setTab(t: CenterTab): void; sessionId: string | null; }
-function CenterPane({ tab, setTab, sessionId }: CenterPaneProps) {
+interface CenterPaneProps { tab: CenterTab; setTab(t: CenterTab): void; sessionId: string | null; transport: TransportHandle | null; }
+function CenterPane({ tab, setTab, sessionId, transport }: CenterPaneProps) {
   return (
     <>
       <header className="codeworkspace-pane-header">
@@ -40,13 +41,7 @@ function CenterPane({ tab, setTab, sessionId }: CenterPaneProps) {
         </span>
       </header>
       <div className="codeworkspace-pane-body" role="tabpanel" aria-label={`Center pane: ${tab}`}>
-        {tab === 'code' && (
-          <div className="codeworkspace-empty" data-testid="code-center-empty">
-            <span className="cw-empty-title">{sessionId ? 'Start with a task or open a file.' : 'No session'}</span>
-            <span className="cw-empty-hint">File viewing arrives in Phase 2. Code panel actions land in Phase 3.</span>
-            <span className="codeworkspace-unsupported">Unavailable: direct browser editing is not wired yet.</span>
-          </div>
-        )}
+        {tab === 'code' && (<CodePanel sessionId={sessionId} transport={transport} />)}
         {tab === 'diff' && (
           <div className="codeworkspace-empty" data-testid="code-center-diff">
             <span className="cw-empty-title">Diff viewer</span>

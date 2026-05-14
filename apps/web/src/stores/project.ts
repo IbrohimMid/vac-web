@@ -1,20 +1,9 @@
-// Project tree + file state for the Code Workspace (Phase 2).
+// Project tree + file state for the Code Workspace (Phases 2-3).
 //
-// Owns the frontend-side state machine for project browsing. The bridge
-// contract is one-way request/response over the existing transport:
-//   Outbound:  project.tree.request    { session_id, root? }
-//              project.file.request    { session_id, path }
-//   Inbound:   project.tree.updated    { session_id, entries }
-//              project.tree.unsupported{ session_id, reason? }
-//              project.tree.error      { session_id, message }
-//              project.file.loaded     { session_id, path, content, encoding?, size?, truncated? }
-//              project.file.unsupported{ session_id, path, reason? }
-//              project.file.error      { session_id, path, message }
-//
-// Phase 2 ships the frontend half only. If no bridge response arrives
-// within the request timeout (see domain/project/handlers.ts), the tree
-// status falls back to 'unsupported' so the UI shows the truthful copy
-// 'Unavailable: bridge does not support project file browsing yet.'.
+// Phase 2 added the tree/file state machine.
+// Phase 3 adds selection state (selectedFilePath + selectedLines) so the
+// Code Workspace center pane can render a CodePanel and dispatch
+// file-level agent actions (see domain/coding/context.ts).
 
 import { create } from 'zustand';
 
@@ -50,12 +39,19 @@ export interface ProjectFile {
   loadedAt?: string | undefined;
 }
 
+export interface ProjectSelection {
+  start: number;
+  end: number;
+}
+
 interface ProjectSlice {
   treeStatus: ProjectTreeStatus;
   entries: ProjectEntry[];
   treeError: string | null;
   treeRequestedAt: string | null;
   files: Record<string, ProjectFile>;
+  selectedFilePath: string | null;
+  selectedLines: ProjectSelection | null;
   beginTreeRequest(): void;
   setTreeLoaded(entries: ProjectEntry[]): void;
   setTreeUnsupported(reason?: string | null): void;
@@ -64,6 +60,9 @@ interface ProjectSlice {
   setFileLoaded(file: Omit<ProjectFile, 'status' | 'loadedAt'>): void;
   setFileUnsupported(path: string, reason?: string | null): void;
   setFileError(path: string, message: string): void;
+  selectPath(path: string | null): void;
+  selectLines(range: ProjectSelection | null): void;
+  clearSelection(): void;
   resetAll(): void;
 }
 
@@ -73,6 +72,8 @@ export const useProject = create<ProjectSlice>((set) => ({
   treeError: null,
   treeRequestedAt: null,
   files: {},
+  selectedFilePath: null,
+  selectedLines: null,
   beginTreeRequest() {
     set({
       treeStatus: 'requesting',
@@ -150,6 +151,15 @@ export const useProject = create<ProjectSlice>((set) => ({
       },
     }));
   },
+  selectPath(path) {
+    set({ selectedFilePath: path, selectedLines: null });
+  },
+  selectLines(range) {
+    set({ selectedLines: range });
+  },
+  clearSelection() {
+    set({ selectedFilePath: null, selectedLines: null });
+  },
   resetAll() {
     set({
       treeStatus: 'idle',
@@ -157,6 +167,8 @@ export const useProject = create<ProjectSlice>((set) => ({
       treeError: null,
       treeRequestedAt: null,
       files: {},
+      selectedFilePath: null,
+      selectedLines: null,
     });
   },
 }));

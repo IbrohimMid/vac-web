@@ -84,13 +84,40 @@ describe('useProject', () => {
     expect(f.errorMessage).toBe('read fail');
   });
 
-  it('resetAll clears tree and files', () => {
+  it('selectPath sets the selected file and clears any prior line selection', () => {
+    useProject.getState().selectLines({ start: 1, end: 2 });
+    useProject.getState().selectPath('src/a.ts');
+    const s = useProject.getState();
+    expect(s.selectedFilePath).toBe('src/a.ts');
+    expect(s.selectedLines).toBeNull();
+  });
+
+  it('selectLines stores the range', () => {
+    useProject.getState().selectPath('src/a.ts');
+    useProject.getState().selectLines({ start: 3, end: 7 });
+    expect(useProject.getState().selectedLines).toEqual({ start: 3, end: 7 });
+  });
+
+  it('clearSelection wipes path and lines', () => {
+    useProject.getState().selectPath('src/a.ts');
+    useProject.getState().selectLines({ start: 1, end: 2 });
+    useProject.getState().clearSelection();
+    const s = useProject.getState();
+    expect(s.selectedFilePath).toBeNull();
+    expect(s.selectedLines).toBeNull();
+  });
+
+  it('resetAll clears tree, files, and selection', () => {
     useProject.getState().beginTreeRequest();
     useProject.getState().beginFileRequest('a');
+    useProject.getState().selectPath('a');
+    useProject.getState().selectLines({ start: 1, end: 2 });
     useProject.getState().resetAll();
     const s = useProject.getState();
     expect(s.treeStatus).toBe('idle');
     expect(s.entries.length).toBe(0);
     expect(Object.keys(s.files).length).toBe(0);
+    expect(s.selectedFilePath).toBeNull();
+    expect(s.selectedLines).toBeNull();
   });
 });
