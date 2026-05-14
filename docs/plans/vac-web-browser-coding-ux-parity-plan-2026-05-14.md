@@ -84,3 +84,13 @@ Phase 1 is a shell. True Solo/Trae-like parity still depends on Phase 2+ project
 - `pnpm -F web test -- src/components/coding src/stores --run` — passing.
 - `pnpm -F web typecheck` — passing.
 - `git diff --check` — clean.
+
+## Hotfix - 2026-05-14
+
+- Initial Phase 1 commit `43d1934 Add code workspace shell` introduced a JSX syntax error in `apps/web/src/components/coding/CodeWorkspace.tsx` because the heredoc expansion stripped a double-brace `style= ... ` expression. typecheck and vitest were red.
+- Hotfix repairs the style attribute (`<div style= display: 'flex', gap: 6 >`).
+- Validation after hotfix (no tail piping, exit codes propagate):
+  - `df -h .` ok
+  - `pnpm -F web typecheck` - passing
+  - `pnpm -F web test -- src/components/coding src/stores --run` - passing
+  - `git diff --check` - clean
