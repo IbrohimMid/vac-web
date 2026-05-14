@@ -219,3 +219,12 @@ Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` 
 - Validation target: `pnpm -F web typecheck`, targeted task/coding tests, and `git diff --check` before commit.
 - UX impact: users can understand task progress and next actions from Code Workspace instead of inferring from scattered logs.
 - Residual risk: task lifecycle backend contracts are not fully implemented; existing Approval/Review/Runtime surfaces remain authoritative.
+
+## Implementation log — Phase 6 (2026-05-14)
+- Added frontend-only review queue and hunk workflow scaffold with `ReviewQueue`, review action helpers, risk labels, unified diff hunk parsing, and Code Workspace Diff tab integration.
+- Diff tab now shows changed files grouped by file, risk labels, audit metadata, lazy-loaded hunk summaries when diff body is available, and truthful disabled state when bridge/session is unavailable.
+- Added outbound request helpers for file revert and hunk rework/revert via `review.revert_file` and `review.hunk.action.request`.
+- Added helper and render tests for hunk parsing, risk classification, outbound payloads, empty/unloaded states, and hunk/file actions.
+- Validation target: `pnpm -F web typecheck`, targeted review/coding tests, and `git diff --check` before commit.
+- UX impact: users can review changes by file and hunk from the coding workspace instead of jumping immediately to a generic diff list.
+- Residual risk: hunk actions remain frontend request scaffolds until bridge/runtime patch support is authoritative; full Review surface remains source of truth.

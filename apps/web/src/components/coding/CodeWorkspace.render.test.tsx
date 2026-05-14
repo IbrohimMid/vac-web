@@ -54,7 +54,7 @@ describe('CodeWorkspace shell', () => {
     const previewTab = screen.getByRole('tab', { name: 'Preview' });
     fireEvent.click(diffTab);
     expect(diffTab).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByTestId('code-center-diff')).toBeInTheDocument();
+    expect(screen.getByTestId('review-queue-empty')).toBeInTheDocument();
     fireEvent.click(previewTab);
     expect(previewTab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('preview-panel')).toBeInTheDocument();

@@ -7,6 +7,7 @@ import { CodePanel } from './CodePanel';
 import { ProjectExplorer } from './ProjectExplorer';
 import { TaskBoard } from './TaskBoard';
 import { PreviewPanel } from './PreviewPanel';
+import { ReviewQueue } from './ReviewQueue';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
 
@@ -44,13 +45,7 @@ function CenterPane({ tab, setTab, sessionId, transport }: CenterPaneProps) {
       </header>
       <div className="codeworkspace-pane-body" role="tabpanel" aria-label={`Center pane: ${tab}`}>
         {tab === 'code' && (<CodePanel sessionId={sessionId} transport={transport} />)}
-        {tab === 'diff' && (
-          <div className="codeworkspace-empty" data-testid="code-center-diff">
-            <span className="cw-empty-title">Diff viewer</span>
-            <span className="cw-empty-hint">Hunk-level review arrives in Phase 6. Use the Build surface Review tab for the current diff workflow.</span>
-            <span className="codeworkspace-unsupported">Unavailable: file/hunk review here is not wired yet.</span>
-          </div>
-        )}
+        {tab === 'diff' && (<ReviewQueue transport={transport} />)}
         {tab === 'preview' && (<PreviewPanel sessionId={sessionId} transport={transport} />)}
       </div>
     </>

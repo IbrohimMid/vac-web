@@ -375,3 +375,21 @@
 .codeworkspace-task-validation[data-status='passed'] { color: var(--success); border-color: var(--success); }
 .codeworkspace-task-validation[data-status='failed'] { color: var(--warn); border-color: var(--warn); }
 .codeworkspace-task-truth { margin: 0; }
+
+/* Phase 6 - Review queue / hunk workflow. */
+.codeworkspace-reviewqueue { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg-panel, var(--bg)); overflow: auto; }
+.codeworkspace-reviewqueue-header { display: flex; align-items: flex-start; gap: 8px; justify-content: space-between; }
+.codeworkspace-reviewqueue-header > div { display: flex; flex-direction: column; gap: 2px; }
+.codeworkspace-reviewqueue-list { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.codeworkspace-reviewqueue-file { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg-sunken); }
+.codeworkspace-reviewqueue-file-header { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; }
+.codeworkspace-reviewqueue-path { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.codeworkspace-reviewqueue-path strong { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codeworkspace-reviewqueue-path span { font-size: 11px; color: var(--fg-muted); }
+.codeworkspace-reviewqueue-labels { display: flex; gap: 5px; flex-wrap: wrap; }
+.codeworkspace-reviewqueue-label { border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; font-size: 10px; color: var(--fg-muted); background: var(--bg); }
+.codeworkspace-reviewqueue-hunks { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.codeworkspace-reviewqueue-hunk { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; font-size: 12px; }
+.codeworkspace-reviewqueue-hunk > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.codeworkspace-reviewqueue-hunk-actions { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.codeworkspace-reviewqueue-truth { margin: 0; }
