@@ -49,3 +49,29 @@ UX impact:
 Residual risk:
 - A monitored private conduct contact is still not configured in-repo. The current copy is intentionally honest rather than inventing a fake address.
 - Security disclosure depends on GitHub Security Advisories being enabled/available for the repository.
+
+## Final validation — 2026-05-14
+
+Status: all tracked findings are complete through Phase 7 and the final validation suite passed locally after clippy cleanup.
+
+Final validation HEAD before this documentation note: `c3ce1cf`.
+
+Validation:
+- `df -h .`: checked before validation; root filesystem had about 19G available.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo test --workspace`: passed.
+- `pnpm -F web typecheck`: passed.
+- `pnpm -F web test -- --run`: passed.
+- `./scripts/verify-codegen.sh`: passed.
+- `git diff --check`: passed.
+
+UX impact:
+- Phase 6 makes the assessment cockpit validation path truthful and accessible: wrong preview-server reuse is blocked, mock bridge coverage exercises the production bundle, and worker-output contract failures surface in the matching report detail.
+- Phase 7 removes fake reporting addresses so security and conduct reporters are not sent to unmonitored placeholder inboxes.
+- Security disclosure now points to the real GitHub Security Advisories path, while conduct reporting copy is honest about the lack of a private monitored inbox.
+
+Residual risk:
+- GitHub Security Advisories must remain enabled and reachable for private vulnerability intake.
+- A monitored private conduct contact is still not configured; the docs intentionally state that limitation rather than inventing a contact.
+- E2E mock bridge ordering remains deterministic test coverage; production bridge/runtime ordering should continue to be covered by runtime/integration tests as the bridge evolves.
