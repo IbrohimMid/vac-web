@@ -52,6 +52,7 @@ describe('CodeWorkspace shell', () => {
     render(<CodeWorkspace transport={transport} />);
     const diffTab = screen.getByRole('tab', { name: 'Diff' });
     const previewTab = screen.getByRole('tab', { name: 'Preview' });
+    const validationTab = screen.getByRole('tab', { name: 'Validation' });
     fireEvent.click(diffTab);
     expect(diffTab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('review-queue-empty')).toBeInTheDocument();
@@ -59,6 +60,9 @@ describe('CodeWorkspace shell', () => {
     expect(previewTab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('preview-panel')).toBeInTheDocument();
     expect(screen.getByText(/preview bridge support is not confirmed/i)).toBeInTheDocument();
+    fireEvent.click(validationTab);
+    expect(validationTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('validation-panel')).toBeInTheDocument();
   });
 
   it('routes back to Build surface from the agent placeholder', () => {

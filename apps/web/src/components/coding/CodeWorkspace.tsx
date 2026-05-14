@@ -8,11 +8,12 @@ import { ProjectExplorer } from './ProjectExplorer';
 import { TaskBoard } from './TaskBoard';
 import { PreviewPanel } from './PreviewPanel';
 import { ReviewQueue } from './ReviewQueue';
+import { ValidationPanel } from './ValidationPanel';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
 
 interface Props { transport: TransportHandle | null; }
-type CenterTab = 'code' | 'diff' | 'preview';
+type CenterTab = 'code' | 'diff' | 'preview' | 'validation';
 
 export function CodeWorkspace({ transport }: Props) {
   const sessionId = useSession((s) => s.sessionId);
@@ -41,12 +42,14 @@ function CenterPane({ tab, setTab, sessionId, transport }: CenterPaneProps) {
           <button type="button" className="codeworkspace-tab" role="tab" aria-selected={tab === 'code'} onClick={() => setTab('code')}>Code</button>
           <button type="button" className="codeworkspace-tab" role="tab" aria-selected={tab === 'diff'} onClick={() => setTab('diff')}>Diff</button>
           <button type="button" className="codeworkspace-tab" role="tab" aria-selected={tab === 'preview'} onClick={() => setTab('preview')}>Preview</button>
+          <button type="button" className="codeworkspace-tab" role="tab" aria-selected={tab === 'validation'} onClick={() => setTab('validation')}>Validation</button>
         </span>
       </header>
       <div className="codeworkspace-pane-body" role="tabpanel" aria-label={`Center pane: ${tab}`}>
         {tab === 'code' && (<CodePanel sessionId={sessionId} transport={transport} />)}
         {tab === 'diff' && (<ReviewQueue transport={transport} />)}
         {tab === 'preview' && (<PreviewPanel sessionId={sessionId} transport={transport} />)}
+        {tab === 'validation' && (<ValidationPanel transport={transport} />)}
       </div>
     </>
   );

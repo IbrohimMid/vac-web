@@ -393,3 +393,25 @@
 .codeworkspace-reviewqueue-hunk > div:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .codeworkspace-reviewqueue-hunk-actions { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
 .codeworkspace-reviewqueue-truth { margin: 0; }
+
+/* Phase 7 - Validation command center. */
+.codeworkspace-validation { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg-panel, var(--bg)); overflow: auto; }
+.codeworkspace-validation-header { display: flex; gap: 8px; justify-content: space-between; align-items: flex-start; }
+.codeworkspace-validation-header > div { display: flex; flex-direction: column; gap: 2px; }
+.codeworkspace-validation-grid { display: grid; grid-template-columns: minmax(180px, 0.9fr) minmax(180px, 0.9fr) minmax(220px, 1.2fr); gap: 10px; min-height: 0; }
+.codeworkspace-validation-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg-sunken); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.codeworkspace-validation-presets { display: flex; flex-direction: column; gap: 6px; }
+.codeworkspace-validation-preset { text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; gap: 4px; }
+.codeworkspace-validation-preset code, .codeworkspace-validation-selected code { font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+.codeworkspace-validation-preset em { font-style: normal; color: var(--warn); font-size: 10px; }
+.codeworkspace-validation-runs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.codeworkspace-validation-run button { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg); color: var(--fg); }
+.codeworkspace-validation-run[data-status='passed'] button { border-color: var(--success); }
+.codeworkspace-validation-run[data-status='failed'] button { border-color: var(--warn); }
+.codeworkspace-validation-selected { display: flex; flex-direction: column; gap: 7px; }
+.codeworkspace-validation-status { width: max-content; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; font-size: 11px; }
+.codeworkspace-validation-selected[data-status='passed'] .codeworkspace-validation-status { color: var(--success); border-color: var(--success); }
+.codeworkspace-validation-selected[data-status='failed'] .codeworkspace-validation-status { color: var(--warn); border-color: var(--warn); }
+.codeworkspace-validation-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.codeworkspace-validation-truth { margin: 0; }
+@media (max-width: 1100px) { .codeworkspace-validation-grid { grid-template-columns: 1fr; } }

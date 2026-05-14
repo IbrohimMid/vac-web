@@ -63,6 +63,7 @@ import { registerRuntimeHandlers } from './domain/runtime/handlers';
 import { registerProjectHandlers } from './domain/project/handlers';
 import { registerTaskHandlers } from './domain/tasks/handlers';
 import { registerPreviewHandlers } from './domain/preview/handlers';
+import { registerValidationHandlers } from './domain/validation/handlers';
 import { registerSessionHandlers } from './domain/sessions/handlers';
 import { registerSessionHistoryHandlers } from './domain/sessions/history';
 import { registerTranscriptHandlers } from './domain/transcript/handlers';
@@ -192,6 +193,7 @@ function App() {
         offs.push(registerProjectHandlers(t));
         offs.push(registerPreviewHandlers(t));
         offs.push(registerTaskHandlers(t));
+        offs.push(registerValidationHandlers(t));
         offs.push(registerConnectorHandlers(t));
         offs.push(registerAssessmentHandlers(t));
         offs.push(registerGateHandlers(t));
