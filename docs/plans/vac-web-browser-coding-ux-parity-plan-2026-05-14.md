@@ -196,3 +196,17 @@ Modified:
 ### Status
 
 Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` events deferred.
+
+## Implementation log — Phase 3 catch-up (2026-05-14)
+- Corrected the repo-local mirror for the real Phase 3 delivery: `9eda9b4` wired `CodePanel`, file selection state, file/selection context actions, and project-file request fallbacks after the earlier docs-only marker.
+- Validation remained green for the Phase 3 scope before Phase 4 started.
+- UX impact: users can now select files, inspect contents, copy paths, and send file or selection context to the agent instead of relying on placeholder copy.
+- Residual risk: bridge-side project browsing can still be unsupported, so the UI intentionally shows truthful unavailable states when events do not arrive.
+
+## Implementation log — Phase 4 (2026-05-14)
+- Added frontend-only browser preview scaffolding with `usePreview`, preview event handlers, and `PreviewPanel` wired into the Code Workspace preview tab.
+- Added loopback-only URL validation, iframe sandboxing, no-referrer policy, capped console/network diagnostics, explicit Send context, Refresh, Stop, Copy URL, and Run e2e toolbar actions.
+- Added store, handler, and render tests for state transitions, timeout fallback, URL guard, diagnostics, and preview UI states.
+- Validation target: `pnpm -F web typecheck`, targeted preview/coding tests, and `git diff --check` before commit.
+- UX impact: users see a real preview surface and honest unsupported/fallback messaging while backend `workspace.preview.*` bridge support remains out of scope.
+- Residual risk: no live backend browser bridge is implemented in this phase, so preview start/refresh can still fall back to unsupported until bridge events are added.

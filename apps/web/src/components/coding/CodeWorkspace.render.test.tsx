@@ -57,7 +57,8 @@ describe('CodeWorkspace shell', () => {
     expect(screen.getByTestId('code-center-diff')).toBeInTheDocument();
     fireEvent.click(previewTab);
     expect(previewTab).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/preview context capture is not wired yet/i)).toBeInTheDocument();
+    expect(screen.getByTestId('preview-panel')).toBeInTheDocument();
+    expect(screen.getByText(/preview bridge support is not confirmed/i)).toBeInTheDocument();
   });
 
   it('routes back to Build surface from the agent placeholder', () => {

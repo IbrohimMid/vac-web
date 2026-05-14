@@ -5,6 +5,7 @@ import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
 import { CodePanel } from './CodePanel';
 import { ProjectExplorer } from './ProjectExplorer';
+import { PreviewPanel } from './PreviewPanel';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
 
@@ -49,13 +50,7 @@ function CenterPane({ tab, setTab, sessionId, transport }: CenterPaneProps) {
             <span className="codeworkspace-unsupported">Unavailable: file/hunk review here is not wired yet.</span>
           </div>
         )}
-        {tab === 'preview' && (
-          <div className="codeworkspace-empty" data-testid="code-center-preview">
-            <span className="cw-empty-title">App preview</span>
-            <span className="cw-empty-hint">Preview panel arrives in Phase 4.</span>
-            <span className="codeworkspace-unsupported">Unavailable: preview context capture is not wired yet.</span>
-          </div>
-        )}
+        {tab === 'preview' && (<PreviewPanel sessionId={sessionId} transport={transport} />)}
       </div>
     </>
   );

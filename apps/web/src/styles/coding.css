@@ -328,3 +328,22 @@
   color: var(--warn);
   margin-left: 6px;
 }
+
+/* Phase 4 - Preview panel. */
+.codeworkspace-preview { display: flex; flex-direction: column; min-height: 0; height: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg-panel, var(--bg)); }
+.codeworkspace-preview-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg-sunken); }
+.codeworkspace-preview-title { font-weight: 600; font-size: 13px; }
+.codeworkspace-preview-status { font-size: 11px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--fg-muted); }
+.codeworkspace-preview-status[data-status='running'] { color: var(--success); border-color: var(--success); }
+.codeworkspace-preview-status[data-status='failed'], .codeworkspace-preview-status[data-status='unsupported'] { color: var(--warn); border-color: var(--warn); }
+.codeworkspace-preview-url { max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono, ui-monospace, monospace); color: var(--fg-muted); }
+.codeworkspace-preview-notice { margin: 0; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--line); color: var(--fg-muted); }
+.codeworkspace-preview-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 12px; }
+.codeworkspace-preview-setup { display: flex; flex-direction: column; gap: 10px; }
+.codeworkspace-preview-frame { width: 100%; height: 100%; min-height: 420px; flex: 1; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.codeworkspace-preview-form { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.codeworkspace-preview-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+.codeworkspace-preview-form input { min-width: 260px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.codeworkspace-preview-form input[aria-invalid='true'] { border-color: var(--warn); }
+.codeworkspace-preview-error { font-size: 12px; color: var(--warn); }
+.codeworkspace-preview-console { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--fg-muted); background: var(--bg-sunken); }
