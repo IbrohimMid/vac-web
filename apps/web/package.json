@@ -13,7 +13,8 @@
     "size": "size-limit",
     "e2e": "playwright test --project=chromium",
     "e2e:install": "playwright install chromium",
-    "perf:driver": "playwright test --project=perf"
+    "perf:driver": "playwright test --project=perf",
+    "test:e2e": "pnpm run e2e"
   },
   "size-limit": [
     {

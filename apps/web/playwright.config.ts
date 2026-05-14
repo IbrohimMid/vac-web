@@ -3,6 +3,9 @@ import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const configDir = dirname(fileURLToPath(import.meta.url))
+const e2ePort = Number(process.env.VAC_WEB_E2E_PORT ?? 4173)
+const e2eBaseURL = `http://127.0.0.1:${e2ePort}`
+const reuseExistingServer = !process.env.CI && !process.env.VAC_WEB_E2E_PORT
 
 /**
  * Playwright config for the web cockpit end-to-end suite.
@@ -31,7 +34,7 @@ export default defineConfig({
 	workers: 1,
 	reporter: process.env.CI ? [['github'], ['list']] : 'list',
 	use: {
-		baseURL: 'http://127.0.0.1:4173',
+		baseURL: e2eBaseURL,
 		trace: 'on-first-retry',
 		video: 'retain-on-failure',
 		screenshot: 'only-on-failure',
@@ -55,10 +58,10 @@ export default defineConfig({
 	webServer: {
 		// Build first so we exercise the production bundle (matches what
 		// shows up in size-limit + size budgets).
-		command: 'pnpm exec vite build && pnpm exec vite preview --port 4173 --strictPort',
-		url: 'http://127.0.0.1:4173',
+		command: `pnpm exec vite build && pnpm exec vite preview --port ${e2ePort} --strictPort`,
+		url: e2eBaseURL,
 		cwd: configDir,
-		reuseExistingServer: !process.env.CI,
+		reuseExistingServer,
 		timeout: 120_000,
 		stdout: 'pipe',
 		stderr: 'pipe',

@@ -64,6 +64,7 @@ import { overlayRegistry } from './overlays/overlay-registry';
 import { useCockpit } from './stores/cockpit';
 import { useOverlays } from './stores/overlays';
 import { useShell } from './stores/shell';
+import { useSession } from './stores/session';
 import { createTransport, type TransportHandle } from './transport';
 import { createRelayTransport, parseRelayParamsFromLocation } from './transport/relay';
 
@@ -74,7 +75,11 @@ declare global {
 }
 
 function App() {
-  const [paired, setPaired] = useState(false);
+  // The Playwright and perf harnesses inject a deterministic mock bridge URL
+  // before React mounts. Treat that explicit hook as already paired so the
+  // production bundle can exercise the cockpit without driving the human
+  // pairing form; normal users still start from PairingPrompt.
+  const [paired, setPaired] = useState(() => typeof window.__vacBridgeOverride === 'string');
   const [transport, setTransport] = useState<TransportHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tweaksOpen, setTweaksOpen] = useState(false);
@@ -178,6 +183,12 @@ function App() {
         offs.push(registerWorkflowHandlers(t));
         offs.push(registerExtensionsHandlers(t));
         offs.push(registerPerfHandlers(t));
+        if (typeof window.__vacBridgeOverride === 'string' && !useSession.getState().sessionId) {
+          // E2E/perf mock bridges bypass the human pairing/session picker. Give
+          // cockpit surfaces a deterministic current session so they can issue
+          // assessment.* commands through the injected bridge.
+          useSession.getState().setSession('sess-mock-1', 'mock', '/tmp/demo-project');
+        }
         setTransport(t);
       } catch (e) {
         setError(String(e));
