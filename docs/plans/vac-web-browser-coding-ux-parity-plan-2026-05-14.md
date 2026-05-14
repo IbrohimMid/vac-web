@@ -94,3 +94,13 @@ Phase 1 is a shell. True Solo/Trae-like parity still depends on Phase 2+ project
   - `pnpm -F web typecheck` - passing
   - `pnpm -F web test -- src/components/coding src/stores --run` - passing
   - `git diff --check` - clean
+
+## Hotfix amendment - 2026-05-14
+
+- Commit 4cb8359 'Fix code workspace shell JSX syntax' was effectively a no-op: the upstream tooling pipeline stripped the literal double-brace JSX expression delimiters from the patch payload, so line 199 remained broken. Only the mirror doc changed in that commit.
+- This commit reapplies the real fix by rebuilding the JSX style expression with String.fromCharCode so the double-brace delimiters reach disk verbatim.
+- Validation after real fix (no piping, exit codes propagate, single set -e bash step):
+  - df -h . ok
+  - pnpm -F web typecheck - passing
+  - pnpm -F web test -- src/components/coding src/stores --run - passing
+  - git diff --check - clean

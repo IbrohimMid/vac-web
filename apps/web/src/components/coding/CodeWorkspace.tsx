@@ -196,7 +196,7 @@ function AgentPane({ onGoToBuild, onOpenShell }: AgentPaneProps) {
             Phase 1 ships only the workspace shell. Use the Build surface for
             the live agent thread until Phase 2 wires file context here.
           </span>
-          <div style= display: 'flex', gap: 6 >
+          <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
               className="codeworkspace-link-btn"
