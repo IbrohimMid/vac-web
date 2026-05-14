@@ -61,6 +61,7 @@ import { registerNotifyHandlers } from './domain/notify/handlers';
 import { registerReviewHandlers } from './domain/review/handlers';
 import { registerRuntimeHandlers } from './domain/runtime/handlers';
 import { registerProjectHandlers } from './domain/project/handlers';
+import { registerTaskHandlers } from './domain/tasks/handlers';
 import { registerPreviewHandlers } from './domain/preview/handlers';
 import { registerSessionHandlers } from './domain/sessions/handlers';
 import { registerSessionHistoryHandlers } from './domain/sessions/history';
@@ -190,6 +191,7 @@ function App() {
         offs.push(registerRuntimeHandlers(t));
         offs.push(registerProjectHandlers(t));
         offs.push(registerPreviewHandlers(t));
+        offs.push(registerTaskHandlers(t));
         offs.push(registerConnectorHandlers(t));
         offs.push(registerAssessmentHandlers(t));
         offs.push(registerGateHandlers(t));

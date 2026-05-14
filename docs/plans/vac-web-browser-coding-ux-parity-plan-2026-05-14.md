@@ -210,3 +210,12 @@ Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` 
 - Validation target: `pnpm -F web typecheck`, targeted preview/coding tests, and `git diff --check` before commit.
 - UX impact: users see a real preview surface and honest unsupported/fallback messaging while backend `workspace.preview.*` bridge support remains out of scope.
 - Residual risk: no live backend browser bridge is implemented in this phase, so preview start/refresh can still fall back to unsupported until bridge events are added.
+
+## Implementation log — Phase 5 (2026-05-14)
+- Added frontend-only task lifecycle scaffold with `useTasks`, `registerTaskHandlers`, outbound task action helpers, and `TaskBoard` wired into the Code Workspace right pane.
+- Task states now cover draft, planned, awaiting approval, executing, blocked, reviewing, validating, ready to ship, completed, and failed.
+- TaskBoard summarizes plan checklist, active step, changed files, commands, approval count, validation state, blocker/error messages, and routes users back to existing Build/Review/Approval source-of-truth surfaces.
+- Added store, handler, and render tests for lifecycle transitions, malformed events, outbound actions, and UI states.
+- Validation target: `pnpm -F web typecheck`, targeted task/coding tests, and `git diff --check` before commit.
+- UX impact: users can understand task progress and next actions from Code Workspace instead of inferring from scattered logs.
+- Residual risk: task lifecycle backend contracts are not fully implemented; existing Approval/Review/Runtime surfaces remain authoritative.

@@ -347,3 +347,31 @@
 .codeworkspace-preview-form input[aria-invalid='true'] { border-color: var(--warn); }
 .codeworkspace-preview-error { font-size: 12px; color: var(--warn); }
 .codeworkspace-preview-console { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 11px; color: var(--fg-muted); background: var(--bg-sunken); }
+
+/* Phase 5 - Task lifecycle board. */
+.codeworkspace-taskboard { display: flex; flex-direction: column; gap: 10px; min-height: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg-panel, var(--bg)); }
+.codeworkspace-taskboard-header { display: flex; align-items: flex-start; gap: 8px; justify-content: space-between; }
+.codeworkspace-task-title { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.codeworkspace-task-status { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--fg-muted); text-transform: lowercase; }
+.codeworkspace-task-status[data-status='executing'], .codeworkspace-task-status[data-status='validating'] { color: var(--info); border-color: var(--info); }
+.codeworkspace-task-status[data-status='awaiting_approval'], .codeworkspace-task-status[data-status='blocked'] { color: var(--warn); border-color: var(--warn); }
+.codeworkspace-task-status[data-status='ready_to_ship'], .codeworkspace-task-status[data-status='completed'] { color: var(--success); border-color: var(--success); }
+.codeworkspace-task-status[data-status='failed'] { color: var(--danger, var(--warn)); border-color: var(--danger, var(--warn)); }
+.codeworkspace-task-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.codeworkspace-task-chip { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg-muted); padding: 3px 8px; font-size: 11px; cursor: pointer; }
+.codeworkspace-task-chip[aria-pressed='true'] { color: var(--fg); background: var(--bg-sunken); }
+.codeworkspace-task-summary { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.codeworkspace-task-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; font-size: 11px; color: var(--fg-muted); }
+.codeworkspace-task-plan { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.codeworkspace-task-plan li { font-size: 12px; color: var(--fg-muted); }
+.codeworkspace-task-plan li[data-active='true'] { color: var(--fg); font-weight: 600; }
+.codeworkspace-task-plan li[data-status='done'] { text-decoration: line-through; opacity: 0.7; }
+.codeworkspace-task-artifacts { display: grid; gap: 8px; }
+.codeworkspace-task-artifact-list { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--fg-muted); }
+.codeworkspace-task-artifact-list ul { margin: 0; padding-left: 16px; }
+.codeworkspace-task-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.codeworkspace-task-blocker { margin: 0; padding: 6px 8px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); background: var(--warn-soft, #fef3c7); font-size: 12px; }
+.codeworkspace-task-validation { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; color: var(--fg-muted); }
+.codeworkspace-task-validation[data-status='passed'] { color: var(--success); border-color: var(--success); }
+.codeworkspace-task-validation[data-status='failed'] { color: var(--warn); border-color: var(--warn); }
+.codeworkspace-task-truth { margin: 0; }

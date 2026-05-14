@@ -5,6 +5,7 @@ import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
 import { CodePanel } from './CodePanel';
 import { ProjectExplorer } from './ProjectExplorer';
+import { TaskBoard } from './TaskBoard';
 import { PreviewPanel } from './PreviewPanel';
 import { WorkspaceLayout } from './WorkspaceLayout';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
@@ -24,7 +25,7 @@ export function CodeWorkspace({ transport }: Props) {
       <WorkspaceLayout
         explorer={<ProjectExplorer sessionId={sessionId} transport={transport} />}
         center={<CenterPane tab={centerTab} setTab={setCenterTab} sessionId={sessionId} transport={transport} />}
-        agent={<AgentPane onGoToBuild={goToBuild} onOpenShell={openShell} />}
+        agent={<AgentPane sessionId={sessionId} transport={transport} onGoToBuild={goToBuild} onOpenShell={openShell} />}
       />
     </div>
   );
@@ -56,19 +57,16 @@ function CenterPane({ tab, setTab, sessionId, transport }: CenterPaneProps) {
   );
 }
 
-interface AgentPaneProps { onGoToBuild(): void; onOpenShell(): void; }
-function AgentPane({ onGoToBuild, onOpenShell }: AgentPaneProps) {
+interface AgentPaneProps { sessionId: string | null; transport: TransportHandle | null; onGoToBuild(): void; onOpenShell(): void; }
+function AgentPane({ sessionId, transport, onGoToBuild, onOpenShell }: AgentPaneProps) {
   return (
     <>
-      <header className="codeworkspace-pane-header"><span>Agent thread</span></header>
+      <header className="codeworkspace-pane-header"><span>Task lifecycle</span></header>
       <div className="codeworkspace-pane-body">
-        <div className="codeworkspace-empty" role="status" data-testid="code-agent-placeholder">
-          <span className="cw-empty-title">Agent thread placeholder</span>
-          <span className="cw-empty-hint">Phase 1 ships only the workspace shell. Use the Build surface for the live agent thread until later phases wire file context here.</span>
-          <div className="codeworkspace-agent-actions">
-            <button type="button" className="codeworkspace-link-btn" onClick={onGoToBuild}>Open Build surface</button>
-            <button type="button" className="codeworkspace-link-btn" onClick={onOpenShell}>Open runtime drawer</button>
-          </div>
+        <TaskBoard sessionId={sessionId} transport={transport} />
+        <div className="codeworkspace-agent-actions">
+          <button type="button" className="codeworkspace-link-btn" onClick={onGoToBuild}>Open Build surface</button>
+          <button type="button" className="codeworkspace-link-btn" onClick={onOpenShell}>Open runtime drawer</button>
         </div>
       </div>
     </>
