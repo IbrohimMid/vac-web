@@ -29,7 +29,7 @@ futures = "0.3"
 async-trait = "0.1"
 
 # HTTP / WS
-axum = { version = "0.7", features = ["ws", "macros"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 tokio-tungstenite = "0.24"
