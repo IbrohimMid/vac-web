@@ -70,7 +70,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dashmap = "6"
 rust-embed = "8"
 url = "2"
-toml = "0.8"
+toml = "1.1"
 
 # Storage
 rusqlite = { version = "0.32", features = ["bundled"] }
