@@ -332,3 +332,19 @@ Code Workspace moves from truthful scaffold to a live browser coding loop: users
 - Preview is still stateful/contextual, not a managed dev-server runtime.
 - Validation requests are recorded and forwarded to the agent; authoritative command execution still belongs to workflow/runtime paths.
 - File traversal is intentionally conservative and skips heavy directories (`.git`, `node_modules`, `target`, `.turbo`).
+
+
+## Implementation log — Review action bridge contracts (2026-05-15)
+
+Status: review action bridge contracts wired after backend bridge contracts. This slice implements agent-mediated review actions for `review.revert_file` and `review.hunk.action.request`, adds review action acknowledgement events, improves ReviewQueue copy/feedback, regenerates catalogs, validates, commits, and pushes.
+
+Commit:  — .
+
+UX impact:
+- ReviewQueue actions now give immediate sending/requested/failed feedback instead of feeling like silent buttons.
+- File/hunk revert remains honest and safe: browser sends an audited request to the bridge/agent instead of directly mutating files without runtime authority.
+- The Diff tab feels more production-grade with clearer danger styling and action acknowledgement states.
+
+Residual risk:
+- Actual patch application remains agent-mediated; direct deterministic hunk patch apply is not implemented in this slice.
+- Backend emits acknowledgement events, but the UI currently uses immediate send-result feedback instead of a global review action store.

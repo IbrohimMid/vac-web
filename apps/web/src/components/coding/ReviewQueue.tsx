@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { TransportHandle } from '../../transport';
 import { useReview, type ReviewFile } from '../../stores/review';
 import { useSession } from '../../stores/session';
@@ -9,6 +9,9 @@ import {
   requestReviewFileRevert,
   requestReviewHunkRevert,
   requestReviewHunkRevision,
+  reviewFileActionKey,
+  reviewHunkActionKey,
+  type ReviewActionFeedback,
   type ReviewHunkSummary,
 } from '../../domain/review/actions';
 
@@ -28,6 +31,8 @@ export function ReviewQueue({ transport }: Props) {
   const sessionId = useSession((s) => s.sessionId);
   const setRoute = useCockpit((s) => s.setRoute);
   const ready = !!transport && !!sessionId;
+  const [feedback, setFeedback] = useState<Record<string, ReviewActionFeedback>>({});
+  const setActionFeedback = (next: ReviewActionFeedback) => setFeedback((current) => ({ ...current, [next.key]: next }));
   const sorted = useMemo(() => [...files].sort((a, b) => a.path.localeCompare(b.path)), [files]);
 
   if (sorted.length === 0) {
@@ -50,22 +55,27 @@ export function ReviewQueue({ transport }: Props) {
       </header>
       <div className="codeworkspace-reviewqueue-list">
         {sorted.map((file) => (
-          <ReviewQueueFile key={file.path} file={file} unified={diffs.get(file.path)?.unified ?? null} transport={transport} sessionId={sessionId} ready={ready} />
+          <ReviewQueueFile key={file.path} file={file} unified={diffs.get(file.path)?.unified ?? null} transport={transport} sessionId={sessionId} ready={ready} feedback={feedback} setActionFeedback={setActionFeedback} />
         ))}
       </div>
       <p className="cw-empty-detail codeworkspace-reviewqueue-truth">
-        Fine-grained hunk accept/revert remains truthful-scaffolded: requests are dispatched only when bridge support is present; existing Review surface remains authoritative.
+Review actions are agent-mediated: VAC sends an audited, path-scoped request to the bridge/agent instead of silently mutating files in the browser.
       </p>
     </section>
   );
 }
 
-function ReviewQueueFile({ file, unified, transport, sessionId, ready }: { file: ReviewFile; unified: string | null; transport: TransportHandle | null; sessionId: string | null; ready: boolean }) {
+function ReviewQueueFile({ file, unified, transport, sessionId, ready, feedback, setActionFeedback }: { file: ReviewFile; unified: string | null; transport: TransportHandle | null; sessionId: string | null; ready: boolean; feedback: Record<string, ReviewActionFeedback>; setActionFeedback: (next: ReviewActionFeedback) => void }) {
   const labels = classifyReviewFile(file);
   const hunks = parseUnifiedHunks(unified);
+  const fileActionKey = reviewFileActionKey(file.path);
+  const fileFeedback = feedback[fileActionKey];
   const revertFile = () => {
     if (!ready || !transport || !sessionId) return;
-    void requestReviewFileRevert(transport, sessionId, file.path);
+    setActionFeedback({ key: fileActionKey, status: 'sending', message: 'Sending file revert request...' });
+    void requestReviewFileRevert(transport, sessionId, file.path)
+      .then(() => setActionFeedback({ key: fileActionKey, status: 'requested', message: 'File revert request sent to agent.' }))
+      .catch((err: unknown) => setActionFeedback({ key: fileActionKey, status: 'failed', message: err instanceof Error ? err.message : 'Failed to send file revert request.' }));
   };
 
   return (
@@ -75,7 +85,7 @@ function ReviewQueueFile({ file, unified, transport, sessionId, ready }: { file:
           <strong>{file.path}</strong>
           <span>{file.status} · {statusLabel(file)} · +{file.additions} / -{file.deletions}</span>
         </div>
-        <button type="button" className="codeworkspace-link-btn" onClick={revertFile} disabled={!ready}>Revert file</button>
+        <button type="button" className="codeworkspace-link-btn codeworkspace-reviewqueue-danger" onClick={revertFile} disabled={!ready || fileFeedback?.status === 'sending'}>Request file revert</button>
       </header>
       <div className="codeworkspace-reviewqueue-labels" aria-label={`Risk labels for ${file.path}`}>
         {labels.map((label) => <span key={label} className="codeworkspace-reviewqueue-label">{label}</span>)}
@@ -87,10 +97,11 @@ function ReviewQueueFile({ file, unified, transport, sessionId, ready }: { file:
           {file.sourceEventType ? ` · src: ${file.sourceEventType}` : null}
         </div>
       ) : null}
+      {fileFeedback ? <ActionFeedback feedback={fileFeedback} /> : null}
       {hunks.length > 0 ? (
         <ol className="codeworkspace-reviewqueue-hunks" data-testid="review-queue-hunks">
           {hunks.map((hunk) => (
-            <ReviewHunkRow key={hunk.id} hunk={hunk} path={file.path} transport={transport} sessionId={sessionId} ready={ready} />
+            <ReviewHunkRow key={hunk.id} hunk={hunk} path={file.path} transport={transport} sessionId={sessionId} ready={ready} feedback={feedback} setActionFeedback={setActionFeedback} />
           ))}
         </ol>
       ) : (
@@ -103,14 +114,24 @@ function ReviewQueueFile({ file, unified, transport, sessionId, ready }: { file:
   );
 }
 
-function ReviewHunkRow({ hunk, path, transport, sessionId, ready }: { hunk: ReviewHunkSummary; path: string; transport: TransportHandle | null; sessionId: string | null; ready: boolean }) {
+function ReviewHunkRow({ hunk, path, transport, sessionId, ready, feedback, setActionFeedback }: { hunk: ReviewHunkSummary; path: string; transport: TransportHandle | null; sessionId: string | null; ready: boolean; feedback: Record<string, ReviewActionFeedback>; setActionFeedback: (next: ReviewActionFeedback) => void }) {
+  const reworkKey = reviewHunkActionKey(path, hunk.id, 'request_rework');
+  const revertKey = reviewHunkActionKey(path, hunk.id, 'revert_hunk');
+  const reworkFeedback = feedback[reworkKey];
+  const revertFeedback = feedback[revertKey];
   const askRevision = () => {
     if (!ready || !transport || !sessionId) return;
-    void requestReviewHunkRevision(transport, sessionId, path, hunk);
+    setActionFeedback({ key: reworkKey, status: 'sending', message: 'Sending hunk revision request...' });
+    void requestReviewHunkRevision(transport, sessionId, path, hunk)
+      .then(() => setActionFeedback({ key: reworkKey, status: 'requested', message: 'Hunk revision request sent to agent.' }))
+      .catch((err: unknown) => setActionFeedback({ key: reworkKey, status: 'failed', message: err instanceof Error ? err.message : 'Failed to send hunk revision request.' }));
   };
   const revertHunk = () => {
     if (!ready || !transport || !sessionId) return;
-    void requestReviewHunkRevert(transport, sessionId, path, hunk);
+    setActionFeedback({ key: revertKey, status: 'sending', message: 'Sending hunk revert request...' });
+    void requestReviewHunkRevert(transport, sessionId, path, hunk)
+      .then(() => setActionFeedback({ key: revertKey, status: 'requested', message: 'Hunk revert request sent to agent.' }))
+      .catch((err: unknown) => setActionFeedback({ key: revertKey, status: 'failed', message: err instanceof Error ? err.message : 'Failed to send hunk revert request.' }));
   };
   return (
     <li className="codeworkspace-reviewqueue-hunk">
@@ -119,9 +140,19 @@ function ReviewHunkRow({ hunk, path, transport, sessionId, ready }: { hunk: Revi
         <span className="cw-empty-detail">{hunk.header} · +{hunk.additions} / -{hunk.deletions}</span>
       </div>
       <div className="codeworkspace-reviewqueue-hunk-actions">
-        <button type="button" className="codeworkspace-link-btn" onClick={askRevision} disabled={!ready}>Ask agent to revise</button>
-        <button type="button" className="codeworkspace-link-btn" onClick={revertHunk} disabled={!ready}>Revert hunk</button>
+        <button type="button" className="codeworkspace-link-btn" onClick={askRevision} disabled={!ready || reworkFeedback?.status === 'sending'}>Ask agent to revise</button>
+        <button type="button" className="codeworkspace-link-btn codeworkspace-reviewqueue-danger" onClick={revertHunk} disabled={!ready || revertFeedback?.status === 'sending'}>Request hunk revert</button>
       </div>
+      {reworkFeedback ? <ActionFeedback feedback={reworkFeedback} /> : null}
+      {revertFeedback ? <ActionFeedback feedback={revertFeedback} /> : null}
     </li>
+  );
+}
+
+function ActionFeedback({ feedback }: { feedback: ReviewActionFeedback }) {
+  return (
+    <div className={`codeworkspace-reviewqueue-feedback codeworkspace-reviewqueue-feedback-${feedback.status}`} role="status">
+      {feedback.message}
+    </div>
   );
 }

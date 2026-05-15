@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { classifyReviewFile, parseUnifiedHunks, requestReviewFileRevert, requestReviewHunkRevision } from './actions';
+import { classifyReviewFile, parseUnifiedHunks, requestReviewFileRevert, requestReviewHunkRevert, requestReviewHunkRevision, reviewFileActionKey, reviewHunkActionKey } from './actions';
 import type { TransportHandle } from '../../transport';
 
 function fakeTransport(): TransportHandle {
@@ -30,6 +30,11 @@ describe('review actions helpers', () => {
     expect(t.send).toHaveBeenCalledWith('s1', 'review.revert_file', { session_id: 's1', path: 'src/a.ts' });
   });
 
+  it('builds stable review action feedback keys', () => {
+    expect(reviewFileActionKey('src/a.ts')).toBe('file:src/a.ts');
+    expect(reviewHunkActionKey('src/a.ts', 'h1', 'revert_hunk')).toBe('hunk:src/a.ts:h1:revert_hunk');
+  });
+
   it('sends hunk rework request', async () => {
     const t = fakeTransport();
     await requestReviewHunkRevision(t, 's1', 'src/a.ts', { id: 'h1', header: '@@ -1 +1 @@', startLine: 1, additions: 1, deletions: 1 });
@@ -42,3 +47,16 @@ describe('review actions helpers', () => {
     });
   });
 });
+
+
+  it('sends hunk revert request', async () => {
+    const t = fakeTransport();
+    await requestReviewHunkRevert(t, 's1', 'src/a.ts', { id: 'h1', header: '@@ -1 +1 @@', startLine: 1, additions: 1, deletions: 1 });
+    expect(t.send).toHaveBeenCalledWith('s1', 'review.hunk.action.request', {
+      session_id: 's1',
+      path: 'src/a.ts',
+      hunk_id: 'h1',
+      hunk_header: '@@ -1 +1 @@',
+      action: 'revert_hunk',
+    });
+  });

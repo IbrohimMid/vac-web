@@ -11,6 +11,22 @@ export interface ReviewHunkSummary {
 
 export type ReviewRiskLabel = 'docs' | 'config' | 'security-sensitive' | 'dependency' | 'generated' | 'code';
 
+export type ReviewActionStatus = 'idle' | 'sending' | 'requested' | 'failed';
+
+export interface ReviewActionFeedback {
+  key: string;
+  status: ReviewActionStatus;
+  message: string;
+}
+
+export function reviewFileActionKey(path: string): string {
+  return `file:${path}`;
+}
+
+export function reviewHunkActionKey(path: string, hunkId: string, action: string): string {
+  return `hunk:${path}:${hunkId}:${action}`;
+}
+
 export function classifyReviewFile(file: Pick<ReviewFile, 'path' | 'status' | 'additions' | 'deletions'>): ReviewRiskLabel[] {
   const path = file.path.toLowerCase();
   const labels: ReviewRiskLabel[] = [];

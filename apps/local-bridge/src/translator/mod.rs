@@ -214,6 +214,9 @@ pub async fn dispatch_command(
         // Code Workspace bridge contracts: project browsing, coding context, preview,
         // validation, task lifecycle, and branch state. These are intentionally
         // small, truthful backend adapters for the browser coding workspace.
+        "review.revert_file" | "review.hunk.action.request" => {
+            handle_review_action_command(&cmd, &state).await
+        }
         "project.tree.request" => handle_project_tree_request(&cmd, &state).await,
         "project.file.request" => handle_project_file_request(&cmd, &state).await,
         "coding.context.ask_about_file"
@@ -5405,6 +5408,132 @@ async fn handle_task_lifecycle_command(
             cw_ack_err(cmd, "task.agent_dispatch_failed", e.to_string()),
             vec![],
         ),
+    }
+}
+
+async fn handle_review_action_command(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    let Some(path) = cmd.payload.get("path").and_then(|v| v.as_str()) else {
+        return (
+            cw_ack_err(cmd, "review.path_required", "path is required"),
+            vec![],
+        );
+    };
+    if let Err(message) = cw_safe_relative_path(Some(path)) {
+        return (cw_ack_err(cmd, "review.path_invalid", message), vec![]);
+    }
+
+    let action = cmd
+        .payload
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("revert_file");
+    let allowed = match cmd.cmd_type.as_str() {
+        "review.revert_file" => action == "revert_file" || action.is_empty(),
+        "review.hunk.action.request" => matches!(action, "request_rework" | "revert_hunk"),
+        _ => false,
+    };
+    if !allowed {
+        return (
+            cw_ack_err(
+                cmd,
+                "review.action_invalid",
+                format!("unsupported review action '{action}'"),
+            ),
+            vec![],
+        );
+    }
+
+    let hunk_id = cmd
+        .payload
+        .get("hunk_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let hunk_header = cmd
+        .payload
+        .get("hunk_header")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let prompt = match (cmd.cmd_type.as_str(), action) {
+        ("review.revert_file", _) => format!(
+            "Review action requested from Code Workspace: revert file `{path}`. Inspect the current diff, apply the smallest safe revert for this file only, preserve unrelated user work, and run focused validation if appropriate."
+        ),
+        ("review.hunk.action.request", "request_rework") => format!(
+            "Review action requested from Code Workspace: revise hunk `{hunk_id}` in `{path}`. Hunk header: `{hunk_header}`. Address the reviewer concern with the smallest safe edit and explain the change."
+        ),
+        ("review.hunk.action.request", "revert_hunk") => format!(
+            "Review action requested from Code Workspace: revert hunk `{hunk_id}` in `{path}`. Hunk header: `{hunk_header}`. Revert only this hunk when safe, preserve unrelated changes, and summarize any conflicts."
+        ),
+        _ => unreachable!("review action was validated above"),
+    };
+
+    let agent_cmd = ClientCommand {
+        id: format!("{}_review", cmd.id),
+        session_id: cmd.session_id.clone(),
+        cmd_type: "message.submit".into(),
+        payload: json!({ "text": prompt }),
+        v: cmd.v,
+    };
+
+    let event_type = if cmd.cmd_type == "review.revert_file" {
+        "review.file.action.updated"
+    } else {
+        "review.hunk.action.updated"
+    };
+    let mut payload = json!({
+        "session_id": cmd.session_id,
+        "path": path,
+        "action": action,
+        "status": "requested",
+        "message": "Review action sent to agent for safe execution.",
+        "source_event_type": cmd.cmd_type,
+    });
+    if !hunk_id.is_empty() {
+        payload["hunk_id"] = json!(hunk_id);
+    }
+    if !hunk_header.is_empty() {
+        payload["hunk_header"] = json!(hunk_header);
+    }
+
+    match handle.send_client_command(&agent_cmd).await {
+        Ok(()) => (
+            cw_ack_ok(cmd),
+            vec![
+                cw_event_for(cmd, event_type, payload),
+                cw_event_for(
+                    cmd,
+                    "task.execution.started",
+                    json!({
+                        "session_id": cmd.session_id,
+                        "task_id": format!("review-{}", cmd.id),
+                        "title": format!("Review action: {path}"),
+                        "active_step": "Sent review action to agent",
+                        "changed_files": [path],
+                        "source_event_type": cmd.cmd_type,
+                    }),
+                ),
+            ],
+        ),
+        Err(e) => {
+            let failed_payload = json!({
+                "session_id": cmd.session_id,
+                "path": path,
+                "action": action,
+                "status": "failed",
+                "message": e.to_string(),
+                "source_event_type": cmd.cmd_type,
+            });
+            (
+                cw_ack_err(cmd, "review.agent_dispatch_failed", e.to_string()),
+                vec![cw_event_for(cmd, event_type, failed_payload)],
+            )
+        }
     }
 }
 

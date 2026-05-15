@@ -78,6 +78,18 @@ events:
     producer: translator.review_file_diff_chunk
     consumers:
       - domain.review.handlers
+  - id: review.file.action.updated
+    owner: bridge
+    status: implemented
+    producer: translator.review_action_request
+    consumers:
+      - ReviewQueue
+  - id: review.hunk.action.updated
+    owner: bridge
+    status: implemented
+    producer: translator.review_action_request
+    consumers:
+      - ReviewQueue
 
 
   # ---- Code Workspace bridge contracts ----------------------------------

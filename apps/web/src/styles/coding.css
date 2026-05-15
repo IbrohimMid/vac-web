@@ -549,3 +549,48 @@
     font-weight: 500;
   }
 }
+
+
+/* Review action bridge polish — industrial diff cockpit */
+.codeworkspace-reviewqueue-file {
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn, #f59e0b) 70%, transparent);
+}
+.codeworkspace-reviewqueue-file::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--warn, #f59e0b), transparent);
+  opacity: 0.65;
+}
+.codeworkspace-reviewqueue-danger {
+  border-color: color-mix(in srgb, var(--warn, #f59e0b) 55%, var(--line));
+  color: color-mix(in srgb, var(--warn, #f59e0b) 75%, var(--fg));
+}
+.codeworkspace-reviewqueue-danger:not(:disabled):hover {
+  background: var(--warn-soft, rgba(245, 158, 11, 0.12));
+}
+.codeworkspace-reviewqueue-feedback {
+  width: fit-content;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: var(--bg);
+}
+.codeworkspace-reviewqueue-feedback-sending {
+  border-color: color-mix(in srgb, var(--info, #3b82f6) 55%, var(--line));
+  color: var(--info, #3b82f6);
+}
+.codeworkspace-reviewqueue-feedback-requested {
+  border-color: color-mix(in srgb, var(--success, #22c55e) 55%, var(--line));
+  color: var(--success, #22c55e);
+}
+.codeworkspace-reviewqueue-feedback-failed {
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 55%, var(--line));
+  color: var(--danger, #ef4444);
+}

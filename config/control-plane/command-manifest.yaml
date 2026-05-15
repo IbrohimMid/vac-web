@@ -198,13 +198,19 @@ commands:
     scope: session
     summary: Hunk toggle is local UI state.
   - id: review.revert_file
-    status: not_wired
+    status: implemented
     side_effect: state
     scope: session
     requires_profile_tool: fs.write
-    ui:
-      gate: disabled
-      reason: Revert requires bridge fs executor + audit; not wired.
+    runtime: agent_forwarded
+    summary: Agent-mediated file revert request with audit-visible acknowledgement.
+  - id: review.hunk.action.request
+    status: implemented
+    side_effect: state
+    scope: session
+    requires_profile_tool: fs.write
+    runtime: agent_forwarded
+    summary: Agent-mediated hunk rework/revert request with audit-visible acknowledgement.
   - id: review.revert_all
     status: not_wired
     side_effect: state

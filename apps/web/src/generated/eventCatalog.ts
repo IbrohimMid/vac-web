@@ -60,6 +60,8 @@ export type EventId =
   | 'release.targets'
   | 'review.changeset_updated'
   | 'review.file_diff_chunk'
+  | 'review.file.action.updated'
+  | 'review.hunk.action.updated'
   | 'runtime.job_completed'
   | 'runtime.job_started'
   | 'session.closed'
@@ -146,6 +148,8 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'release.targets', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'review.changeset_updated', status: 'implemented', owner: 'bridge', producer: "translator.review_changeset_updated", consumers: Object.freeze(["domain.review.handlers"]) }),
   Object.freeze({ id: 'review.file_diff_chunk', status: 'implemented', owner: 'bridge', producer: "translator.review_file_diff_chunk", consumers: Object.freeze(["domain.review.handlers"]) }),
+  Object.freeze({ id: 'review.file.action.updated', status: 'implemented', owner: 'bridge', producer: "translator.review_action_request", consumers: Object.freeze(["ReviewQueue"]) }),
+  Object.freeze({ id: 'review.hunk.action.updated', status: 'implemented', owner: 'bridge', producer: "translator.review_action_request", consumers: Object.freeze(["ReviewQueue"]) }),
   Object.freeze({ id: 'runtime.job_completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),
   Object.freeze({ id: 'runtime.job_started', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),
   Object.freeze({ id: 'session.closed', status: 'implemented', owner: 'bridge', producer: "translator.session_closed", consumers: Object.freeze(["domain.sessions.handlers", "capabilities.sessionLifecycle"]) }),

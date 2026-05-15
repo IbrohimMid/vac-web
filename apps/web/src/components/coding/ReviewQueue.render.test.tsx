@@ -57,19 +57,20 @@ describe('<ReviewQueue/>', () => {
     seedReview();
     const t = fakeTransport();
     render(<ReviewQueue transport={t} />);
-    fireEvent.click(screen.getByRole('button', { name: /Revert file/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Request file revert/i }));
     fireEvent.click(screen.getByRole('button', { name: /Ask agent to revise/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Revert hunk/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Request hunk revert/i }));
     expect(t.send).toHaveBeenCalledWith('s1', 'review.revert_file', { session_id: 's1', path: 'src/auth/token.ts' });
     expect(t.send).toHaveBeenCalledWith('s1', 'review.hunk.action.request', expect.objectContaining({ action: 'request_rework', path: 'src/auth/token.ts' }));
     expect(t.send).toHaveBeenCalledWith('s1', 'review.hunk.action.request', expect.objectContaining({ action: 'revert_hunk', path: 'src/auth/token.ts' }));
+    expect(screen.getByText(/Sending file revert request/i)).toBeInTheDocument();
   });
 
   it('disables hunk actions without transport/session', () => {
     seedReview();
     useSession.getState().clear();
     render(<ReviewQueue transport={null} />);
-    expect(screen.getByRole('button', { name: /Revert file/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Request file revert/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Ask agent to revise/i })).toBeDisabled();
   });
 

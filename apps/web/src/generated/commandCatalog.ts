@@ -92,6 +92,7 @@ export type CommandId =
   | 'release.generate_notes'
   | 'release.list_targets'
   | 'release.publish'
+  | 'review.hunk.action.request'
   | 'review.open_file'
   | 'review.revert_all'
   | 'review.revert_file'
@@ -206,9 +207,10 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'release.generate_notes', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'release_notes.write', summary: "Generate a draft release notes event for the selected target." }),
   Object.freeze({ id: 'release.list_targets', status: 'implemented', scope: 'either', sideEffect: 'read_only', summary: "Return the current deploy targets for a session or workspace." }),
   Object.freeze({ id: 'release.publish', status: 'implemented', scope: 'session', sideEffect: 'external', requiresProfileTool: 'publish.*', summary: "Publish the selected target through the bridge release plane." }),
+  Object.freeze({ id: 'review.hunk.action.request', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.write', runtime: 'agent_forwarded', summary: "Agent-mediated hunk rework/revert request with audit-visible acknowledgement." }),
   Object.freeze({ id: 'review.open_file', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.read', summary: "File-open executor with project-root scope is not implemented.", ui: Object.freeze({ gate: 'disabled', reason: "File-open is not wired to bridge fs scope yet." }) }),
   Object.freeze({ id: 'review.revert_all', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.write', ui: Object.freeze({ gate: 'disabled', reason: "Bulk revert requires bridge fs executor + audit; not wired." }) }),
-  Object.freeze({ id: 'review.revert_file', status: 'not_wired', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.write', ui: Object.freeze({ gate: 'disabled', reason: "Revert requires bridge fs executor + audit; not wired." }) }),
+  Object.freeze({ id: 'review.revert_file', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.write', runtime: 'agent_forwarded', summary: "Agent-mediated file revert request with audit-visible acknowledgement." }),
   Object.freeze({ id: 'review.toggle_hunk', status: 'frontend_owned', scope: 'session', sideEffect: 'none', summary: "Hunk toggle is local UI state." }),
   Object.freeze({ id: 'runtime.cancel_job', status: 'not_wired', scope: 'session', sideEffect: 'state', summary: "Provider-observed jobs are not bridge-cancellable.", ui: Object.freeze({ gate: 'disabled', reason: "Cancel requires a bridge-owned job; observed provider jobs are read-only." }) }),
   Object.freeze({ id: 'runtime.inspect_job', status: 'not_wired', scope: 'session', sideEffect: 'read_only' }),
