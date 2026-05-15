@@ -30,7 +30,7 @@ jobs:
       - name: Install Node deps
         run: pnpm install --frozen-lockfile
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml', 'pnpm-lock.yaml') }}
@@ -38,7 +38,7 @@ jobs:
         run: pnpm -F web exec playwright install --with-deps chromium
       - name: Restore perf baseline history
         id: perf-baseline-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .perf-baseline/history.jsonl
           key: perf-baseline-history-${{ github.run_id }}
@@ -59,7 +59,7 @@ jobs:
         run: node scripts/perf-baseline-archive.mjs
       - name: Save perf baseline history
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .perf-baseline/history.jsonl
           key: perf-baseline-history-${{ github.run_id }}
