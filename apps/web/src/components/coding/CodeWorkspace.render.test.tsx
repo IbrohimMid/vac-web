@@ -82,4 +82,13 @@ describe('CodeWorkspace shell', () => {
     fireEvent.click(toggle);
     expect(useWorkspace.getState().explorerCollapsed).toBe(true);
   });
+
+  it('carries data-density attribute from cockpit store', () => {
+    useCockpit.setState({ density: 'compact' });
+    useSession.getState().setSession('sess-test', 'mock', '/tmp/demo');
+    render(<CodeWorkspace transport={transport} />);
+    const region = screen.getByRole('region', { name: 'Code workspace' });
+    expect(region).toHaveAttribute('data-density', 'compact');
+    useCockpit.setState({ density: 'regular' });
+  });
 });

@@ -3,7 +3,9 @@
 // that link back to global controls. Task / branch are static placeholders
 // until Phase 5 lands a real task lifecycle.
 
+import { useMemo } from 'react';
 import type { TransportHandle } from '../../transport';
+import { useTasks } from '../../stores/tasks';
 import { useCockpit } from '../../stores/cockpit';
 import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
@@ -19,6 +21,13 @@ export function WorkspaceTopbar({ transport }: Props) {
   const sessionId = useSession((s) => s.sessionId);
   const profileId = useSession((s) => s.profileId);
   const projectRoot = useSession((s) => s.projectRoot);
+  const activeTaskId = useTasks((s) => s.activeTaskId);
+  const taskMap = useTasks((s) => s.tasks);
+  const activeTask = useMemo(
+    () => (activeTaskId ? taskMap.get(activeTaskId) : null),
+    [activeTaskId, taskMap],
+  );
+  const taskLabel = activeTask ? activeTask.title.slice(0, 22) : '\u2014';
   const sidebarCollapsed = useCockpit((s) => s.sidebarCollapsed);
   const explorerCollapsed = useWorkspace((s) => s.explorerCollapsed);
   const toggleExplorer = useWorkspace((s) => s.toggleExplorerCollapsed);
@@ -50,11 +59,11 @@ export function WorkspaceTopbar({ transport }: Props) {
       <span className="cw-pill" title={profileId ?? ''}>
         session&nbsp;<strong>{sessionLabel}</strong>
       </span>
-      <span className="cw-pill" title="Task tracking comes online in Phase 5">
-        task&nbsp;<strong>—</strong>
+      <span className="cw-pill" title={activeTask ? `Task: ${activeTask.taskId}` : 'No active task yet'}>
+        task&nbsp;<strong>{taskLabel}</strong>
       </span>
-      <span className="cw-pill" title="Branch tracking comes online in Phase 5">
-        branch&nbsp;<strong>main</strong>
+      <span className="cw-pill" title="Branch not yet available from bridge">
+        branch&nbsp;<strong>\u2014</strong>
       </span>
       <span
         className={`cw-pill status-${status}`}

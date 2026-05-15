@@ -77,8 +77,7 @@ export function TaskBoard({ sessionId, transport }: Props) {
         </header>
         <div className="codeworkspace-empty" role="status">
           <span className="cw-empty-title">Waiting for task events</span>
-          <span className="cw-empty-hint">Start a task in the Build surface. This panel will reflect task.plan.*, task.execution.*, approvals, review, and validation state.</span>
-          <span className="codeworkspace-unsupported">Unavailable: direct plan approval controls are not wired in Code Workspace yet.</span>
+          <span className="cw-empty-hint">Start a task in the Build surface. Task plan, execution, review, and validation state will appear here once a task is active.</span>
         </div>
       </section>
     );

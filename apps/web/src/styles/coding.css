@@ -208,8 +208,13 @@
   .codeworkspace-body {
     grid-template-columns: minmax(0, 1fr);
   }
-  .codeworkspace-pane.codeworkspace-pane-explorer,
-  .codeworkspace-pane.codeworkspace-pane-agent {
+  /* Pane visibility driven by data-mobile-tab on .codeworkspace-body. */
+  .codeworkspace-body[data-mobile-tab='explorer'] .codeworkspace-pane-center,
+  .codeworkspace-body[data-mobile-tab='explorer'] .codeworkspace-pane-agent,
+  .codeworkspace-body[data-mobile-tab='center'] .codeworkspace-pane-explorer,
+  .codeworkspace-body[data-mobile-tab='center'] .codeworkspace-pane-agent,
+  .codeworkspace-body[data-mobile-tab='agent'] .codeworkspace-pane-explorer,
+  .codeworkspace-body[data-mobile-tab='agent'] .codeworkspace-pane-center {
     display: none;
   }
 }
@@ -448,3 +453,99 @@
 .codeworkspace-onboarding-footer { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 1100px) { .codeworkspace-onboarding { grid-template-columns: 1fr; } .codeworkspace-onboarding-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .codeworkspace-onboarding-steps, .codeworkspace-onboarding-actions { grid-template-columns: 1fr; } }
+
+/* Phase 10 — Placeholder cleanup + visual polish. */
+
+/* Layout wrapper: WorkspaceLayout wraps body + mobile tab bar. */
+.codeworkspace-layout-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+/* Focus-visible rings for all workspace interactive controls. */
+.codeworkspace-link-btn:focus-visible,
+.codeworkspace-tab:focus-visible,
+.codeworkspace-topbar button:focus-visible,
+.codeworkspace-mobile-tab:focus-visible {
+  outline: 2px solid var(--accent, hsl(215 100% 55%));
+  outline-offset: 2px;
+}
+
+/* Density-aware layout overrides. */
+[data-density='compact'] .codeworkspace-pane-body { padding: 6px; gap: 4px; }
+[data-density='compact'] .codeworkspace-pane-header { padding: 4px 8px; font-size: 11px; }
+[data-density='compact'] .codeworkspace-topbar { padding: 4px 8px; gap: 6px; }
+[data-density='compact'] .codeworkspace-link-btn { padding: 2px 7px; font-size: 11px; }
+
+[data-density='comfy'] .codeworkspace-pane-body { padding: 20px; gap: 12px; }
+[data-density='comfy'] .codeworkspace-pane-header { padding: 10px 16px; }
+[data-density='comfy'] .codeworkspace-topbar { padding: 10px 16px; gap: 12px; }
+[data-density='comfy'] .codeworkspace-link-btn { padding: 6px 14px; }
+
+/* Skeleton shimmer animation for loading states. */
+@keyframes cw-skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: calc(400px + 100%) 0; }
+}
+
+.cw-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-soft, #f3f4f6) 25%,
+    var(--bg-hover, #e5e7eb) 50%,
+    var(--bg-soft, #f3f4f6) 75%
+  );
+  background-size: 400px 100%;
+  animation: cw-skeleton-shimmer 1.4s ease infinite;
+  border-radius: 4px;
+  min-height: 14px;
+}
+
+/* Skeleton applied to loading empty states via data-skeleton attribute. */
+.codeworkspace-empty[data-skeleton='true'] .cw-empty-title,
+.codeworkspace-empty[data-skeleton='true'] .cw-empty-hint {
+  color: transparent;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-soft, #f3f4f6) 25%,
+    var(--bg-hover, #e5e7eb) 50%,
+    var(--bg-soft, #f3f4f6) 75%
+  );
+  background-size: 400px 100%;
+  animation: cw-skeleton-shimmer 1.4s ease infinite;
+}
+
+/* Mobile bottom tab bar — hidden on desktop, shown at <=767px. */
+.codeworkspace-mobile-tabs {
+  display: none;
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .codeworkspace-mobile-tabs {
+    display: flex;
+    border-top: 1px solid var(--border, #e5e7eb);
+    background: var(--bg-soft, #fafafa);
+  }
+
+  .codeworkspace-mobile-tab {
+    flex: 1;
+    padding: 10px 4px;
+    border: none;
+    border-top: 2px solid transparent;
+    background: transparent;
+    font-size: 11px;
+    color: var(--fg-muted, #6b7280);
+    cursor: pointer;
+    letter-spacing: 0.02em;
+  }
+
+  .codeworkspace-mobile-tab[aria-selected='true'] {
+    color: var(--fg, #111);
+    border-top-color: var(--accent, hsl(215 100% 55%));
+    font-weight: 500;
+  }
+}

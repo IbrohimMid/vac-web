@@ -19,11 +19,12 @@ type CenterTab = 'code' | 'diff' | 'preview' | 'validation';
 export function CodeWorkspace({ transport }: Props) {
   const sessionId = useSession((s) => s.sessionId);
   const setRoute = useCockpit((s) => s.setRoute);
+  const density = useCockpit((s) => s.density);
   const [centerTab, setCenterTab] = useState<CenterTab>('code');
   const goToBuild = () => setRoute('build');
   const openShell = () => useShell.getState().setOpen(true);
   return (
-    <div className="codeworkspace" data-route="code" role="region" aria-label="Code workspace">
+    <div className="codeworkspace" data-route="code" data-density={density} role="region" aria-label="Code workspace">
       <WorkspaceTopbar transport={transport} />
       <CodeOnboarding
         sessionId={sessionId}
