@@ -79,6 +79,156 @@ events:
     consumers:
       - domain.review.handlers
 
+
+  # ---- Code Workspace bridge contracts ----------------------------------
+  - id: project.tree.updated
+    owner: bridge
+    status: implemented
+    producer: translator.project_tree_request
+    consumers:
+      - domain.project.handlers
+      - ProjectExplorer
+  - id: project.tree.unsupported
+    owner: bridge
+    status: implemented
+    producer: translator.project_tree_request
+    consumers:
+      - domain.project.handlers
+      - ProjectExplorer
+  - id: project.tree.error
+    owner: bridge
+    status: implemented
+    producer: translator.project_tree_request
+    consumers:
+      - domain.project.handlers
+      - ProjectExplorer
+  - id: project.file.loaded
+    owner: bridge
+    status: implemented
+    producer: translator.project_file_request
+    consumers:
+      - domain.project.handlers
+      - CodePanel
+  - id: project.file.unsupported
+    owner: bridge
+    status: implemented
+    producer: translator.project_file_request
+    consumers:
+      - domain.project.handlers
+      - CodePanel
+  - id: project.file.error
+    owner: bridge
+    status: implemented
+    producer: translator.project_file_request
+    consumers:
+      - domain.project.handlers
+      - CodePanel
+  - id: workspace.preview.updated
+    owner: bridge
+    status: implemented
+    producer: translator.workspace_preview
+    consumers:
+      - domain.preview.handlers
+      - PreviewPanel
+  - id: workspace.preview.unsupported
+    owner: bridge
+    status: implemented
+    producer: translator.workspace_preview
+    consumers:
+      - domain.preview.handlers
+      - PreviewPanel
+  - id: workspace.preview.error
+    owner: bridge
+    status: implemented
+    producer: translator.workspace_preview
+    consumers:
+      - domain.preview.handlers
+      - PreviewPanel
+  - id: workspace.preview.console_error
+    owner: bridge
+    status: implemented
+    producer: translator.workspace_preview
+    consumers:
+      - domain.preview.handlers
+      - PreviewPanel
+  - id: workspace.preview.network_failure
+    owner: bridge
+    status: implemented
+    producer: translator.workspace_preview
+    consumers:
+      - domain.preview.handlers
+      - PreviewPanel
+  - id: validation.run.updated
+    owner: bridge
+    status: implemented
+    producer: translator.validation_run_request
+    consumers:
+      - domain.validation.handlers
+      - ValidationPanel
+      - domain.tasks.handlers
+  - id: task.plan.proposed
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.plan.updated
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.execution.started
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.execution.blocked
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.execution.completed
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.execution.failed
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.approval.required
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: task.approval.resolved
+    owner: bridge
+    status: implemented
+    producer: translator.task_lifecycle
+    consumers:
+      - domain.tasks.handlers
+      - TaskBoard
+  - id: workspace.branch.updated
+    owner: bridge
+    status: implemented
+    producer: translator.workspace_branch_request
+    consumers:
+      - WorkspaceTopbar
+
   # ---- assessment index --------------------------------------------------
   - id: assessment.index.rebuild_started
     owner: bridge

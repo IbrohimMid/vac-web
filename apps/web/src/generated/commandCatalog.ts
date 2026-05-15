@@ -34,6 +34,10 @@ export type CommandId =
   | 'assessment.run'
   | 'assessment.sweep.cancel'
   | 'assessment.sweep.run'
+  | 'coding.context.ask_about_file'
+  | 'coding.context.ask_about_selection'
+  | 'coding.context.request_edit'
+  | 'coding.context.request_tests'
   | 'config.policy.get'
   | 'config.reload'
   | 'config.validate'
@@ -79,6 +83,8 @@ export type CommandId =
   | 'plan.edit'
   | 'plan.open'
   | 'plan.reject'
+  | 'project.file.request'
+  | 'project.tree.request'
   | 'registry.add'
   | 'registry.reload'
   | 'registry.sync'
@@ -111,10 +117,20 @@ export type CommandId =
   | 'system.capabilities'
   | 'system.ping'
   | 'system.version'
+  | 'task.execution.continue'
+  | 'task.plan.request_changes'
   | 'transcript.completed'
   | 'transcript.error'
+  | 'validation.failure.send_context'
+  | 'validation.run.request'
   | 'workbench.invoke'
-  | 'workbench.select_tab';
+  | 'workbench.select_tab'
+  | 'workspace.branch.request'
+  | 'workspace.preview.open'
+  | 'workspace.preview.refresh'
+  | 'workspace.preview.run_e2e'
+  | 'workspace.preview.send_context'
+  | 'workspace.preview.stop';
 
 export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'approval.approve', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Approve a pending approval; ACP intercepted and resolved without forwarding." }),
@@ -132,6 +148,10 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'assessment.run', status: 'implemented', scope: 'session', sideEffect: 'state' }),
   Object.freeze({ id: 'assessment.sweep.cancel', status: 'implemented', scope: 'session', sideEffect: 'state' }),
   Object.freeze({ id: 'assessment.sweep.run', status: 'implemented', scope: 'session', sideEffect: 'state' }),
+  Object.freeze({ id: 'coding.context.ask_about_file', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Forward file context to the active agent as a structured prompt." }),
+  Object.freeze({ id: 'coding.context.ask_about_selection', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Forward selected lines to the active agent as a structured prompt." }),
+  Object.freeze({ id: 'coding.context.request_edit', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Ask the active agent to edit a file using current workspace context." }),
+  Object.freeze({ id: 'coding.context.request_tests', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Ask the active agent to generate or update tests for a file." }),
   Object.freeze({ id: 'config.policy.get', status: 'implemented', scope: 'sessionless', sideEffect: 'read_only' }),
   Object.freeze({ id: 'config.reload', status: 'implemented', scope: 'sessionless', sideEffect: 'state' }),
   Object.freeze({ id: 'config.validate', status: 'implemented', scope: 'sessionless', sideEffect: 'read_only' }),
@@ -177,6 +197,8 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'plan.edit', status: 'not_wired', scope: 'session', sideEffect: 'state', ui: Object.freeze({ gate: 'disabled', reason: "Plan editing requires bridge plan state; not wired." }) }),
   Object.freeze({ id: 'plan.open', status: 'frontend_owned', scope: 'session', sideEffect: 'none' }),
   Object.freeze({ id: 'plan.reject', status: 'not_wired', scope: 'session', sideEffect: 'state', ui: Object.freeze({ gate: 'disabled' }) }),
+  Object.freeze({ id: 'project.file.request', status: 'implemented', scope: 'session', sideEffect: 'read_only', requiresProfileTool: 'fs.read', summary: "Return UTF-8 text file contents with binary and size guards." }),
+  Object.freeze({ id: 'project.tree.request', status: 'implemented', scope: 'session', sideEffect: 'read_only', requiresProfileTool: 'fs.read', summary: "Return a safe project tree rooted at the active session project." }),
   Object.freeze({ id: 'registry.add', status: 'implemented', scope: 'sessionless', sideEffect: 'state' }),
   Object.freeze({ id: 'registry.reload', status: 'implemented', scope: 'sessionless', sideEffect: 'state' }),
   Object.freeze({ id: 'registry.sync', status: 'implemented', scope: 'sessionless', sideEffect: 'state' }),
@@ -209,10 +231,20 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'system.capabilities', status: 'protocol_only', scope: 'sessionless', sideEffect: 'none', summary: "Bridge emits system.capabilities as an event on session.ready; not accepted as a command." }),
   Object.freeze({ id: 'system.ping', status: 'implemented', scope: 'sessionless', sideEffect: 'read_only', summary: "Health check that returns pong from the bridge." }),
   Object.freeze({ id: 'system.version', status: 'not_wired', scope: 'sessionless', sideEffect: 'read_only', summary: "Bridge version metadata is not exposed as a request yet.", ui: Object.freeze({ gate: 'hidden', reason: "Bridge version is read from the WebSocket banner." }) }),
+  Object.freeze({ id: 'task.execution.continue', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Continue the active coding task through the agent." }),
+  Object.freeze({ id: 'task.plan.request_changes', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Ask the agent to revise the active task plan." }),
   Object.freeze({ id: 'transcript.completed', status: 'protocol_only', scope: 'session', sideEffect: 'none', summary: "Session-internal completion signal; not a client command." }),
   Object.freeze({ id: 'transcript.error', status: 'protocol_only', scope: 'session', sideEffect: 'none', summary: "Session-internal error signal; not a client command." }),
+  Object.freeze({ id: 'validation.failure.send_context', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Send a selected validation failure context to the active agent." }),
+  Object.freeze({ id: 'validation.run.request', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Record a validation run request and forward validation intent to the active agent." }),
   Object.freeze({ id: 'workbench.invoke', status: 'not_wired', scope: 'session', sideEffect: 'state', summary: "Generic workbench invoke is not implemented as a bridge executor.", ui: Object.freeze({ gate: 'disabled', reason: "Workbench invoke is not wired to a concrete backend command." }) }),
   Object.freeze({ id: 'workbench.select_tab', status: 'frontend_owned', scope: 'session', sideEffect: 'none', summary: "UI-only tab selection; should not cross WebSocket." }),
+  Object.freeze({ id: 'workspace.branch.request', status: 'implemented', scope: 'session', sideEffect: 'read_only', summary: "Return the active git branch for the session project root." }),
+  Object.freeze({ id: 'workspace.preview.open', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Record a local preview URL and emit workspace.preview.updated." }),
+  Object.freeze({ id: 'workspace.preview.refresh', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Refresh the current preview state." }),
+  Object.freeze({ id: 'workspace.preview.run_e2e', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Record an E2E validation request for the current preview." }),
+  Object.freeze({ id: 'workspace.preview.send_context', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Forward explicit preview context to the active agent." }),
+  Object.freeze({ id: 'workspace.preview.stop', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Mark the preview as stopped." }),
 ]);
 
 export const COMMAND_BY_ID: ReadonlyMap<CommandId, CommandEntry> = new Map(COMMAND_CATALOG.map((e) => [e.id, e]));

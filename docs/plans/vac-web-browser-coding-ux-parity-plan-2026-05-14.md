@@ -312,3 +312,23 @@ Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` 
 - [x] UI never fakes unsupported actions (truthful-disabled copy throughout).
 - [x] Full validation and pnpm test pass.
 
+
+
+## Implementation log — Code Workspace bridge contracts (2026-05-15)
+<callout icon="✅" color="green_bg">
+	**Status:** Minimal backend bridge contracts wired for Code Workspace. The browser workspace now has real bridge handlers for project tree/file reads, coding-context forwarding, preview state, validation requests, task continuation, and branch lookup.
+</callout>
+### Scope
+- `project.tree.request` → `project.tree.updated` with safe project-root traversal and noisy folders skipped.
+- `project.file.request` → `project.file.loaded` / `project.file.unsupported` / `project.file.error` with UTF-8, binary, and size guards.
+- `coding.context.*` commands forward structured file/selection/edit/test prompts to the active agent via existing `message.submit` runtime.
+- `workspace.preview.*` emits truthful preview state and can forward explicit preview context to the agent.
+- `validation.run.request` / `validation.failure.send_context` emit validation state and forward validation intent to the agent.
+- `task.execution.continue` / `task.plan.request_changes` forward lifecycle intent to the agent and emit task lifecycle state.
+- `workspace.branch.request` emits `workspace.branch.updated` from `git rev-parse --abbrev-ref HEAD`.
+### UX impact
+Code Workspace moves from truthful scaffold to a live browser coding loop: users can browse real repository files, open text files safely, send file/selection context to the agent, see preview/validation/task events in the existing panels, and get a real branch signal instead of a static placeholder.
+### Residual risk
+- Preview is still stateful/contextual, not a managed dev-server runtime.
+- Validation requests are recorded and forwarded to the agent; authoritative command execution still belongs to workflow/runtime paths.
+- File traversal is intentionally conservative and skips heavy directories (`.git`, `node_modules`, `target`, `.turbo`).

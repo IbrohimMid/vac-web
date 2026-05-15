@@ -4,6 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { WorkspaceTopbar } from './WorkspaceTopbar';
 import { useSession } from '../../stores/session';
+import { useWorkspace } from '../../stores/workspace';
 import type { TransportHandle } from '../../transport';
 
 const transport = {
@@ -18,6 +19,7 @@ describe('WorkspaceTopbar', () => {
     cleanup();
     vi.clearAllMocks();
     useSession.getState().clear();
+    useWorkspace.getState().setBranchName(null);
   });
 
   it('renders the toolbar region', () => {
@@ -44,6 +46,12 @@ describe('WorkspaceTopbar', () => {
   it('branch pill has updated title without stale phase copy', () => {
     render(<WorkspaceTopbar transport={null} />);
     expect(screen.getByTitle('Branch not yet available from bridge')).toBeInTheDocument();
+  });
+
+  it('shows branch name when branch event updated the workspace store', () => {
+    useWorkspace.getState().setBranchName('main');
+    render(<WorkspaceTopbar transport={null} />);
+    expect(screen.getByTitle('Branch: main')).toBeInTheDocument();
   });
 
   it('palette button is disabled when transport is null', () => {

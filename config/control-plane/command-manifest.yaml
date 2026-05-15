@@ -306,6 +306,100 @@ commands:
       gate: disabled
       reason: Palette actions must be classified before they execute.
 
+
+  # Code Workspace bridge contracts ---------------------------------------
+  - id: project.tree.request
+    status: implemented
+    side_effect: read_only
+    scope: session
+    requires_profile_tool: fs.read
+    summary: Return a safe project tree rooted at the active session project.
+  - id: project.file.request
+    status: implemented
+    side_effect: read_only
+    scope: session
+    requires_profile_tool: fs.read
+    summary: Return UTF-8 text file contents with binary and size guards.
+  - id: coding.context.ask_about_file
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Forward file context to the active agent as a structured prompt.
+  - id: coding.context.ask_about_selection
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Forward selected lines to the active agent as a structured prompt.
+  - id: coding.context.request_edit
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Ask the active agent to edit a file using current workspace context.
+  - id: coding.context.request_tests
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Ask the active agent to generate or update tests for a file.
+  - id: workspace.preview.open
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Record a local preview URL and emit workspace.preview.updated.
+  - id: workspace.preview.refresh
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Refresh the current preview state.
+  - id: workspace.preview.stop
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Mark the preview as stopped.
+  - id: workspace.preview.send_context
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Forward explicit preview context to the active agent.
+  - id: workspace.preview.run_e2e
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Record an E2E validation request for the current preview.
+  - id: validation.run.request
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Record a validation run request and forward validation intent to the active agent.
+  - id: validation.failure.send_context
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Send a selected validation failure context to the active agent.
+  - id: task.execution.continue
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Continue the active coding task through the agent.
+  - id: task.plan.request_changes
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Ask the agent to revise the active task plan.
+  - id: workspace.branch.request
+    status: implemented
+    side_effect: read_only
+    scope: session
+    summary: Return the active git branch for the session project root.
+
   # Assessment ------------------------------------------------------------
   - id: assessment.run
     status: implemented

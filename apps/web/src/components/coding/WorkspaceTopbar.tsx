@@ -3,7 +3,7 @@
 // that link back to global controls. Task / branch are static placeholders
 // until Phase 5 lands a real task lifecycle.
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { TransportHandle } from '../../transport';
 import { useTasks } from '../../stores/tasks';
 import { useCockpit } from '../../stores/cockpit';
@@ -31,6 +31,7 @@ export function WorkspaceTopbar({ transport }: Props) {
   const sidebarCollapsed = useCockpit((s) => s.sidebarCollapsed);
   const explorerCollapsed = useWorkspace((s) => s.explorerCollapsed);
   const toggleExplorer = useWorkspace((s) => s.toggleExplorerCollapsed);
+  const branchName = useWorkspace((s) => s.branchName);
   const shellOpen = useShell((s) => s.open);
 
   const toggleSidebar = () => {
@@ -47,6 +48,11 @@ export function WorkspaceTopbar({ transport }: Props) {
     : '—';
   const status = sessionId ? 'ready' : 'blocked';
 
+  useEffect(() => {
+    if (!transport || !sessionId) return;
+    transport.send(sessionId, 'workspace.branch.request', {}).catch(() => {});
+  }, [transport, sessionId]);
+
   return (
     <div
       className="codeworkspace-topbar"
@@ -62,8 +68,8 @@ export function WorkspaceTopbar({ transport }: Props) {
       <span className="cw-pill" title={activeTask ? `Task: ${activeTask.taskId}` : 'No active task yet'}>
         task&nbsp;<strong>{taskLabel}</strong>
       </span>
-      <span className="cw-pill" title="Branch not yet available from bridge">
-        branch&nbsp;<strong>\u2014</strong>
+      <span className="cw-pill" title={branchName ? `Branch: ${branchName}` : 'Branch not yet available from bridge'}>
+        branch&nbsp;<strong>{branchName ?? '\u2014'}</strong>
       </span>
       <span
         className={`cw-pill status-${status}`}

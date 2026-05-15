@@ -9,6 +9,7 @@ describe('useWorkspace store (Phase 1 shell)', () => {
       explorerCollapsed: false,
       runtimeDrawerOpen: false,
       activePanel: 'code',
+      branchName: null,
     });
   });
 
@@ -17,6 +18,7 @@ describe('useWorkspace store (Phase 1 shell)', () => {
     expect(s.explorerCollapsed).toBe(false);
     expect(s.runtimeDrawerOpen).toBe(false);
     expect(s.activePanel).toBe('code');
+    expect(s.branchName).toBeNull();
   });
 
   it('toggles explorer collapsed', () => {
@@ -31,6 +33,11 @@ describe('useWorkspace store (Phase 1 shell)', () => {
     expect(useWorkspace.getState().runtimeDrawerOpen).toBe(true);
     useWorkspace.getState().setRuntimeDrawerOpen(false);
     expect(useWorkspace.getState().runtimeDrawerOpen).toBe(false);
+  });
+
+  it('sets branch name from bridge events', () => {
+    useWorkspace.getState().setBranchName('main');
+    expect(useWorkspace.getState().branchName).toBe('main');
   });
 
   it('switches active panel', () => {

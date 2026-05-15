@@ -48,6 +48,12 @@ export type EventId =
   | 'pairing.exchange_denied'
   | 'pairing.mint'
   | 'perf.run_completed'
+  | 'project.file.error'
+  | 'project.file.loaded'
+  | 'project.file.unsupported'
+  | 'project.tree.error'
+  | 'project.tree.unsupported'
+  | 'project.tree.updated'
   | 'release.deploy_progress'
   | 'release.notes_draft'
   | 'release.post_deploy_observation'
@@ -64,10 +70,19 @@ export type EventId =
   | 'session.started'
   | 'shell.output'
   | 'shell.started'
+  | 'task.approval.required'
+  | 'task.approval.resolved'
+  | 'task.execution.blocked'
+  | 'task.execution.completed'
+  | 'task.execution.failed'
+  | 'task.execution.started'
+  | 'task.plan.proposed'
+  | 'task.plan.updated'
   | 'terminal.activity'
   | 'tool.failed'
   | 'tool.observed'
   | 'tool.updated'
+  | 'validation.run.updated'
   | 'workflow.artifact.created'
   | 'workflow.completed'
   | 'workflow.failed'
@@ -77,6 +92,12 @@ export type EventId =
   | 'workflow.step.failed'
   | 'workflow.step.started'
   | 'workflow.step.updated'
+  | 'workspace.branch.updated'
+  | 'workspace.preview.console_error'
+  | 'workspace.preview.error'
+  | 'workspace.preview.network_failure'
+  | 'workspace.preview.unsupported'
+  | 'workspace.preview.updated'
   | 'ws.auth_failed'
   | 'ws.connected'
   | 'ws.disconnected';
@@ -113,6 +134,12 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'pairing.exchange_denied', status: 'implemented', owner: 'bridge', producer: "auth.exchange_pair", consumers: Object.freeze(["audit.pairing_shard"]) }),
   Object.freeze({ id: 'pairing.mint', status: 'implemented', owner: 'bridge', producer: "auth.mint_pair", consumers: Object.freeze(["audit.pairing_shard"]) }),
   Object.freeze({ id: 'perf.run_completed', status: 'implemented', owner: 'bridge', producer: "perf.handle_latest_run", consumers: Object.freeze(["PerfBadge"]) }),
+  Object.freeze({ id: 'project.file.error', status: 'implemented', owner: 'bridge', producer: "translator.project_file_request", consumers: Object.freeze(["domain.project.handlers", "CodePanel"]) }),
+  Object.freeze({ id: 'project.file.loaded', status: 'implemented', owner: 'bridge', producer: "translator.project_file_request", consumers: Object.freeze(["domain.project.handlers", "CodePanel"]) }),
+  Object.freeze({ id: 'project.file.unsupported', status: 'implemented', owner: 'bridge', producer: "translator.project_file_request", consumers: Object.freeze(["domain.project.handlers", "CodePanel"]) }),
+  Object.freeze({ id: 'project.tree.error', status: 'implemented', owner: 'bridge', producer: "translator.project_tree_request", consumers: Object.freeze(["domain.project.handlers", "ProjectExplorer"]) }),
+  Object.freeze({ id: 'project.tree.unsupported', status: 'implemented', owner: 'bridge', producer: "translator.project_tree_request", consumers: Object.freeze(["domain.project.handlers", "ProjectExplorer"]) }),
+  Object.freeze({ id: 'project.tree.updated', status: 'implemented', owner: 'bridge', producer: "translator.project_tree_request", consumers: Object.freeze(["domain.project.handlers", "ProjectExplorer"]) }),
   Object.freeze({ id: 'release.deploy_progress', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'release.notes_draft', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'release.post_deploy_observation', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
@@ -129,10 +156,19 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'session.started', status: 'implemented', owner: 'bridge', producer: "translator.session_started", consumers: Object.freeze(["domain.sessions.handlers", "SessionPicker", "capabilities.sessionLifecycle"]) }),
   Object.freeze({ id: 'shell.output', status: 'not_wired', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
   Object.freeze({ id: 'shell.started', status: 'not_wired', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
+  Object.freeze({ id: 'task.approval.required', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.approval.resolved', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.execution.blocked', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.execution.completed', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.execution.failed', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.execution.started', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.plan.proposed', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
+  Object.freeze({ id: 'task.plan.updated', status: 'implemented', owner: 'bridge', producer: "translator.task_lifecycle", consumers: Object.freeze(["domain.tasks.handlers", "TaskBoard"]) }),
   Object.freeze({ id: 'terminal.activity', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
   Object.freeze({ id: 'tool.failed', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
   Object.freeze({ id: 'tool.observed', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
   Object.freeze({ id: 'tool.updated', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
+  Object.freeze({ id: 'validation.run.updated', status: 'implemented', owner: 'bridge', producer: "translator.validation_run_request", consumers: Object.freeze(["domain.validation.handlers", "ValidationPanel", "domain.tasks.handlers"]) }),
   Object.freeze({ id: 'workflow.artifact.created', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.failed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
@@ -142,6 +178,12 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'workflow.step.failed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.step.started', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.step.updated', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
+  Object.freeze({ id: 'workspace.branch.updated', status: 'implemented', owner: 'bridge', producer: "translator.workspace_branch_request", consumers: Object.freeze(["WorkspaceTopbar"]) }),
+  Object.freeze({ id: 'workspace.preview.console_error', status: 'implemented', owner: 'bridge', producer: "translator.workspace_preview", consumers: Object.freeze(["domain.preview.handlers", "PreviewPanel"]) }),
+  Object.freeze({ id: 'workspace.preview.error', status: 'implemented', owner: 'bridge', producer: "translator.workspace_preview", consumers: Object.freeze(["domain.preview.handlers", "PreviewPanel"]) }),
+  Object.freeze({ id: 'workspace.preview.network_failure', status: 'implemented', owner: 'bridge', producer: "translator.workspace_preview", consumers: Object.freeze(["domain.preview.handlers", "PreviewPanel"]) }),
+  Object.freeze({ id: 'workspace.preview.unsupported', status: 'implemented', owner: 'bridge', producer: "translator.workspace_preview", consumers: Object.freeze(["domain.preview.handlers", "PreviewPanel"]) }),
+  Object.freeze({ id: 'workspace.preview.updated', status: 'implemented', owner: 'bridge', producer: "translator.workspace_preview", consumers: Object.freeze(["domain.preview.handlers", "PreviewPanel"]) }),
   Object.freeze({ id: 'ws.auth_failed', status: 'implemented', owner: 'bridge', producer: "ws.handler.run_socket", consumers: Object.freeze(["audit.ws_shard"]) }),
   Object.freeze({ id: 'ws.connected', status: 'implemented', owner: 'bridge', producer: "ws.handler.run_socket", consumers: Object.freeze(["audit.ws_shard"]) }),
   Object.freeze({ id: 'ws.disconnected', status: 'implemented', owner: 'bridge', producer: "ws.handler.run_socket", consumers: Object.freeze(["audit.ws_shard"]) }),

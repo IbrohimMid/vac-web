@@ -15,17 +15,20 @@ interface WorkspaceSlice {
   explorerCollapsed: boolean;
   runtimeDrawerOpen: boolean;
   activePanel: WorkspacePanel;
+  branchName: string | null;
   setExplorerCollapsed(c: boolean): void;
   toggleExplorerCollapsed(): void;
   setRuntimeDrawerOpen(o: boolean): void;
   toggleRuntimeDrawerOpen(): void;
   setActivePanel(p: WorkspacePanel): void;
+  setBranchName(name: string | null): void;
 }
 
 export const useWorkspace = create<WorkspaceSlice>((set, get) => ({
   explorerCollapsed: false,
   runtimeDrawerOpen: false,
   activePanel: 'code',
+  branchName: null,
   setExplorerCollapsed(explorerCollapsed) {
     set({ explorerCollapsed });
   },
@@ -40,5 +43,8 @@ export const useWorkspace = create<WorkspaceSlice>((set, get) => ({
   },
   setActivePanel(activePanel) {
     set({ activePanel });
+  },
+  setBranchName(branchName) {
+    set({ branchName });
   },
 }));

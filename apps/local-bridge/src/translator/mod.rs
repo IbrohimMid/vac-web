@@ -13,6 +13,7 @@ use crate::ws::envelope::{ClientCommand, ErrorInfo, ServerAck, ServerEvent};
 use bridge_core::{AuditSeverity, ReplayResult};
 use profile_core::{enforce::enforce_agent_kind, profile::CapabilityProfile, Decision};
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::warn;
 use ulid::Ulid;
@@ -210,6 +211,27 @@ pub async fn dispatch_command(
     }
 
     match cmd.cmd_type.as_str() {
+        // Code Workspace bridge contracts: project browsing, coding context, preview,
+        // validation, task lifecycle, and branch state. These are intentionally
+        // small, truthful backend adapters for the browser coding workspace.
+        "project.tree.request" => handle_project_tree_request(&cmd, &state).await,
+        "project.file.request" => handle_project_file_request(&cmd, &state).await,
+        "coding.context.ask_about_file"
+        | "coding.context.ask_about_selection"
+        | "coding.context.request_edit"
+        | "coding.context.request_tests" => handle_coding_context_command(&cmd, &state).await,
+        "workspace.preview.open"
+        | "workspace.preview.refresh"
+        | "workspace.preview.stop"
+        | "workspace.preview.send_context"
+        | "workspace.preview.run_e2e" => handle_workspace_preview_command(&cmd, &state).await,
+        "validation.run.request" | "validation.failure.send_context" => {
+            handle_validation_command(&cmd, &state).await
+        }
+        "task.execution.continue" | "task.plan.request_changes" => {
+            handle_task_lifecycle_command(&cmd, &state).await
+        }
+        "workspace.branch.request" => handle_workspace_branch_request(&cmd, &state).await,
         "system.ping" => (
             ServerAck {
                 ack_of: cmd.id.clone(),
@@ -4770,6 +4792,658 @@ fn parse_registry_add_payload(
         source: crate::agent_runtime::RegistryEntrySource::Remote,
         installed: false,
     })
+}
+
+// === Code Workspace bridge contracts ======================================
+const PROJECT_TREE_MAX_ENTRIES: usize = 2000;
+const PROJECT_FILE_MAX_BYTES: u64 = 512 * 1024;
+
+fn cw_ack_ok(cmd: &ClientCommand) -> ServerAck {
+    ServerAck {
+        ack_of: cmd.id.clone(),
+        ok: true,
+        error: None,
+    }
+}
+
+fn cw_ack_err(cmd: &ClientCommand, code: &str, message: impl Into<String>) -> ServerAck {
+    ServerAck {
+        ack_of: cmd.id.clone(),
+        ok: false,
+        error: Some(ErrorInfo {
+            code: code.into(),
+            message: message.into(),
+        }),
+    }
+}
+
+fn cw_event_for(cmd: &ClientCommand, event_type: &str, payload: serde_json::Value) -> ServerEvent {
+    ServerEvent {
+        seq: 0,
+        session_id: cmd.session_id.clone(),
+        event_type: event_type.into(),
+        payload,
+        v: 1,
+        ts: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+fn cw_session_or_ack(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> Result<crate::session::handle::SessionHandleRef, (ServerAck, Vec<ServerEvent>)> {
+    state.sessions.get(&cmd.session_id).ok_or_else(|| {
+        (
+            cw_ack_err(
+                cmd,
+                "session.not_found",
+                format!("session '{}' not found", cmd.session_id),
+            ),
+            vec![],
+        )
+    })
+}
+
+fn cw_safe_relative_path(raw: Option<&str>) -> Result<PathBuf, String> {
+    let Some(raw) = raw else {
+        return Ok(PathBuf::new());
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(PathBuf::new());
+    }
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err("absolute paths are not allowed".into());
+    }
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => out.push(part),
+            std::path::Component::CurDir => {}
+            _ => return Err("path escapes project root".into()),
+        }
+    }
+    Ok(out)
+}
+
+fn cw_resolve_project_path(root: &Path, raw: Option<&str>) -> Result<PathBuf, String> {
+    Ok(root.join(cw_safe_relative_path(raw)?))
+}
+
+fn cw_rel_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn cw_looks_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(4096).any(|b| *b == 0)
+}
+
+fn cw_collect_project_entries(root: &Path, start: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let mut entries = Vec::new();
+    let mut stack = vec![start.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut children = std::fs::read_dir(&dir)
+            .map_err(|e| format!("failed to read '{}': {e}", cw_rel_path(root, &dir)))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        children.sort_by_key(|e| e.path());
+        for child in children {
+            if entries.len() >= PROJECT_TREE_MAX_ENTRIES {
+                return Ok(entries);
+            }
+            let path = child.path();
+            let name = child.file_name().to_string_lossy().to_string();
+            if name == ".git" || name == "node_modules" || name == "target" || name == ".turbo" {
+                continue;
+            }
+            let Ok(meta) = child.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                entries.push(json!({ "path": cw_rel_path(root, &path), "type": "directory" }));
+                stack.push(path);
+            } else if meta.is_file() {
+                entries.push(
+                    json!({ "path": cw_rel_path(root, &path), "type": "file", "size": meta.len() }),
+                );
+            }
+        }
+    }
+    entries.sort_by(|a, b| {
+        let ap = a.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+        let bp = b.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+        ap.cmp(bp)
+    });
+    Ok(entries)
+}
+
+async fn handle_project_tree_request(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    let root = handle.project_root.clone();
+    let raw_root = cmd.payload.get("root").and_then(|v| v.as_str());
+    let start = match cw_resolve_project_path(&root, raw_root) {
+        Ok(p) => p,
+        Err(message) => {
+            return (
+                cw_ack_err(cmd, "project.path_invalid", message.clone()),
+                vec![cw_event_for(
+                    cmd,
+                    "project.tree.error",
+                    json!({ "session_id": cmd.session_id, "message": message }),
+                )],
+            )
+        }
+    };
+    if !start.exists() || !start.is_dir() {
+        let message = "project root does not exist or is not a directory".to_string();
+        return (
+            cw_ack_err(cmd, "project.root_invalid", message.clone()),
+            vec![cw_event_for(
+                cmd,
+                "project.tree.error",
+                json!({ "session_id": cmd.session_id, "message": message }),
+            )],
+        );
+    }
+    match cw_collect_project_entries(&root, &start) {
+        Ok(entries) => (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "project.tree.updated",
+                json!({ "session_id": cmd.session_id, "entries": entries }),
+            )],
+        ),
+        Err(message) => (
+            cw_ack_err(cmd, "project.tree_failed", message.clone()),
+            vec![cw_event_for(
+                cmd,
+                "project.tree.error",
+                json!({ "session_id": cmd.session_id, "message": message }),
+            )],
+        ),
+    }
+}
+
+async fn handle_project_file_request(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    let Some(path_raw) = cmd.payload.get("path").and_then(|v| v.as_str()) else {
+        return (
+            cw_ack_err(cmd, "project.path_required", "path is required"),
+            vec![],
+        );
+    };
+    let root = handle.project_root.clone();
+    let path = match cw_resolve_project_path(&root, Some(path_raw)) {
+        Ok(p) => p,
+        Err(message) => {
+            return (
+                cw_ack_err(cmd, "project.path_invalid", message.clone()),
+                vec![cw_event_for(
+                    cmd,
+                    "project.file.error",
+                    json!({ "session_id": cmd.session_id, "path": path_raw, "message": message }),
+                )],
+            )
+        }
+    };
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            let message = e.to_string();
+            return (
+                cw_ack_err(cmd, "project.file_missing", message.clone()),
+                vec![cw_event_for(
+                    cmd,
+                    "project.file.error",
+                    json!({ "session_id": cmd.session_id, "path": path_raw, "message": message }),
+                )],
+            );
+        }
+    };
+    if !meta.is_file() {
+        let message = "path is not a file".to_string();
+        return (
+            cw_ack_err(cmd, "project.not_file", message.clone()),
+            vec![cw_event_for(
+                cmd,
+                "project.file.error",
+                json!({ "session_id": cmd.session_id, "path": path_raw, "message": message }),
+            )],
+        );
+    }
+    if meta.len() > PROJECT_FILE_MAX_BYTES {
+        let reason = format!("file exceeds {} bytes", PROJECT_FILE_MAX_BYTES);
+        return (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "project.file.unsupported",
+                json!({ "session_id": cmd.session_id, "path": path_raw, "reason": reason }),
+            )],
+        );
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            let message = e.to_string();
+            return (
+                cw_ack_err(cmd, "project.file_read_failed", message.clone()),
+                vec![cw_event_for(
+                    cmd,
+                    "project.file.error",
+                    json!({ "session_id": cmd.session_id, "path": path_raw, "message": message }),
+                )],
+            );
+        }
+    };
+    if cw_looks_binary(&bytes) {
+        return (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "project.file.unsupported",
+                json!({ "session_id": cmd.session_id, "path": path_raw, "reason": "binary file preview is not supported" }),
+            )],
+        );
+    }
+    let content = match String::from_utf8(bytes) {
+        Ok(c) => c,
+        Err(_) => {
+            return (
+                cw_ack_ok(cmd),
+                vec![cw_event_for(
+                    cmd,
+                    "project.file.unsupported",
+                    json!({ "session_id": cmd.session_id, "path": path_raw, "reason": "file is not valid UTF-8 text" }),
+                )],
+            )
+        }
+    };
+    (
+        cw_ack_ok(cmd),
+        vec![cw_event_for(
+            cmd,
+            "project.file.loaded",
+            json!({
+                "session_id": cmd.session_id,
+                "path": path_raw,
+                "content": content,
+                "encoding": "utf-8",
+                "size": meta.len(),
+                "truncated": false,
+            }),
+        )],
+    )
+}
+
+async fn handle_coding_context_command(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    let Some(path) = cmd.payload.get("path").and_then(|v| v.as_str()) else {
+        return (
+            cw_ack_err(cmd, "coding.path_required", "path is required"),
+            vec![],
+        );
+    };
+    if let Err(message) = cw_safe_relative_path(Some(path)) {
+        return (cw_ack_err(cmd, "coding.path_invalid", message), vec![]);
+    }
+    let prompt = cw_build_coding_context_prompt(cmd);
+    let agent_cmd = ClientCommand {
+        id: format!("{}_agent", cmd.id),
+        session_id: cmd.session_id.clone(),
+        cmd_type: "message.submit".into(),
+        payload: json!({ "text": prompt }),
+        v: cmd.v,
+    };
+    match handle.send_client_command(&agent_cmd).await {
+        Ok(()) => (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "task.execution.started",
+                json!({
+                    "session_id": cmd.session_id,
+                    "task_id": format!("coding-{}", cmd.id),
+                    "title": cw_coding_context_title(cmd.cmd_type.as_str(), path),
+                    "active_step": "Sent file context to agent",
+                    "changed_files": [path],
+                    "source_event_type": cmd.cmd_type,
+                }),
+            )],
+        ),
+        Err(e) => (
+            cw_ack_err(cmd, "coding.agent_dispatch_failed", e.to_string()),
+            vec![],
+        ),
+    }
+}
+
+fn cw_coding_context_title(kind: &str, path: &str) -> String {
+    match kind {
+        "coding.context.ask_about_selection" => format!("Explain selection in {path}"),
+        "coding.context.request_edit" => format!("Edit {path}"),
+        "coding.context.request_tests" => format!("Generate tests for {path}"),
+        _ => format!("Explain {path}"),
+    }
+}
+
+fn cw_build_coding_context_prompt(cmd: &ClientCommand) -> String {
+    let path = cmd
+        .payload
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match cmd.cmd_type.as_str() {
+        "coding.context.ask_about_selection" => {
+            let start = cmd.payload.get("start_line").and_then(|v| v.as_i64()).unwrap_or(1);
+            let end = cmd.payload.get("end_line").and_then(|v| v.as_i64()).unwrap_or(start);
+            let selected = cmd.payload.get("selected_text").and_then(|v| v.as_str()).unwrap_or("");
+            format!("Please explain this selection from `{path}` lines {start}-{end}:\n\n```\n{selected}\n```")
+        }
+        "coding.context.request_edit" => {
+            let hint = cmd.payload.get("hint").and_then(|v| v.as_str()).unwrap_or("Apply the requested edit safely.");
+            format!("Please edit `{path}`. User intent: {hint}\n\nUse the repository context and keep changes minimal.")
+        }
+        "coding.context.request_tests" => format!("Please generate or update focused tests for `{path}`. Keep changes minimal and run relevant validation."),
+        _ => {
+            let excerpt = cmd.payload.get("excerpt").and_then(|v| v.as_str()).unwrap_or("");
+            format!("Please explain `{path}` in the current repository context.\n\nExcerpt:\n```\n{excerpt}\n```")
+        }
+    }
+}
+
+async fn handle_workspace_preview_command(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    if let Err(pair) = cw_session_or_ack(cmd, state) {
+        return pair;
+    }
+    match cmd.cmd_type.as_str() {
+        "workspace.preview.open" | "workspace.preview.refresh" => {
+            let url = cmd
+                .payload
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("http://127.0.0.1:5173");
+            (
+                cw_ack_ok(cmd),
+                vec![cw_event_for(
+                    cmd,
+                    "workspace.preview.updated",
+                    json!({
+                        "session_id": cmd.session_id,
+                        "status": "running",
+                        "url": url,
+                        "source_event_type": cmd.cmd_type,
+                    }),
+                )],
+            )
+        }
+        "workspace.preview.stop" => (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "workspace.preview.updated",
+                json!({
+                    "session_id": cmd.session_id,
+                    "status": "stopped",
+                    "source_event_type": cmd.cmd_type,
+                }),
+            )],
+        ),
+        "workspace.preview.send_context" => {
+            let handle = match cw_session_or_ack(cmd, state) {
+                Ok(h) => h,
+                Err(pair) => return pair,
+            };
+            let url = cmd
+                .payload
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("preview");
+            let prompt = format!(
+                "Preview context for current task: {url}\nConsole errors: {}\nNetwork failures: {}\nPlease use this browser context when diagnosing the UI.",
+                cmd.payload.get("console_errors").cloned().unwrap_or(json!([])),
+                cmd.payload.get("network_failures").cloned().unwrap_or(json!([])),
+            );
+            let agent_cmd = ClientCommand {
+                id: format!("{}_preview", cmd.id),
+                session_id: cmd.session_id.clone(),
+                cmd_type: "message.submit".into(),
+                payload: json!({ "text": prompt }),
+                v: cmd.v,
+            };
+            match handle.send_client_command(&agent_cmd).await {
+                Ok(()) => (cw_ack_ok(cmd), vec![]),
+                Err(e) => (
+                    cw_ack_err(cmd, "preview.agent_dispatch_failed", e.to_string()),
+                    vec![],
+                ),
+            }
+        }
+        "workspace.preview.run_e2e" => (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "validation.run.updated",
+                json!({
+                    "session_id": cmd.session_id,
+                    "run_id": format!("preview-e2e-{}", cmd.id),
+                    "command": "pnpm -F web test:e2e",
+                    "label": "Preview E2E requested",
+                    "status": "pending",
+                    "message": "Preview E2E request recorded; run from Validation or Runtime for authoritative logs.",
+                    "source_event_type": cmd.cmd_type,
+                }),
+            )],
+        ),
+        _ => (
+            cw_ack_err(cmd, "preview.command_unknown", "unknown preview command"),
+            vec![],
+        ),
+    }
+}
+
+async fn handle_validation_command(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    match cmd.cmd_type.as_str() {
+        "validation.run.request" => {
+            let command = cmd
+                .payload
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pnpm -F web typecheck");
+            let run_id = cmd
+                .payload
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("validation-{}", cmd.id));
+            let started = cw_event_for(
+                cmd,
+                "validation.run.updated",
+                json!({
+                    "session_id": cmd.session_id,
+                    "run_id": run_id,
+                    "command": command,
+                    "label": command,
+                    "status": "pending",
+                    "message": "Validation request recorded by bridge; run authoritative commands from Runtime workflow.",
+                    "source_event_type": cmd.cmd_type,
+                }),
+            );
+            let prompt = format!("Please run or reason about this validation command for the current task: `{command}`. If it fails, summarize the failure and propose a fix.");
+            let agent_cmd = ClientCommand {
+                id: format!("{}_validation", cmd.id),
+                session_id: cmd.session_id.clone(),
+                cmd_type: "message.submit".into(),
+                payload: json!({ "text": prompt }),
+                v: cmd.v,
+            };
+            match handle.send_client_command(&agent_cmd).await {
+                Ok(()) => (cw_ack_ok(cmd), vec![started]),
+                Err(e) => (
+                    cw_ack_err(cmd, "validation.agent_dispatch_failed", e.to_string()),
+                    vec![started],
+                ),
+            }
+        }
+        "validation.failure.send_context" => {
+            let run_id = cmd
+                .payload
+                .get("run_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("selected validation run");
+            let prompt = format!(
+                "Please inspect validation failure `{run_id}` and propose the smallest safe fix."
+            );
+            let agent_cmd = ClientCommand {
+                id: format!("{}_failure", cmd.id),
+                session_id: cmd.session_id.clone(),
+                cmd_type: "message.submit".into(),
+                payload: json!({ "text": prompt }),
+                v: cmd.v,
+            };
+            match handle.send_client_command(&agent_cmd).await {
+                Ok(()) => (cw_ack_ok(cmd), vec![]),
+                Err(e) => (
+                    cw_ack_err(cmd, "validation.agent_dispatch_failed", e.to_string()),
+                    vec![],
+                ),
+            }
+        }
+        _ => (
+            cw_ack_err(
+                cmd,
+                "validation.command_unknown",
+                "unknown validation command",
+            ),
+            vec![],
+        ),
+    }
+}
+
+async fn handle_task_lifecycle_command(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    let task_id = cmd
+        .payload
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("task-{}", cmd.id));
+    let note = cmd
+        .payload
+        .get("note")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let prompt = match cmd.cmd_type.as_str() {
+        "task.plan.request_changes" => {
+            format!("Please revise the current implementation plan. User note: {note}")
+        }
+        _ => "Please continue the current implementation task from the latest safe checkpoint."
+            .to_string(),
+    };
+    let agent_cmd = ClientCommand {
+        id: format!("{}_task", cmd.id),
+        session_id: cmd.session_id.clone(),
+        cmd_type: "message.submit".into(),
+        payload: json!({ "text": prompt }),
+        v: cmd.v,
+    };
+    match handle.send_client_command(&agent_cmd).await {
+        Ok(()) => (
+            cw_ack_ok(cmd),
+            vec![cw_event_for(
+                cmd,
+                "task.execution.started",
+                json!({
+                    "session_id": cmd.session_id,
+                    "task_id": task_id,
+                    "title": "Continue coding task",
+                    "active_step": "Dispatched to agent",
+                    "source_event_type": cmd.cmd_type,
+                }),
+            )],
+        ),
+        Err(e) => (
+            cw_ack_err(cmd, "task.agent_dispatch_failed", e.to_string()),
+            vec![],
+        ),
+    }
+}
+
+async fn handle_workspace_branch_request(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let handle = match cw_session_or_ack(cmd, state) {
+        Ok(h) => h,
+        Err(pair) => return pair,
+    };
+    let branch = std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .current_dir(&handle.project_root)
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    (
+        cw_ack_ok(cmd),
+        vec![cw_event_for(
+            cmd,
+            "workspace.branch.updated",
+            json!({
+                "session_id": cmd.session_id,
+                "branch": branch,
+                "source_event_type": cmd.cmd_type,
+            }),
+        )],
+    )
 }
 
 #[cfg(test)]
