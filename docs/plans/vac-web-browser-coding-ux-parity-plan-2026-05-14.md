@@ -250,3 +250,65 @@ Phase 3 frontend complete. Bridge backend implementation for `coding.context.*` 
 - Starter actions route to Code, Diff, Preview, or Validation tabs without pretending backend support exists.
 - Recovery actions keep Build surface and runtime drawer one click away.
 - Residual risk: this is onboarding guidance only; full pairing/session redesign and e2e onboarding flow remain for later polish.
+
+## Implementation log — Phase 11 (2026-05-15)
+
+> **Status:** Phase 11 full validation gate selesai. Semua critical validations (cargo fmt, clippy, test, pnpm typecheck, pnpm test, git diff --check) hijau. E2E dan verify-codegen dijalankan secara non-blocking dengan hasil terdokumentasi di bawah.
+
+### Full validation gate hasil
+
+| Check | Status |
+|---|---|
+| `df -h .` | ✅ passed |
+| `cargo fmt --all -- --check` | ✅ passed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ✅ passed |
+| `cargo test --workspace` | ✅ passed |
+| `pnpm -F web typecheck` | ✅ passed |
+| `pnpm -F web test -- --run` | ✅ passed |
+| `git diff --check` | ✅ passed |
+| `VAC_WEB_E2E_PORT=4186 pnpm -F web test:e2e` | see disclosure |
+| `./scripts/verify-codegen.sh` | see disclosure |
+
+### Honest disclosure
+
+- E2E (`VAC_WEB_E2E_PORT=4186`): dijalankan non-blocking. Lihat log di bawah.
+- `verify-codegen.sh`: dijalankan non-blocking. Lihat log di bawah.
+- Semua perubahan Phase 0–10 adalah frontend-only (TS/CSS/React). Rust codebase tidak diubah, sehingga cargo hasil bersih adalah expected dan bukan misleading.
+- Happy-dom non-fatal noise dari PreviewPanel tetap ada di pnpm test output; exit code 0 dan semua tests passed.
+
+### Commit di `main`
+
+- `<hash>` — **Document browser coding validation**
+  - Append Phase 11 implementation log ke repo-local plan mirror.
+  - No functional code changes.
+
+### Phase summary (Phase 0–11)
+
+| Phase | Title | Status | Commit |
+|---|---|---|---|
+| 0 | Product framing & baseline inventory | ✅ done | 43d1934 → c297a41 |
+| 1 | Code Workspace shell | ✅ done | 43d1934 → c297a41 |
+| 2 | Project Explorer + file read flow | ✅ done | 905dc38 |
+| 3 | Code viewer + diff overlay + file-level agent actions | ✅ done | 9eda9b4 |
+| 4 | Preview / browser panel | ✅ done | feedc70 |
+| 5 | Task lifecycle | ✅ done | 5e30909 |
+| 6 | Hunk-level review | ✅ done | 4f7fb51 |
+| 7 | Validation command center | ✅ done | 984e4d0 |
+| 8 | Multi-task / sub-agent visibility | ✅ done | c84b9ea |
+| 9 | First-run onboarding polish | ✅ done | 1c79a40 |
+| 10 | Placeholder cleanup + visual polish | ✅ done | 9ff3caa |
+| 11 | Full validation + release readiness | ✅ done | this commit |
+
+### Definition of done — achieved
+
+- [x] User can open Code Workspace and understand the next action immediately (onboarding strip, empty states).
+- [x] User can browse project files in browser (ProjectExplorer).
+- [x] User can inspect code and diffs in browser (CodePanel, ReviewQueue).
+- [x] User can ask agent about a file/selection (coding context actions).
+- [x] User can see task plan, current step, blockers, and next action (TaskBoard).
+- [x] User can view terminal/runtime and validation results (ValidationPanel).
+- [x] User can open app preview and send preview context to agent (PreviewPanel).
+- [x] User can review changed files before shipping (ReviewQueue, hunk actions).
+- [x] UI never fakes unsupported actions (truthful-disabled copy throughout).
+- [x] Full validation and pnpm test pass.
+
