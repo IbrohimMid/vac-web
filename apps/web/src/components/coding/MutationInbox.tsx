@@ -12,6 +12,11 @@ import {
   refineMutation,
   retryMutation,
 } from '../../domain/bridge/actions';
+import {
+  parseMutationDiffHunks,
+  buildHunkRevertNote,
+  type MutationDiffHunk,
+} from '../../domain/bridge/mutationDiff';
 
 function formatSince(ts: number | undefined): string | null {
   if (!ts) return null;
@@ -158,6 +163,15 @@ function IntentCard({ intent, transport, sessionId, ready, promptForRefine }: Ca
     void refineMutation(transport, sessionId, intent.requestId, note).catch(() => {});
   }, [ready, transport, sessionId, pending, intent, promptForRefine]);
 
+  const onRequestHunkRevert = useCallback(
+    (hunk: MutationDiffHunk) => {
+      if (!ready || !transport || !sessionId || !pending) return;
+      const note = buildHunkRevertNote(intent, hunk);
+      void refineMutation(transport, sessionId, intent.requestId, note).catch(() => {});
+    },
+    [ready, transport, sessionId, pending, intent],
+  );
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLLIElement>) => {
       if (e.target !== cardRef.current) return;
@@ -198,9 +212,12 @@ function IntentCard({ intent, transport, sessionId, ready, promptForRefine }: Ca
         <p className="codeworkspace-mutationinbox-rationale">{intent.rationale}</p>
       ) : null}
       {intent.diffPreview ? (
-        <pre className="codeworkspace-mutationinbox-diff" data-testid="mutation-inbox-diff">
-{intent.diffPreview}
-        </pre>
+        <MutationDiffView
+          intent={intent}
+          ready={ready}
+          pending={pending}
+          onRequestRevert={onRequestHunkRevert}
+        />
       ) : null}
       <dl className="codeworkspace-mutationinbox-audit">
         <div><dt>request</dt><dd>{intent.requestId}</dd></div>
@@ -259,6 +276,66 @@ function IntentCard({ intent, transport, sessionId, ready, promptForRefine }: Ca
         </div>
       ) : null}
     </li>
+  );
+}
+
+function MutationDiffView({
+  intent,
+  ready,
+  pending,
+  onRequestRevert,
+}: {
+  intent: MutationIntent;
+  ready: boolean;
+  pending: boolean;
+  onRequestRevert: (hunk: MutationDiffHunk) => void;
+}) {
+  const hunks = useMemo(() => parseMutationDiffHunks(intent.diffPreview), [intent.diffPreview]);
+  if (hunks.length === 0) {
+    return (
+      <pre className="codeworkspace-mutationinbox-diff" data-testid="mutation-inbox-diff">
+{intent.diffPreview}
+      </pre>
+    );
+  }
+  return (
+    <div className="codeworkspace-mutationinbox-diff" data-testid="mutation-inbox-diff">
+      {hunks.map((hunk) => (
+        <div
+          key={hunk.id}
+          className="codeworkspace-mutationinbox-hunk"
+          data-testid="mutation-inbox-hunk"
+          data-hunk-id={hunk.id}
+        >
+          <header className="codeworkspace-mutationinbox-hunk-header">
+            <code className="codeworkspace-mutationinbox-hunk-anchor">{hunk.header}</code>
+            <span className="cw-empty-detail">+{hunk.additions} / -{hunk.deletions}</span>
+            <button
+              type="button"
+              className="codeworkspace-link-btn codeworkspace-mutationinbox-hunk-revert"
+              onClick={() => onRequestRevert(hunk)}
+              disabled={!ready || !pending}
+              data-testid="mutation-inbox-hunk-revert"
+              data-hunk-id={hunk.id}
+            >Request hunk revert</button>
+          </header>
+          <ol className="codeworkspace-mutationinbox-hunk-lines">
+            {hunk.lines.map((line, idx) => (
+              <li
+                key={idx}
+                className={`codeworkspace-mutationinbox-hunk-line codeworkspace-mutationinbox-hunk-line-${line.kind}`}
+                data-line-kind={line.kind}
+              >
+                <span className="codeworkspace-mutationinbox-hunk-glyph" aria-hidden="true">
+                  {line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : line.kind === 'meta' ? '!' : ' '}
+                </span>
+                <span className="codeworkspace-mutationinbox-hunk-text">{line.text}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ))}
+    </div>
   );
 }
 

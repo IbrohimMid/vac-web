@@ -594,3 +594,18 @@
   border-color: color-mix(in srgb, var(--danger, #ef4444) 55%, var(--line));
   color: var(--danger, #ef4444);
 }
+
+/* Phase B7 (Sprint B) - MutationInbox hunk-level diff render. */
+.codeworkspace-mutationinbox-diff { display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; }
+.codeworkspace-mutationinbox-hunk { border: 1px solid var(--cw-border, rgba(255,255,255,0.08)); border-radius: 6px; overflow: hidden; }
+.codeworkspace-mutationinbox-hunk-header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 4px 8px; background: var(--cw-surface-alt, rgba(255,255,255,0.04)); }
+.codeworkspace-mutationinbox-hunk-anchor { font-weight: 600; }
+.codeworkspace-mutationinbox-hunk-revert { margin-left: auto; }
+.codeworkspace-mutationinbox-hunk-lines { list-style: none; margin: 0; padding: 0; }
+.codeworkspace-mutationinbox-hunk-line { display: flex; gap: 6px; padding: 1px 8px; white-space: pre-wrap; word-break: break-word; }
+.codeworkspace-mutationinbox-hunk-line-add { background: rgba(46, 160, 67, 0.12); color: #6ddc8a; }
+.codeworkspace-mutationinbox-hunk-line-del { background: rgba(248, 81, 73, 0.12); color: #f08d86; }
+.codeworkspace-mutationinbox-hunk-line-ctx { opacity: 0.85; }
+.codeworkspace-mutationinbox-hunk-line-meta { opacity: 0.6; font-style: italic; }
+.codeworkspace-mutationinbox-hunk-glyph { width: 1ch; flex: 0 0 auto; opacity: 0.7; }
+.codeworkspace-mutationinbox-hunk-text { flex: 1 1 auto; }

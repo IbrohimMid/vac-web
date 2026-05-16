@@ -59,6 +59,50 @@ describe('<MutationInbox/>', () => {
     expect(screen.getByText('task-1')).toBeInTheDocument();
   });
 
+  it('renders structured hunks when diffPreview contains @@ markers', () => {
+    useSession.getState().setSession('s1', 'mock', '/tmp/repo');
+    seedIntent({
+      diffPreview: '@@ -1,2 +1,2 @@\n-old\n+new\n ctx',
+    });
+    render(<MutationInbox transport={fakeTransport()} />);
+    const hunks = screen.getAllByTestId('mutation-inbox-hunk');
+    expect(hunks).toHaveLength(1);
+    expect(screen.getByText('@@ -1,2 +1,2 @@')).toBeInTheDocument();
+    expect(screen.getByText('+1 / -1')).toBeInTheDocument();
+  });
+
+  it('hunk revert button dispatches bridge.mutation.refine_request with deterministic note', () => {
+    useSession.getState().setSession('s1', 'mock', '/tmp/repo');
+    seedIntent({
+      summary: 'Refactor token store',
+      diffPreview: '@@ -1 +1 @@\n-a\n+b\n@@ -10 +10 @@\n-c\n+d',
+    });
+    const t = fakeTransport();
+    render(<MutationInbox transport={t} />);
+    const revertButtons = screen.getAllByTestId('mutation-inbox-hunk-revert');
+    expect(revertButtons).toHaveLength(2);
+    fireEvent.click(revertButtons[1]!);
+    expect(t.send).toHaveBeenCalledWith(
+      's1',
+      'bridge.mutation.refine_request',
+      expect.objectContaining({
+        session_id: 's1',
+        request_id: 'req-1',
+        note: expect.stringContaining('hunk-2'),
+      }),
+    );
+    const noteArg = (t.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(String(noteArg.note)).toContain('@@ -10 +10 @@');
+    expect(String(noteArg.note)).toContain('Refactor token store');
+  });
+
+  it('hunk revert button is disabled once the intent is not pending', () => {
+    useSession.getState().setSession('s1', 'mock', '/tmp/repo');
+    seedIntent({ status: 'applied', diffPreview: '@@ -1 +1 @@\n-a\n+b' });
+    render(<MutationInbox transport={fakeTransport()} />);
+    expect(screen.getByTestId('mutation-inbox-hunk-revert')).toBeDisabled();
+  });
+
   it('approve click dispatches bridge.mutation.approve and writes optimistic status', () => {
     useSession.getState().setSession('s1', 'mock', '/tmp/repo');
     seedIntent();
