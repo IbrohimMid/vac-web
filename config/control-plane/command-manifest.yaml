@@ -220,6 +220,27 @@ commands:
       gate: disabled
       reason: Bulk revert requires bridge fs executor + audit; not wired.
 
+  # Bridge mutation pipeline (Sprint B) -----------------------------------
+  # B2 declares the approval action surface. Status stays `not_wired` until
+  # the Rust translator wires the apply executor in Phase B5.
+  - id: bridge.mutation.approve
+    status: implemented
+    side_effect: state
+    scope: session
+    requires_profile_tool: fs.write
+    summary: Approve a pending bridge mutation; the bridge applies on disk and emits the audited lifecycle event.
+  - id: bridge.mutation.reject
+    status: implemented
+    side_effect: state
+    scope: session
+    summary: Reject a pending bridge mutation; the bridge discards the intent without touching disk.
+  - id: bridge.mutation.refine_request
+    status: implemented
+    side_effect: state
+    scope: session
+    runtime: agent_forwarded
+    summary: Ask the local AI to refine a pending bridge mutation; the intent stays pending until a new request_id replaces it.
+
   # Runtime jobs ----------------------------------------------------------
   - id: runtime.list_jobs
     status: not_wired

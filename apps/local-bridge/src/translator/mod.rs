@@ -214,6 +214,9 @@ pub async fn dispatch_command(
         // Code Workspace bridge contracts: project browsing, coding context, preview,
         // validation, task lifecycle, and branch state. These are intentionally
         // small, truthful backend adapters for the browser coding workspace.
+        "bridge.mutation.approve" => translate_mutation_approve(&cmd, &state).await,
+        "bridge.mutation.reject" => translate_mutation_reject(&cmd, &state).await,
+        "bridge.mutation.refine_request" => translate_mutation_refine_request(&cmd, &state).await,
         "review.revert_file" | "review.hunk.action.request" => {
             handle_review_action_command(&cmd, &state).await
         }
@@ -5096,6 +5099,280 @@ async fn handle_project_file_request(
     )
 }
 
+fn mutation_payload_str<'a>(cmd: &'a ClientCommand, key: &str) -> Option<&'a str> {
+    cmd.payload.get(key).and_then(|v| v.as_str()).or_else(|| {
+        cmd.payload
+            .get("mutation")
+            .and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+    })
+}
+
+fn mutation_request_id(cmd: &ClientCommand) -> Result<String, ServerAck> {
+    mutation_payload_str(cmd, "request_id")
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            cw_ack_err(
+                cmd,
+                "mutation.request_id_required",
+                "request_id is required",
+            )
+        })
+}
+
+fn bridge_mutation_event(
+    cmd: &ClientCommand,
+    event_type: &str,
+    request_id: &str,
+    mut payload: serde_json::Value,
+) -> ServerEvent {
+    payload["request_id"] = json!(request_id);
+    cw_event_for(cmd, event_type, payload)
+}
+
+fn bridge_mutation_failed(
+    cmd: &ClientCommand,
+    request_id: &str,
+    reason: impl Into<String>,
+    error_code: &str,
+) -> ServerEvent {
+    bridge_mutation_event(
+        cmd,
+        "bridge.mutation.failed",
+        request_id,
+        json!({ "reason": reason.into(), "error_code": error_code }),
+    )
+}
+
+fn mutation_apply_to_project(
+    root: &Path,
+    cmd: &ClientCommand,
+) -> Result<Option<PathBuf>, (String, &'static str)> {
+    let kind = mutation_payload_str(cmd, "kind").unwrap_or("unknown");
+    let raw_path = mutation_payload_str(cmd, "target_path")
+        .or_else(|| mutation_payload_str(cmd, "path"))
+        .or_else(|| mutation_payload_str(cmd, "file_path"));
+    let path = cw_resolve_project_path(root, raw_path).map_err(|e| (e, "mutation.path_invalid"))?;
+    match kind {
+        "write" => {
+            let content = mutation_payload_str(cmd, "content")
+                .or_else(|| mutation_payload_str(cmd, "new_text"))
+                .or_else(|| mutation_payload_str(cmd, "new_content"))
+                .ok_or_else(|| {
+                    (
+                        "write mutation requires content".to_string(),
+                        "mutation.content_required",
+                    )
+                })?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| (e.to_string(), "mutation.fs_failed"))?;
+            }
+            std::fs::write(&path, content).map_err(|e| (e.to_string(), "mutation.fs_failed"))?;
+            Ok(Some(path))
+        }
+        "edit" => {
+            let old_text = mutation_payload_str(cmd, "old_text")
+                .or_else(|| mutation_payload_str(cmd, "old_string"))
+                .ok_or_else(|| {
+                    (
+                        "edit mutation requires old_text".to_string(),
+                        "mutation.old_text_required",
+                    )
+                })?;
+            let new_text = mutation_payload_str(cmd, "new_text")
+                .or_else(|| mutation_payload_str(cmd, "new_string"))
+                .or_else(|| mutation_payload_str(cmd, "new_content"))
+                .ok_or_else(|| {
+                    (
+                        "edit mutation requires new_text".to_string(),
+                        "mutation.new_text_required",
+                    )
+                })?;
+            let current = std::fs::read_to_string(&path)
+                .map_err(|e| (e.to_string(), "mutation.fs_failed"))?;
+            let matches = current.matches(old_text).count();
+            if matches == 0 {
+                return Err((
+                    "edit anchor not found".to_string(),
+                    "mutation.anchor_not_found",
+                ));
+            }
+            if matches > 1 {
+                return Err((
+                    "edit anchor is not unique".to_string(),
+                    "mutation.anchor_not_unique",
+                ));
+            }
+            let next = current.replacen(old_text, new_text, 1);
+            std::fs::write(&path, next).map_err(|e| (e.to_string(), "mutation.fs_failed"))?;
+            Ok(Some(path))
+        }
+        "delete" => {
+            std::fs::remove_file(&path).map_err(|e| (e.to_string(), "mutation.fs_failed"))?;
+            Ok(Some(path))
+        }
+        "rename" | "bash" | "unknown" | _ => Err((
+            format!("mutation kind `{kind}` is not supported by bridge approval"),
+            "mutation.kind_unsupported",
+        )),
+    }
+}
+
+async fn translate_mutation_approve(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let request_id = match mutation_request_id(cmd) {
+        Ok(id) => id,
+        Err(ack) => return (ack, vec![]),
+    };
+    let Some(handle) = state.sessions.get(&cmd.session_id) else {
+        let event =
+            bridge_mutation_failed(cmd, &request_id, "session not found", "session.not_found");
+        return (
+            cw_ack_err(cmd, "session.not_found", cmd.session_id.clone()),
+            vec![event],
+        );
+    };
+    let applying = bridge_mutation_event(
+        cmd,
+        "bridge.mutation.updated",
+        &request_id,
+        json!({ "status": "applying", "message": "Approve & apply requested" }),
+    );
+    match mutation_apply_to_project(&handle.project_root, cmd) {
+        Ok(applied_path) => {
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            let applied_path_string = applied_path
+                .as_ref()
+                .and_then(|p| p.strip_prefix(&handle.project_root).ok())
+                .map(|p| p.display().to_string());
+            log_tool_event(
+                state,
+                &cmd.session_id,
+                "bridge.mutation",
+                json!({
+                    "event": "approved",
+                    "request_id": request_id,
+                    "applied_path": applied_path_string,
+                }),
+            );
+            let mut payload = json!({ "applied_at": applied_at });
+            if let Some(path) = applied_path_string {
+                payload["applied_path"] = json!(path);
+            }
+            let applied =
+                bridge_mutation_event(cmd, "bridge.mutation.applied", &request_id, payload);
+            (cw_ack_ok(cmd), vec![applying, applied])
+        }
+        Err((reason, code)) => {
+            log_tool_event(
+                state,
+                &cmd.session_id,
+                "bridge.mutation",
+                json!({
+                    "event": "approve_failed",
+                    "request_id": request_id,
+                    "reason": reason,
+                    "error_code": code,
+                }),
+            );
+            let failed = bridge_mutation_failed(cmd, &request_id, reason.clone(), code);
+            (cw_ack_err(cmd, code, reason), vec![applying, failed])
+        }
+    }
+}
+
+async fn translate_mutation_reject(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let request_id = match mutation_request_id(cmd) {
+        Ok(id) => id,
+        Err(ack) => return (ack, vec![]),
+    };
+    let reason = mutation_payload_str(cmd, "reason").unwrap_or("Rejected by operator");
+    log_tool_event(
+        state,
+        &cmd.session_id,
+        "bridge.mutation",
+        json!({ "event": "rejected", "request_id": request_id, "reason": reason }),
+    );
+    let updated = bridge_mutation_event(
+        cmd,
+        "bridge.mutation.updated",
+        &request_id,
+        json!({ "status": "rejected", "message": reason }),
+    );
+    (cw_ack_ok(cmd), vec![updated])
+}
+
+async fn translate_mutation_refine_request(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let request_id = match mutation_request_id(cmd) {
+        Ok(id) => id,
+        Err(ack) => return (ack, vec![]),
+    };
+    let Some(note) = mutation_payload_str(cmd, "note").filter(|s| !s.trim().is_empty()) else {
+        return (
+            cw_ack_err(cmd, "mutation.note_required", "note is required"),
+            vec![],
+        );
+    };
+    let Some(handle) = state.sessions.get(&cmd.session_id) else {
+        let event =
+            bridge_mutation_failed(cmd, &request_id, "session not found", "session.not_found");
+        return (
+            cw_ack_err(cmd, "session.not_found", cmd.session_id.clone()),
+            vec![event],
+        );
+    };
+    let prompt = format!(
+        "Refine bridge mutation `{request_id}` from Code Workspace. Operator note: {note}. Keep browser read-only; propose a new bridge.mutation.requested intent instead of mutating files directly."
+    );
+    let agent_cmd = ClientCommand {
+        id: format!("cw-mutation-refine-{}", Ulid::new()),
+        session_id: cmd.session_id.clone(),
+        cmd_type: "message.submit".into(),
+        payload: json!({ "text": prompt }),
+        v: cmd.v,
+    };
+    match handle.send_client_command(&agent_cmd).await {
+        Ok(()) => {
+            log_tool_event(
+                state,
+                &cmd.session_id,
+                "bridge.mutation",
+                json!({ "event": "refine_requested", "request_id": request_id }),
+            );
+            let updated = bridge_mutation_event(
+                cmd,
+                "bridge.mutation.updated",
+                &request_id,
+                json!({ "status": "pending", "message": "Refinement sent to local AI" }),
+            );
+            (cw_ack_ok(cmd), vec![updated])
+        }
+        Err(e) => {
+            let reason = e.to_string();
+            let failed = bridge_mutation_failed(
+                cmd,
+                &request_id,
+                reason.clone(),
+                "mutation.refine_dispatch_failed",
+            );
+            (
+                cw_ack_err(cmd, "mutation.refine_dispatch_failed", reason),
+                vec![failed],
+            )
+        }
+    }
+}
+
 async fn handle_coding_context_command(
     cmd: &ClientCommand,
     state: &AppStateHandle,
@@ -5681,5 +5958,89 @@ mod tests {
         assert!(prompt.contains("Evidence refs:"));
         assert!(prompt.contains("Touches paths:"));
         assert!(prompt.contains("Rollback:"));
+    }
+
+    #[test]
+    fn mutation_apply_rejects_path_escape() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cmd = ClientCommand {
+            id: "cmd-1".into(),
+            session_id: "s1".into(),
+            cmd_type: "bridge.mutation.approve".into(),
+            payload: json!({
+                "request_id": "req-escape",
+                "kind": "write",
+                "target_path": "../outside.txt",
+                "content": "nope",
+            }),
+            v: 1,
+        };
+        let err = mutation_apply_to_project(tmp.path(), &cmd).expect_err("escape denied");
+        assert_eq!(err.1, "mutation.path_invalid");
+    }
+
+    #[test]
+    fn mutation_apply_write_creates_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cmd = ClientCommand {
+            id: "cmd-2".into(),
+            session_id: "s1".into(),
+            cmd_type: "bridge.mutation.approve".into(),
+            payload: json!({
+                "request_id": "req-write",
+                "kind": "write",
+                "target_path": "src/out.txt",
+                "content": "hello bridge\n",
+            }),
+            v: 1,
+        };
+        let applied = mutation_apply_to_project(tmp.path(), &cmd).expect("write applied");
+        assert_eq!(
+            applied.unwrap().strip_prefix(tmp.path()).unwrap(),
+            Path::new("src/out.txt")
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("src/out.txt")).unwrap(),
+            "hello bridge\n"
+        );
+    }
+
+    #[test]
+    fn mutation_apply_edit_requires_unique_anchor() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("dup.txt");
+        std::fs::write(&target, "same\nsame\n").unwrap();
+        let cmd = ClientCommand {
+            id: "cmd-3".into(),
+            session_id: "s1".into(),
+            cmd_type: "bridge.mutation.approve".into(),
+            payload: json!({
+                "request_id": "req-edit",
+                "kind": "edit",
+                "target_path": "dup.txt",
+                "old_text": "same",
+                "new_text": "next",
+            }),
+            v: 1,
+        };
+        let err = mutation_apply_to_project(tmp.path(), &cmd).expect_err("duplicate denied");
+        assert_eq!(err.1, "mutation.anchor_not_unique");
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "same\nsame\n");
+    }
+
+    #[test]
+    fn bridge_mutation_failed_event_shape_is_auditable() {
+        let cmd = ClientCommand {
+            id: "cmd-4".into(),
+            session_id: "s1".into(),
+            cmd_type: "bridge.mutation.approve".into(),
+            payload: json!({ "request_id": "req-fail" }),
+            v: 1,
+        };
+        let ev = bridge_mutation_failed(&cmd, "req-fail", "boom", "mutation.fs_failed");
+        assert_eq!(ev.event_type, "bridge.mutation.failed");
+        assert_eq!(ev.payload["request_id"], "req-fail");
+        assert_eq!(ev.payload["reason"], "boom");
+        assert_eq!(ev.payload["error_code"], "mutation.fs_failed");
     }
 }

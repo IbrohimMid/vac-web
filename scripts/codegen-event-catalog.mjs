@@ -65,7 +65,7 @@ function loadCatalog() {
     }
   }
   // Sort events by id for deterministic output.
-  const events = [...doc.events].sort((a, b) => a.id.localeCompare(b.id));
+  const events = [...doc.events].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { version: doc.version ?? 1, events };
 }
 

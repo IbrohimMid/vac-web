@@ -2345,6 +2345,38 @@ impl SessionHandle {
                                 // write happened.
                                 if let Some(meta) = meta {
                                     let ts = chrono::Utc::now().to_rfc3339();
+                                    // B6 — emit bridge.mutation.{requested,applied}
+                                    // for the agent-driven write so MutationInbox
+                                    // + AuditTrail see it alongside browser-
+                                    // initiated mutations. Profile enforcement is
+                                    // upstream in handle_fs_write; this pair models
+                                    // a one-shot lifecycle because the agent both
+                                    // proposed and executed under capability policy.
+                                    let mutation = crate::session::bridge_mutation::build_acp_fs_write_mutation_events(
+                                        &meta,
+                                        &fs_handle.id,
+                                        &fs_ctx.agent_id,
+                                        &ts,
+                                    );
+                                    let mutation_request_id = mutation.request_id.clone();
+                                    let mutation_kind = mutation.kind;
+                                    emit_event(&fs_handle, mutation.requested).await;
+                                    emit_event(&fs_handle, mutation.applied).await;
+                                    if let Some(audit) = fs_handle.audit.as_ref() {
+                                        audit.log(
+                                            &fs_handle.id,
+                                            "bridge.mutation",
+                                            bridge_core::AuditSeverity::Info,
+                                            serde_json::json!({
+                                                "event": "applied",
+                                                "request_id": mutation_request_id,
+                                                "kind": mutation_kind,
+                                                "path": meta.path,
+                                                "agent_id": fs_ctx.agent_id,
+                                                "source": "acp.fs.write_text_file",
+                                            }),
+                                        );
+                                    }
                                     let tool_call_id =
                                         format!("acp-fs-write-{}", ulid::Ulid::new());
                                     let review_payload = serde_json::json!({

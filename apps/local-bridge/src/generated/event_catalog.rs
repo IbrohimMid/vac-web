@@ -20,7 +20,7 @@ pub struct EventEntry {
 }
 
 #[rustfmt::skip]
-pub const EVENT_CATALOG: [EventEntry; 86] = [
+pub const EVENT_CATALOG: [EventEntry; 90] = [
     EventEntry { id: "activity.appended", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_received", status: EventStatus::Implemented },
     EventEntry { id: "assessment.candidate_rejected", status: EventStatus::Implemented },
@@ -35,6 +35,10 @@ pub const EVENT_CATALOG: [EventEntry; 86] = [
     EventEntry { id: "assessment.sweep.progress", status: EventStatus::Implemented },
     EventEntry { id: "assessment.sweep.started", status: EventStatus::Implemented },
     EventEntry { id: "assessment.worker_output_rejected", status: EventStatus::Implemented },
+    EventEntry { id: "bridge.mutation.applied", status: EventStatus::Implemented },
+    EventEntry { id: "bridge.mutation.failed", status: EventStatus::Implemented },
+    EventEntry { id: "bridge.mutation.requested", status: EventStatus::Implemented },
+    EventEntry { id: "bridge.mutation.updated", status: EventStatus::Implemented },
     EventEntry { id: "changeset.updated", status: EventStatus::LegacyMockOnly },
     EventEntry { id: "extensions.approvals_list_response", status: EventStatus::Implemented },
     EventEntry { id: "extensions.list_response", status: EventStatus::Implemented },
@@ -63,8 +67,8 @@ pub const EVENT_CATALOG: [EventEntry; 86] = [
     EventEntry { id: "release.post_deploy_observation", status: EventStatus::Implemented },
     EventEntry { id: "release.targets", status: EventStatus::Implemented },
     EventEntry { id: "review.changeset_updated", status: EventStatus::Implemented },
-    EventEntry { id: "review.file_diff_chunk", status: EventStatus::Implemented },
     EventEntry { id: "review.file.action.updated", status: EventStatus::Implemented },
+    EventEntry { id: "review.file_diff_chunk", status: EventStatus::Implemented },
     EventEntry { id: "review.hunk.action.updated", status: EventStatus::Implemented },
     EventEntry { id: "runtime.job_completed", status: EventStatus::Implemented },
     EventEntry { id: "runtime.job_started", status: EventStatus::Implemented },

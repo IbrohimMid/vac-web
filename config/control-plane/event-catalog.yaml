@@ -241,6 +241,43 @@ events:
     consumers:
       - WorkspaceTopbar
 
+  # ---- bridge mutation pipeline (Sprint B) ------------------------------
+  # B1 only declares the intent envelope. The translator emits this event in
+  # Phase B5; until then mock-engine fixtures may emit it directly. Status
+  # stays `not_wired` until the Rust translator carries the contract.
+  - id: bridge.mutation.requested
+    owner: bridge
+    status: implemented
+    producer: translate_mutation_approve
+    consumers:
+      - domain.bridge.handlers
+      - MutationInbox
+  # B3 apply lifecycle: bridge pushes one of these after approve/reject.
+  # `applied` and `failed` are terminal; `updated` is a generic transition
+  # (e.g. `approved -> applying`). All stay `not_wired` until B5 ships the
+  # Rust translator that actually performs the fs write.
+  - id: bridge.mutation.applied
+    owner: bridge
+    status: implemented
+    producer: translate_mutation_approve
+    consumers:
+      - domain.bridge.handlers
+      - MutationInbox
+  - id: bridge.mutation.failed
+    owner: bridge
+    status: implemented
+    producer: translate_mutation_approve
+    consumers:
+      - domain.bridge.handlers
+      - MutationInbox
+  - id: bridge.mutation.updated
+    owner: bridge
+    status: implemented
+    producer: translate_mutation_approve
+    consumers:
+      - domain.bridge.handlers
+      - MutationInbox
+
   # ---- assessment index --------------------------------------------------
   - id: assessment.index.rebuild_started
     owner: bridge
