@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { TransportHandle } from '../../transport';
-import { useReview, type ReviewFile } from '../../stores/review';
+import { useReview, type ReviewActionFeedback, type ReviewFile } from '../../stores/review';
 import { useSession } from '../../stores/session';
 import { useCockpit } from '../../stores/cockpit';
 import {
@@ -11,7 +11,6 @@ import {
   requestReviewHunkRevision,
   reviewFileActionKey,
   reviewHunkActionKey,
-  type ReviewActionFeedback,
   type ReviewHunkSummary,
 } from '../../domain/review/actions';
 
@@ -28,11 +27,10 @@ function statusLabel(file: ReviewFile): string {
 export function ReviewQueue({ transport }: Props) {
   const files = useReview((s) => s.files);
   const diffs = useReview((s) => s.diffs);
+  const actionStatus = useReview((s) => s.actionStatus);
   const sessionId = useSession((s) => s.sessionId);
   const setRoute = useCockpit((s) => s.setRoute);
   const ready = !!transport && !!sessionId;
-  const [feedback, setFeedback] = useState<Record<string, ReviewActionFeedback>>({});
-  const setActionFeedback = (next: ReviewActionFeedback) => setFeedback((current) => ({ ...current, [next.key]: next }));
   const sorted = useMemo(() => [...files].sort((a, b) => a.path.localeCompare(b.path)), [files]);
 
   if (sorted.length === 0) {
@@ -55,7 +53,15 @@ export function ReviewQueue({ transport }: Props) {
       </header>
       <div className="codeworkspace-reviewqueue-list">
         {sorted.map((file) => (
-          <ReviewQueueFile key={file.path} file={file} unified={diffs.get(file.path)?.unified ?? null} transport={transport} sessionId={sessionId} ready={ready} feedback={feedback} setActionFeedback={setActionFeedback} />
+          <ReviewQueueFile
+            key={file.path}
+            file={file}
+            unified={diffs.get(file.path)?.unified ?? null}
+            transport={transport}
+            sessionId={sessionId}
+            ready={ready}
+            actionStatus={actionStatus}
+          />
         ))}
       </div>
       <p className="cw-empty-detail codeworkspace-reviewqueue-truth">
@@ -65,17 +71,16 @@ Review actions are agent-mediated: VAC sends an audited, path-scoped request to 
   );
 }
 
-function ReviewQueueFile({ file, unified, transport, sessionId, ready, feedback, setActionFeedback }: { file: ReviewFile; unified: string | null; transport: TransportHandle | null; sessionId: string | null; ready: boolean; feedback: Record<string, ReviewActionFeedback>; setActionFeedback: (next: ReviewActionFeedback) => void }) {
+function ReviewQueueFile({ file, unified, transport, sessionId, ready, actionStatus }: { file: ReviewFile; unified: string | null; transport: TransportHandle | null; sessionId: string | null; ready: boolean; actionStatus: Record<string, ReviewActionFeedback> }) {
   const labels = classifyReviewFile(file);
   const hunks = parseUnifiedHunks(unified);
   const fileActionKey = reviewFileActionKey(file.path);
-  const fileFeedback = feedback[fileActionKey];
+  const fileFeedback = actionStatus[fileActionKey];
   const revertFile = () => {
     if (!ready || !transport || !sessionId) return;
-    setActionFeedback({ key: fileActionKey, status: 'sending', message: 'Sending file revert request...' });
-    void requestReviewFileRevert(transport, sessionId, file.path)
-      .then(() => setActionFeedback({ key: fileActionKey, status: 'requested', message: 'File revert request sent to agent.' }))
-      .catch((err: unknown) => setActionFeedback({ key: fileActionKey, status: 'failed', message: err instanceof Error ? err.message : 'Failed to send file revert request.' }));
+    // The helper writes 'sending' → 'requested' (or 'failed') into the store;
+    // swallow the rejection so the unhandled promise does not surface to React.
+    void requestReviewFileRevert(transport, sessionId, file.path).catch(() => {});
   };
 
   return (
@@ -101,7 +106,7 @@ function ReviewQueueFile({ file, unified, transport, sessionId, ready, feedback,
       {hunks.length > 0 ? (
         <ol className="codeworkspace-reviewqueue-hunks" data-testid="review-queue-hunks">
           {hunks.map((hunk) => (
-            <ReviewHunkRow key={hunk.id} hunk={hunk} path={file.path} transport={transport} sessionId={sessionId} ready={ready} feedback={feedback} setActionFeedback={setActionFeedback} />
+            <ReviewHunkRow key={hunk.id} hunk={hunk} path={file.path} transport={transport} sessionId={sessionId} ready={ready} actionStatus={actionStatus} />
           ))}
         </ol>
       ) : (
@@ -114,24 +119,18 @@ function ReviewQueueFile({ file, unified, transport, sessionId, ready, feedback,
   );
 }
 
-function ReviewHunkRow({ hunk, path, transport, sessionId, ready, feedback, setActionFeedback }: { hunk: ReviewHunkSummary; path: string; transport: TransportHandle | null; sessionId: string | null; ready: boolean; feedback: Record<string, ReviewActionFeedback>; setActionFeedback: (next: ReviewActionFeedback) => void }) {
+function ReviewHunkRow({ hunk, path, transport, sessionId, ready, actionStatus }: { hunk: ReviewHunkSummary; path: string; transport: TransportHandle | null; sessionId: string | null; ready: boolean; actionStatus: Record<string, ReviewActionFeedback> }) {
   const reworkKey = reviewHunkActionKey(path, hunk.id, 'request_rework');
   const revertKey = reviewHunkActionKey(path, hunk.id, 'revert_hunk');
-  const reworkFeedback = feedback[reworkKey];
-  const revertFeedback = feedback[revertKey];
+  const reworkFeedback = actionStatus[reworkKey];
+  const revertFeedback = actionStatus[revertKey];
   const askRevision = () => {
     if (!ready || !transport || !sessionId) return;
-    setActionFeedback({ key: reworkKey, status: 'sending', message: 'Sending hunk revision request...' });
-    void requestReviewHunkRevision(transport, sessionId, path, hunk)
-      .then(() => setActionFeedback({ key: reworkKey, status: 'requested', message: 'Hunk revision request sent to agent.' }))
-      .catch((err: unknown) => setActionFeedback({ key: reworkKey, status: 'failed', message: err instanceof Error ? err.message : 'Failed to send hunk revision request.' }));
+    void requestReviewHunkRevision(transport, sessionId, path, hunk).catch(() => {});
   };
   const revertHunk = () => {
     if (!ready || !transport || !sessionId) return;
-    setActionFeedback({ key: revertKey, status: 'sending', message: 'Sending hunk revert request...' });
-    void requestReviewHunkRevert(transport, sessionId, path, hunk)
-      .then(() => setActionFeedback({ key: revertKey, status: 'requested', message: 'Hunk revert request sent to agent.' }))
-      .catch((err: unknown) => setActionFeedback({ key: revertKey, status: 'failed', message: err instanceof Error ? err.message : 'Failed to send hunk revert request.' }));
+    void requestReviewHunkRevert(transport, sessionId, path, hunk).catch(() => {});
   };
   return (
     <li className="codeworkspace-reviewqueue-hunk">

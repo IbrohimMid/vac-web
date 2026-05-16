@@ -31,6 +31,10 @@ export type EventId =
   | 'assessment.sweep.progress'
   | 'assessment.sweep.started'
   | 'assessment.worker_output_rejected'
+  | 'bridge.mutation.applied'
+  | 'bridge.mutation.failed'
+  | 'bridge.mutation.requested'
+  | 'bridge.mutation.updated'
   | 'changeset.updated'
   | 'extensions.approvals_list_response'
   | 'extensions.list_response'
@@ -59,8 +63,8 @@ export type EventId =
   | 'release.post_deploy_observation'
   | 'release.targets'
   | 'review.changeset_updated'
-  | 'review.file_diff_chunk'
   | 'review.file.action.updated'
+  | 'review.file_diff_chunk'
   | 'review.hunk.action.updated'
   | 'runtime.job_completed'
   | 'runtime.job_started'
@@ -119,6 +123,10 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'assessment.sweep.progress', status: 'implemented', owner: 'bridge', producer: "translator.assessment", consumers: Object.freeze(["capabilities.assessmentIndex"]) }),
   Object.freeze({ id: 'assessment.sweep.started', status: 'implemented', owner: 'bridge', producer: "translator.assessment", consumers: Object.freeze(["capabilities.assessmentIndex"]) }),
   Object.freeze({ id: 'assessment.worker_output_rejected', status: 'implemented', owner: 'bridge', producer: "translator.assessment", consumers: Object.freeze(["capabilities.assessmentIndex"]) }),
+  Object.freeze({ id: 'bridge.mutation.applied', status: 'implemented', owner: 'bridge', producer: "translate_mutation_approve", consumers: Object.freeze(["domain.bridge.handlers", "MutationInbox"]) }),
+  Object.freeze({ id: 'bridge.mutation.failed', status: 'implemented', owner: 'bridge', producer: "translate_mutation_approve", consumers: Object.freeze(["domain.bridge.handlers", "MutationInbox"]) }),
+  Object.freeze({ id: 'bridge.mutation.requested', status: 'implemented', owner: 'bridge', producer: "translate_mutation_approve", consumers: Object.freeze(["domain.bridge.handlers", "MutationInbox"]) }),
+  Object.freeze({ id: 'bridge.mutation.updated', status: 'implemented', owner: 'bridge', producer: "translate_mutation_approve", consumers: Object.freeze(["domain.bridge.handlers", "MutationInbox"]) }),
   Object.freeze({ id: 'changeset.updated', status: 'legacy_mock_only', owner: 'mock', consumers: Object.freeze(["tools.mock_engine.scenarios"]), replacement: 'review.changeset_updated' }),
   Object.freeze({ id: 'extensions.approvals_list_response', status: 'implemented', owner: 'bridge', producer: "extensions.handlers.handle_list_approvals", consumers: Object.freeze(["ExtensionsList"]) }),
   Object.freeze({ id: 'extensions.list_response', status: 'implemented', owner: 'bridge', producer: "translator.extensions_list", consumers: Object.freeze(["domain.extensions.handlers", "ExtensionsList"]) }),
@@ -147,8 +155,8 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'release.post_deploy_observation', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'release.targets', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'review.changeset_updated', status: 'implemented', owner: 'bridge', producer: "translator.review_changeset_updated", consumers: Object.freeze(["domain.review.handlers"]) }),
-  Object.freeze({ id: 'review.file_diff_chunk', status: 'implemented', owner: 'bridge', producer: "translator.review_file_diff_chunk", consumers: Object.freeze(["domain.review.handlers"]) }),
   Object.freeze({ id: 'review.file.action.updated', status: 'implemented', owner: 'bridge', producer: "translator.review_action_request", consumers: Object.freeze(["ReviewQueue"]) }),
+  Object.freeze({ id: 'review.file_diff_chunk', status: 'implemented', owner: 'bridge', producer: "translator.review_file_diff_chunk", consumers: Object.freeze(["domain.review.handlers"]) }),
   Object.freeze({ id: 'review.hunk.action.updated', status: 'implemented', owner: 'bridge', producer: "translator.review_action_request", consumers: Object.freeze(["ReviewQueue"]) }),
   Object.freeze({ id: 'runtime.job_completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),
   Object.freeze({ id: 'runtime.job_started', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),

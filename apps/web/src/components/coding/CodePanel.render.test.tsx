@@ -152,4 +152,94 @@ describe('<CodePanel/>', () => {
     fireEvent.click(screen.getByTestId('code-panel-copy-path'));
     expect(writeText).toHaveBeenCalledWith('src/a.ts');
   });
+
+  // Phase 2 (Edit Intent Panel) ───────────────────────────────────────────
+  it('opens edit intent panel and toggles chip selection', () => {
+    useProject.getState().selectPath('src/a.ts');
+    useProject.getState().setFileLoaded({
+      path: 'src/a.ts',
+      content: 'a\nb',
+      encoding: 'utf-8',
+      size: 3,
+      truncated: false,
+    });
+    render(<CodePanel sessionId="s1" transport={fakeTransport()} />);
+    expect(screen.queryByTestId('code-panel-intent-edit')).toBeNull();
+    fireEvent.click(screen.getByTestId('code-panel-request-edit'));
+    expect(screen.getByTestId('code-panel-intent-edit')).toBeInTheDocument();
+    const refactorChip = screen.getByTestId('code-panel-intent-chip-refactor');
+    expect(refactorChip).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(refactorChip);
+    expect(refactorChip).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('sends request_edit with chips + hint + selected_range and closes panel', async () => {
+    useCockpit.setState({ route: 'code' });
+    const send = vi.fn().mockResolvedValue({} as never);
+    const t = fakeTransport(send);
+    useProject.getState().selectPath('src/a.ts');
+    useProject.getState().setFileLoaded({
+      path: 'src/a.ts',
+      content: 'a\nb\nc\nd',
+      encoding: 'utf-8',
+      size: 7,
+      truncated: false,
+    });
+    useProject.getState().selectLines({ start: 2, end: 3 });
+    render(<CodePanel sessionId="s1" transport={t} />);
+    fireEvent.click(screen.getByTestId('code-panel-request-edit'));
+    fireEvent.click(screen.getByTestId('code-panel-intent-chip-refactor'));
+    fireEvent.change(screen.getByTestId('code-panel-intent-hint-edit'), {
+      target: { value: 'extract helper' },
+    });
+    fireEvent.click(screen.getByTestId('code-panel-intent-send-edit'));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(send).toHaveBeenCalledWith(
+      's1',
+      'coding.context.request_edit',
+      expect.objectContaining({
+        session_id: 's1',
+        path: 'src/a.ts',
+        chips: ['refactor'],
+        hint: 'extract helper',
+        selected_range: { start_line: 2, end_line: 3 },
+        selected_text: 'b\nc',
+      }),
+    );
+    expect(screen.queryByTestId('code-panel-intent-edit')).toBeNull();
+    expect(useCockpit.getState().route).toBe('build');
+  });
+
+  it('disables send button when no chip and no hint are provided', () => {
+    useProject.getState().selectPath('src/a.ts');
+    useProject.getState().setFileLoaded({
+      path: 'src/a.ts',
+      content: 'x',
+      encoding: 'utf-8',
+      size: 1,
+      truncated: false,
+    });
+    render(<CodePanel sessionId="s1" transport={fakeTransport()} />);
+    fireEvent.click(screen.getByTestId('code-panel-request-tests'));
+    expect(screen.getByTestId('code-panel-intent-send-tests')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('code-panel-intent-chip-unit'));
+    expect(screen.getByTestId('code-panel-intent-send-tests')).not.toBeDisabled();
+  });
+
+  it('cancel closes the intent panel without dispatching', () => {
+    const send = vi.fn();
+    useProject.getState().selectPath('src/a.ts');
+    useProject.getState().setFileLoaded({
+      path: 'src/a.ts',
+      content: 'x',
+      encoding: 'utf-8',
+      size: 1,
+      truncated: false,
+    });
+    render(<CodePanel sessionId="s1" transport={fakeTransport(send)} />);
+    fireEvent.click(screen.getByTestId('code-panel-request-edit'));
+    fireEvent.click(screen.getByTestId('code-panel-intent-cancel-edit'));
+    expect(screen.queryByTestId('code-panel-intent-edit')).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
 });

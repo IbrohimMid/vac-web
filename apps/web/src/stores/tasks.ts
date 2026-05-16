@@ -20,8 +20,16 @@ export interface TaskPlanItem {
   status: TaskPlanItemStatus;
 }
 
+export type TaskValidationStatus =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'cancelled';
+
 export interface TaskValidationState {
-  status: 'idle' | 'running' | 'passed' | 'failed';
+  status: TaskValidationStatus;
   command?: string;
   message?: string;
   updatedAt: string;
@@ -159,7 +167,13 @@ export const useTasks = create<TasksSlice>((set) => ({
         ...(input.message !== undefined && { message: input.message }),
       };
       const nextStatus: TaskLifecycleStatus =
-        input.status === 'running' ? 'validating' : input.status === 'passed' ? 'ready_to_ship' : input.status === 'failed' ? 'failed' : cur.status;
+        input.status === 'running'
+          ? 'validating'
+          : input.status === 'passed'
+            ? 'ready_to_ship'
+            : input.status === 'failed'
+              ? 'failed'
+              : cur.status;
       const tasks = new Map(s.tasks);
       tasks.set(input.taskId, { ...cur, status: nextStatus, validation: nextValidation, updatedAt: now });
       return { tasks };

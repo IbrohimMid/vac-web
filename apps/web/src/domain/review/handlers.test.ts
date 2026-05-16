@@ -42,6 +42,7 @@ describe('review handlers', () => {
       files: [],
       diffs: new Map(),
       pendingFetch: new Set(),
+      actionStatus: {},
     }),
   );
 
@@ -68,6 +69,71 @@ describe('review handlers', () => {
     expect(files[0]?.approvedByApprovalId).toBe('appr_01');
     expect(files[0]?.sourceEventType).toBe('review.changeset_updated');
     expect(files[0]?.status).toBe('added');
+
+    off();
+  });
+
+  it('maps review.file.action.updated into actionStatus keyed by path', () => {
+    const { t, emit } = mockTransport();
+    const off = registerReviewHandlers(t);
+
+    emit('review.file.action.updated', {
+      path: 'src/auth/token.ts',
+      action: 'revert',
+      status: 'failed',
+      message: 'Bridge refused: dirty working tree.',
+    });
+
+    const status = useReview.getState().actionStatus['file:src/auth/token.ts'];
+    expect(status?.status).toBe('failed');
+    expect(status?.message).toBe('Bridge refused: dirty working tree.');
+
+    off();
+  });
+
+  it('falls back to a default message when payload omits one', () => {
+    const { t, emit } = mockTransport();
+    const off = registerReviewHandlers(t);
+
+    emit('review.file.action.updated', {
+      path: 'src/a.ts',
+      status: 'completed',
+    });
+
+    const fb = useReview.getState().actionStatus['file:src/a.ts'];
+    expect(fb?.status).toBe('completed');
+    expect((fb?.message ?? '').length).toBeGreaterThan(0);
+
+    off();
+  });
+
+  it('maps review.hunk.action.updated into actionStatus keyed by path+hunk+action', () => {
+    const { t, emit } = mockTransport();
+    const off = registerReviewHandlers(t);
+
+    emit('review.hunk.action.updated', {
+      path: 'src/a.ts',
+      hunk_id: 'h1',
+      action: 'request_rework',
+      status: 'requested',
+      message: 'Agent picked it up.',
+    });
+
+    const status = useReview.getState().actionStatus['hunk:src/a.ts:h1:request_rework'];
+    expect(status?.status).toBe('requested');
+    expect(status?.message).toBe('Agent picked it up.');
+
+    off();
+  });
+
+  it('ignores hunk action update payloads missing required fields', () => {
+    const { t, emit } = mockTransport();
+    const off = registerReviewHandlers(t);
+
+    emit('review.hunk.action.updated', { path: 'src/a.ts' });
+    emit('review.hunk.action.updated', { hunk_id: 'h1', action: 'revert_hunk' });
+
+    expect(Object.keys(useReview.getState().actionStatus)).toHaveLength(0);
 
     off();
   });

@@ -36,7 +36,7 @@ const TASK_STATUSES: TaskLifecycleStatus[] = [
   'failed',
 ];
 
-const VALIDATION_STATUSES: TaskValidationState['status'][] = ['idle', 'running', 'passed', 'failed'];
+const VALIDATION_STATUSES: TaskValidationState['status'][] = ['idle', 'queued', 'running', 'passed', 'failed', 'cancelled'];
 
 function isTaskStatus(raw: string | undefined): raw is TaskLifecycleStatus {
   return !!raw && TASK_STATUSES.includes(raw as TaskLifecycleStatus);

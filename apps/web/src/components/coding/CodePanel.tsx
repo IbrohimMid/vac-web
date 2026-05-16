@@ -1,6 +1,16 @@
-// CodePanel - Phase 3.
+// CodePanel — Phase 3 (file browsing) + Phase 2 (Edit Intent Panel).
+//
+// Phase 2 (Sprint A maturity plan): toolbar buttons "Ask local AI to edit"
+// and "Ask local AI for tests" open an inline Edit Intent Panel where the
+// user can multi-select preset chips, type a free-form instruction, and
+// review the scope (whole file vs selected line range). On submit, the
+// panel dispatches a structured `coding.context.request_edit` /
+// `request_tests` payload carrying `chips`, `hint`, `selected_range`, and
+// `selected_text`, then closes and routes to Build. Per VAC-WEB copy
+// rules: no surface here writes files directly in the browser; every
+// request is agent-mediated and audited at the bridge.
 import type { ReactNode } from 'react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { TransportHandle } from '../../transport';
 import {
   useProject,
@@ -11,15 +21,24 @@ import { useOverlays } from '../../stores/overlays';
 import { useCockpit } from '../../stores/cockpit';
 import { requestProjectFile } from '../../domain/project/handlers';
 import {
+  buildEditIntentPayload,
   buildFileContextPayload,
-  buildFileIntentPayload,
   buildSelectionContextPayload,
   sendCodingContext,
+  EDIT_INTENT_CHIPS,
+  TEST_INTENT_CHIPS,
 } from '../../domain/coding/context';
 
 interface Props {
   sessionId: string | null;
   transport: TransportHandle | null;
+}
+
+type IntentKind = 'edit' | 'tests';
+interface IntentPanelState {
+  kind: IntentKind;
+  chips: string[];
+  hint: string;
 }
 
 export function CodePanel({ sessionId, transport }: Props) {
@@ -106,9 +125,36 @@ interface ShellProps {
 }
 
 function CodePanelShell({ path, sessionId, transport, selection, hasPendingDiff, content, children }: ShellProps) {
+  const [intent, setIntent] = useState<IntentPanelState | null>(null);
+  const openIntent = useCallback((kind: IntentKind) => {
+    setIntent({ kind, chips: [], hint: '' });
+  }, []);
+  const closeIntent = useCallback(() => setIntent(null), []);
   return (
     <div className="codepanel" data-testid="code-panel">
-      <CodeToolbar path={path} sessionId={sessionId} transport={transport} selection={selection} hasPendingDiff={hasPendingDiff} content={content} />
+      <CodeToolbar
+        path={path}
+        sessionId={sessionId}
+        transport={transport}
+        selection={selection}
+        hasPendingDiff={hasPendingDiff}
+        content={content}
+        intent={intent}
+        onOpenIntent={openIntent}
+        onCloseIntent={closeIntent}
+      />
+      {intent ? (
+        <IntentPanel
+          state={intent}
+          path={path}
+          sessionId={sessionId}
+          transport={transport}
+          selection={selection}
+          content={content}
+          onChange={(next) => setIntent({ ...intent, ...next })}
+          onClose={closeIntent}
+        />
+      ) : null}
       <div className="codepanel-body">{children}</div>
     </div>
   );
@@ -121,9 +167,12 @@ interface ToolbarProps {
   selection: ProjectSelection | null;
   hasPendingDiff: boolean;
   content: string | null;
+  intent: IntentPanelState | null;
+  onOpenIntent: (kind: IntentKind) => void;
+  onCloseIntent: () => void;
 }
 
-function CodeToolbar({ path, sessionId, transport, selection, hasPendingDiff, content }: ToolbarProps) {
+function CodeToolbar({ path, sessionId, transport, selection, hasPendingDiff, content, intent, onOpenIntent, onCloseIntent }: ToolbarProps) {
   const setRoute = useCockpit((s) => s.setRoute);
   const ready = !!sessionId && !!transport;
   const disabledReason = !sessionId ? 'Connect a session first.' : !transport ? 'Bridge transport is offline.' : null;
@@ -150,19 +199,15 @@ function CodeToolbar({ path, sessionId, transport, selection, hasPendingDiff, co
     setRoute('build');
   }, [ready, sessionId, transport, path, content, selection, setRoute]);
 
-  const requestEdit = useCallback(async () => {
-    if (!ready || !sessionId || !transport) return;
-    const payload = buildFileIntentPayload(sessionId, path);
-    await sendCodingContext(transport, 'coding.context.request_edit', payload);
-    setRoute('build');
-  }, [ready, sessionId, transport, path, setRoute]);
+  const toggleEdit = useCallback(() => {
+    if (intent?.kind === 'edit') onCloseIntent();
+    else onOpenIntent('edit');
+  }, [intent, onOpenIntent, onCloseIntent]);
 
-  const requestTests = useCallback(async () => {
-    if (!ready || !sessionId || !transport) return;
-    const payload = buildFileIntentPayload(sessionId, path);
-    await sendCodingContext(transport, 'coding.context.request_tests', payload);
-    setRoute('build');
-  }, [ready, sessionId, transport, path, setRoute]);
+  const toggleTests = useCallback(() => {
+    if (intent?.kind === 'tests') onCloseIntent();
+    else onOpenIntent('tests');
+  }, [intent, onOpenIntent, onCloseIntent]);
 
   return (
     <header className="codepanel-toolbar" role="toolbar" aria-label="File actions">
@@ -173,11 +218,139 @@ function CodeToolbar({ path, sessionId, transport, selection, hasPendingDiff, co
       <span className="cw-spacer" />
       <button type="button" className="codeworkspace-link-btn" onClick={copyPath} data-testid="code-panel-copy-path">Copy path</button>
       <button type="button" className="codeworkspace-link-btn" onClick={openDiff} disabled={!hasPendingDiff} data-testid="code-panel-open-diff" title={hasPendingDiff ? 'Open diff overlay for this file' : 'No pending changes for this file'}>Open related diff</button>
-      <button type="button" className="codeworkspace-link-btn" onClick={askAboutFile} disabled={!ready} data-testid="code-panel-ask-file" title={disabledReason ?? 'Ask agent about this file'}>Ask agent about file</button>
-      <button type="button" className="codeworkspace-link-btn" onClick={askAboutSelection} disabled={!ready || !selection || content == null} data-testid="code-panel-ask-selection" title={!ready ? (disabledReason ?? 'Unavailable') : !selection ? 'Select one or more lines first' : 'Ask agent about the selected lines'}>Ask about selection</button>
-      <button type="button" className="codeworkspace-link-btn" onClick={requestEdit} disabled={!ready} data-testid="code-panel-request-edit" title={disabledReason ?? 'Hand this file to the agent for editing'}>Edit with agent</button>
-      <button type="button" className="codeworkspace-link-btn" onClick={requestTests} disabled={!ready} data-testid="code-panel-request-tests" title={disabledReason ?? 'Ask the agent to generate tests for this file'}>Generate tests</button>
+      <button type="button" className="codeworkspace-link-btn" onClick={askAboutFile} disabled={!ready} data-testid="code-panel-ask-file" title={disabledReason ?? 'Ask local AI about this file'}>Ask local AI about file</button>
+      <button type="button" className="codeworkspace-link-btn" onClick={askAboutSelection} disabled={!ready || !selection || content == null} data-testid="code-panel-ask-selection" title={!ready ? (disabledReason ?? 'Unavailable') : !selection ? 'Select one or more lines first' : 'Ask local AI about the selected lines'}>Ask about selection</button>
+      <button
+        type="button"
+        className={'codeworkspace-link-btn' + (intent?.kind === 'edit' ? ' codeworkspace-link-btn-active' : '')}
+        onClick={toggleEdit}
+        disabled={!ready}
+        data-testid="code-panel-request-edit"
+        aria-pressed={intent?.kind === 'edit'}
+        title={disabledReason ?? 'Ask local AI to edit this file'}
+      >
+        Ask local AI to edit
+      </button>
+      <button
+        type="button"
+        className={'codeworkspace-link-btn' + (intent?.kind === 'tests' ? ' codeworkspace-link-btn-active' : '')}
+        onClick={toggleTests}
+        disabled={!ready}
+        data-testid="code-panel-request-tests"
+        aria-pressed={intent?.kind === 'tests'}
+        title={disabledReason ?? 'Ask local AI to draft tests for this file'}
+      >
+        Ask local AI for tests
+      </button>
     </header>
+  );
+}
+
+interface IntentPanelProps {
+  state: IntentPanelState;
+  path: string;
+  sessionId: string | null;
+  transport: TransportHandle | null;
+  selection: ProjectSelection | null;
+  content: string | null;
+  onChange: (next: Partial<Pick<IntentPanelState, 'chips' | 'hint'>>) => void;
+  onClose: () => void;
+}
+
+function IntentPanel({ state, path, sessionId, transport, selection, content, onChange, onClose }: IntentPanelProps) {
+  const setRoute = useCockpit((s) => s.setRoute);
+  const ready = !!sessionId && !!transport;
+  const presetChips = state.kind === 'edit' ? EDIT_INTENT_CHIPS : TEST_INTENT_CHIPS;
+  const eventType = state.kind === 'edit' ? ('coding.context.request_edit' as const) : ('coding.context.request_tests' as const);
+  const hintTrimmed = state.hint.trim();
+  const canSend = ready && (state.chips.length > 0 || hintTrimmed.length > 0);
+  const title = state.kind === 'edit' ? 'Ask local AI to edit' : 'Ask local AI for tests';
+  const placeholder = state.kind === 'edit'
+    ? 'Describe what you want changed (optional)'
+    : 'Describe the tests you want (optional)';
+  const scopeLabel = state.kind === 'edit'
+    ? (selection ? `lines ${selection.start}\u2013${selection.end}` : 'whole file')
+    : 'whole file';
+
+  const toggleChip = (chip: string) => {
+    if (state.chips.includes(chip)) {
+      onChange({ chips: state.chips.filter((c) => c !== chip) });
+    } else {
+      onChange({ chips: [...state.chips, chip] });
+    }
+  };
+
+  const submit = useCallback(async () => {
+    if (!ready || !sessionId || !transport || !canSend) return;
+    const payload = buildEditIntentPayload(sessionId, path, {
+      chips: state.chips,
+      hint: state.hint,
+      selection: state.kind === 'edit' ? selection ?? undefined : undefined,
+      content: state.kind === 'edit' && content != null ? content : undefined,
+    });
+    onClose();
+    await sendCodingContext(transport, eventType, payload);
+    setRoute('build');
+  }, [ready, sessionId, transport, canSend, path, state, selection, content, eventType, setRoute, onClose]);
+
+  return (
+    <section
+      className="codepanel-intent"
+      role="region"
+      aria-label={title}
+      data-testid={`code-panel-intent-${state.kind}`}
+    >
+      <header className="codepanel-intent-header">
+        <span className="cw-empty-title">{title}</span>
+        <span className="cw-empty-hint">Scope: {scopeLabel}. Local AI receives an audited request; nothing is written from the browser.</span>
+      </header>
+      <div className="codepanel-intent-chips" role="group" aria-label="Preset intents">
+        {presetChips.map((chip) => {
+          const pressed = state.chips.includes(chip);
+          const chipTestId = `code-panel-intent-chip-${chip.replace(/\s+/g, '-')}`;
+          return (
+            <button
+              key={chip}
+              type="button"
+              className={'codepanel-intent-chip' + (pressed ? ' codepanel-intent-chip-active' : '')}
+              aria-pressed={pressed}
+              onClick={() => toggleChip(chip)}
+              data-testid={chipTestId}
+            >
+              {chip}
+            </button>
+          );
+        })}
+      </div>
+      <textarea
+        className="codepanel-intent-hint"
+        placeholder={placeholder}
+        value={state.hint}
+        onChange={(e) => onChange({ hint: e.target.value })}
+        rows={3}
+        data-testid={`code-panel-intent-hint-${state.kind}`}
+      />
+      <footer className="codepanel-intent-actions">
+        <button
+          type="button"
+          className="codeworkspace-link-btn"
+          onClick={onClose}
+          data-testid={`code-panel-intent-cancel-${state.kind}`}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="codeworkspace-link-btn"
+          onClick={() => { void submit(); }}
+          disabled={!canSend}
+          data-testid={`code-panel-intent-send-${state.kind}`}
+          title={canSend ? 'Send to local AI' : 'Pick a chip or type instructions first'}
+        >
+          Send to local AI
+        </button>
+      </footer>
+    </section>
   );
 }
 

@@ -1,11 +1,12 @@
 // Build outbound coding-context payloads + send helpers.
 //
 // Phase 3 frontend adds file-level agent actions to the Code Workspace.
-// These hand the agent thread structured context about the current file,
-// selection, or intent (edit / tests). The bridge backend is NOT yet
-// required to handle these events -- until it does, transport.send is
-// fire-and-forget at the WS level and the user can navigate to the
-// Build surface to continue driving the agent manually.
+// Phase 2 (Sprint A, F5 maturity plan) extends `request_edit` / `request_tests`
+// with the Edit Intent Panel payload — chips (multi-select preset hints),
+// free-form instruction, and an optional `selected_range` carrying the
+// `selected_text` slice. The bridge backend treats these as agent-mediated:
+// no direct browser write happens; the agent picks up the request and
+// proposes changes through the review pipeline.
 //
 // Outbound events (frontend -> bridge):
 //   coding.context.ask_about_file
@@ -13,9 +14,9 @@
 //   coding.context.ask_about_selection
 //     { session_id, path, start_line, end_line, selected_text }
 //   coding.context.request_edit
-//     { session_id, path, hint? }
+//     { session_id, path, hint?, chips?, selected_range?, selected_text? }
 //   coding.context.request_tests
-//     { session_id, path }
+//     { session_id, path, hint?, chips? }
 
 import type { TransportHandle } from '../../transport';
 
@@ -33,6 +34,7 @@ export interface FileContextInput {
 const EXCERPT_HEAD_LINES = 60;
 const EXCERPT_TAIL_LINES = 20;
 const EXCERPT_MAX_CHARS = 4000;
+const HINT_MAX_CHARS = 2000;
 
 export interface FileContextPayload {
   session_id: string;
@@ -53,7 +55,37 @@ export interface FileIntentPayload {
   session_id: string;
   path: string;
   hint?: string;
+  chips?: string[];
+  selected_range?: { start_line: number; end_line: number };
+  selected_text?: string;
 }
+
+export interface EditIntentInput {
+  hint?: string | null | undefined;
+  chips?: ReadonlyArray<string> | null | undefined;
+  selection?: SelectionRange | null | undefined;
+  content?: string | null | undefined;
+}
+
+export const EDIT_INTENT_CHIPS = [
+  'refactor',
+  'add types',
+  'fix bug',
+  'extract function',
+  'add docstring',
+  'simplify',
+] as const;
+
+export const TEST_INTENT_CHIPS = [
+  'unit',
+  'integration',
+  'edge cases',
+  'error paths',
+  'snapshot',
+] as const;
+
+export type EditIntentChip = (typeof EDIT_INTENT_CHIPS)[number];
+export type TestIntentChip = (typeof TEST_INTENT_CHIPS)[number];
 
 export function buildFileContextPayload(
   sessionId: string,
@@ -103,6 +135,49 @@ export function buildFileIntentPayload(
   return payload;
 }
 
+// Phase 2 (Edit Intent Panel): build a structured request_edit / request_tests
+// payload from chip selections, free-form hint, optional scope selection,
+// and the in-memory file content. The bridge sees a single agent-mediated
+// request — nothing is written from the browser.
+export function buildEditIntentPayload(
+  sessionId: string,
+  path: string,
+  input: EditIntentInput = {},
+): FileIntentPayload {
+  const payload: FileIntentPayload = { session_id: sessionId, path };
+  if (typeof input.hint === 'string') {
+    const trimmed = input.hint.trim();
+    if (trimmed.length > 0) {
+      payload.hint = trimmed.slice(0, HINT_MAX_CHARS);
+    }
+  }
+  if (input.chips && input.chips.length > 0) {
+    const dedup: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of input.chips) {
+      if (typeof raw !== 'string') continue;
+      const c = raw.trim();
+      if (c.length === 0 || seen.has(c)) continue;
+      seen.add(c);
+      dedup.push(c);
+    }
+    if (dedup.length > 0) payload.chips = dedup;
+  }
+  if (input.selection) {
+    const start = Math.max(1, input.selection.start);
+    const end = Math.max(start, input.selection.end);
+    payload.selected_range = { start_line: start, end_line: end };
+    if (typeof input.content === 'string') {
+      const lines = input.content.split('\n');
+      const clampedStart = Math.min(start, Math.max(lines.length, 1));
+      const clampedEnd = Math.min(end, lines.length);
+      const sliced = lines.slice(clampedStart - 1, clampedEnd).join('\n');
+      payload.selected_text = sliced.slice(0, EXCERPT_MAX_CHARS);
+    }
+  }
+  return payload;
+}
+
 function buildExcerpt(content: string): string {
   const lines = content.split('\n');
   if (lines.length <= EXCERPT_HEAD_LINES + EXCERPT_TAIL_LINES) {
@@ -126,11 +201,6 @@ export interface SendCodingContextResult {
   error?: string;
 }
 
-// Generic constraint keeps call sites in CodePanel.tsx free of casts (the
-// concrete FileContextPayload / SelectionContextPayload / FileIntentPayload
-// types all satisfy { session_id?: string }), and TypeScript infers the
-// concrete payload type at each call site so excess-property check on
-// object literals at the test sites does not fire.
 export async function sendCodingContext<P extends { session_id?: string }>(
   transport: TransportHandle,
   type: CodingContextEvent,

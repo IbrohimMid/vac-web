@@ -107,11 +107,18 @@ describe('useProject', () => {
     expect(s.selectedLines).toBeNull();
   });
 
-  it('resetAll clears tree, files, and selection', () => {
+  it('resetAll clears tree, files, selection, expand, filter, options, and meta', () => {
     useProject.getState().beginTreeRequest();
     useProject.getState().beginFileRequest('a');
     useProject.getState().selectPath('a');
     useProject.getState().selectLines({ start: 1, end: 2 });
+    useProject.getState().setExpanded('src', true);
+    useProject.getState().setFilter('q');
+    useProject.getState().setTreeOptions({ includeHidden: true, maxDepth: 5 });
+    useProject.getState().setTreeLoaded(
+      [{ path: 'a', type: 'file' }],
+      { truncated: true, entryCount: 1, capReason: 'cap' },
+    );
     useProject.getState().resetAll();
     const s = useProject.getState();
     expect(s.treeStatus).toBe('idle');
@@ -119,5 +126,61 @@ describe('useProject', () => {
     expect(Object.keys(s.files).length).toBe(0);
     expect(s.selectedFilePath).toBeNull();
     expect(s.selectedLines).toBeNull();
+    expect(s.expanded).toEqual({});
+    expect(s.filter).toBe('');
+    expect(s.treeOptions).toEqual({});
+    expect(s.truncated).toBe(false);
+    expect(s.entryCount).toBeNull();
+    expect(s.capReason).toBeNull();
+  });
+
+  it('setTreeLoaded with meta records truncated, entryCount, and capReason', () => {
+    useProject.getState().setTreeLoaded(
+      [{ path: 'a', type: 'file' }],
+      { truncated: true, entryCount: 7, capReason: 'max_entries' },
+    );
+    const s = useProject.getState();
+    expect(s.truncated).toBe(true);
+    expect(s.entryCount).toBe(7);
+    expect(s.capReason).toBe('max_entries');
+  });
+
+  it('setTreeLoaded without meta defaults to entries.length and clears prior meta', () => {
+    useProject.getState().setTreeLoaded(
+      [{ path: 'a', type: 'file' }],
+      { truncated: true, entryCount: 99, capReason: 'cap' },
+    );
+    useProject
+      .getState()
+      .setTreeLoaded([
+        { path: 'a', type: 'file' },
+        { path: 'b', type: 'file' },
+      ]);
+    const s = useProject.getState();
+    expect(s.truncated).toBe(false);
+    expect(s.entryCount).toBe(2);
+    expect(s.capReason).toBeNull();
+  });
+
+  it('setExpanded and toggleExpanded mutate the expanded map', () => {
+    useProject.getState().setExpanded('src', true);
+    expect(useProject.getState().expanded['src']).toBe(true);
+    useProject.getState().toggleExpanded('src');
+    expect(useProject.getState().expanded['src']).toBe(false);
+    useProject.getState().toggleExpanded('docs');
+    expect(useProject.getState().expanded['docs']).toBe(true);
+  });
+
+  it('setFilter stores the query string', () => {
+    useProject.getState().setFilter('util');
+    expect(useProject.getState().filter).toBe('util');
+  });
+
+  it('setTreeOptions merges options without dropping prior keys', () => {
+    useProject.getState().setTreeOptions({ maxDepth: 3 });
+    useProject.getState().setTreeOptions({ includeHidden: true });
+    const s = useProject.getState();
+    expect(s.treeOptions.maxDepth).toBe(3);
+    expect(s.treeOptions.includeHidden).toBe(true);
   });
 });

@@ -2,19 +2,20 @@
 // plus outbound request helpers with a 'no bridge support' timeout
 // fallback.
 //
-// Phase 2: the bridge is not yet expected to support these events. The
-// handlers stay subscribed so that when the bridge ships, no frontend
-// change is needed. Until then, requestProjectTree / requestProjectFile
-// time out and flip the slot to 'unsupported', which the UI renders as
-// the truthful 'Unavailable: bridge does not support project file
-// browsing yet.' copy.
+// Phase 3 extends the request payload with max_depth / path_prefix /
+// include_hidden when set in the store (useProject.treeOptions), and
+// reads truncated / entry_count / cap_reason from project.tree.updated
+// into the store as tree meta.
 
-import { useProject, type ProjectEntry } from '../../stores/project';
+import { useProject, type ProjectEntry, type ProjectTreeMeta } from '../../stores/project';
 import type { TransportHandle } from '../../transport';
 
 interface TreeUpdatedPayload {
   session_id?: string;
   entries?: unknown;
+  truncated?: unknown;
+  entry_count?: unknown;
+  cap_reason?: unknown;
 }
 
 interface TreeUnsupportedPayload {
@@ -75,13 +76,30 @@ function normalizeEntries(raw: unknown): ProjectEntry[] {
 export const PROJECT_TREE_TIMEOUT_MS = 4000;
 export const PROJECT_FILE_TIMEOUT_MS = 6000;
 
+export function buildTreeRequestBody(): Record<string, unknown> {
+  const opts = useProject.getState().treeOptions;
+  const body: Record<string, unknown> = {};
+  if (typeof opts.maxDepth === 'number') body.max_depth = opts.maxDepth;
+  if (typeof opts.pathPrefix === 'string' && opts.pathPrefix.length > 0) {
+    body.path_prefix = opts.pathPrefix;
+  }
+  if (typeof opts.includeHidden === 'boolean') {
+    body.include_hidden = opts.includeHidden;
+  }
+  return body;
+}
+
 export function registerProjectHandlers(transport: TransportHandle): () => void {
   const offs: Array<() => void> = [];
 
   offs.push(
     transport.on('project.tree.updated', (ev) => {
       const p = (ev.payload ?? {}) as TreeUpdatedPayload;
-      useProject.getState().setTreeLoaded(normalizeEntries(p.entries));
+      const meta: ProjectTreeMeta = {};
+      if (typeof p.truncated === 'boolean') meta.truncated = p.truncated;
+      if (typeof p.entry_count === 'number') meta.entryCount = p.entry_count;
+      if (typeof p.cap_reason === 'string') meta.capReason = p.cap_reason;
+      useProject.getState().setTreeLoaded(normalizeEntries(p.entries), meta);
     }),
   );
 
@@ -159,7 +177,7 @@ export async function requestProjectTree(
   }, timeoutMs);
 
   try {
-    await transport.send(sessionId, 'project.tree.request', {});
+    await transport.send(sessionId, 'project.tree.request', buildTreeRequestBody());
   } catch (err) {
     clearTimer(timer);
     useProject

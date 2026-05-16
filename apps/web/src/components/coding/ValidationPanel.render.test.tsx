@@ -55,8 +55,25 @@ describe('<ValidationPanel/>', () => {
     render(<ValidationPanel transport={t} />);
     expect(screen.getByText('TS error')).toBeInTheDocument();
     expect(screen.getByText(/Files: src\/a.ts/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Send failure to agent/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Send to local AI/i }));
     expect(t.send).toHaveBeenCalledWith('s1', 'validation.failure.send_context', { session_id: 's1', run_id: 'run1' });
+  });
+
+  it('cancel button is disabled for failed runs but enabled for queued/running', () => {
+    useSession.getState().setSession('s1', 'mock', '/tmp/repo');
+    useValidation.getState().upsertRun({ id: 'q1', sessionId: 's1', command: 'pnpm test', label: 'Queued', status: 'queued', startedAt: '2026-05-14T00:00:00Z', relatedFiles: [] });
+    render(<ValidationPanel transport={fakeTransport()} />);
+    const cancelBtn = screen.getByTestId('validation-cancel') as HTMLButtonElement;
+    expect(cancelBtn).not.toBeDisabled();
+    fireEvent.click(cancelBtn);
+    expect(useValidation.getState().runs.get('q1')?.status).toBe('cancelled');
+  });
+
+  it('send-to-local-AI button is disabled when selected run is not failed', () => {
+    useSession.getState().setSession('s1', 'mock', '/tmp/repo');
+    useValidation.getState().upsertRun({ id: 'r1', sessionId: 's1', command: 'pnpm test', label: 'Running', status: 'running', startedAt: '2026-05-14T00:00:00Z', relatedFiles: [] });
+    render(<ValidationPanel transport={fakeTransport()} />);
+    expect(screen.getByTestId('validation-send-failure')).toBeDisabled();
   });
 
   it('reruns selected run', () => {

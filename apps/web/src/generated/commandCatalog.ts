@@ -34,6 +34,9 @@ export type CommandId =
   | 'assessment.run'
   | 'assessment.sweep.cancel'
   | 'assessment.sweep.run'
+  | 'bridge.mutation.approve'
+  | 'bridge.mutation.refine_request'
+  | 'bridge.mutation.reject'
   | 'coding.context.ask_about_file'
   | 'coding.context.ask_about_selection'
   | 'coding.context.request_edit'
@@ -149,6 +152,9 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'assessment.run', status: 'implemented', scope: 'session', sideEffect: 'state' }),
   Object.freeze({ id: 'assessment.sweep.cancel', status: 'implemented', scope: 'session', sideEffect: 'state' }),
   Object.freeze({ id: 'assessment.sweep.run', status: 'implemented', scope: 'session', sideEffect: 'state' }),
+  Object.freeze({ id: 'bridge.mutation.approve', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'fs.write', summary: "Approve a pending bridge mutation; the bridge applies on disk and emits the audited lifecycle event." }),
+  Object.freeze({ id: 'bridge.mutation.refine_request', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Ask the local AI to refine a pending bridge mutation; the intent stays pending until a new request_id replaces it." }),
+  Object.freeze({ id: 'bridge.mutation.reject', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Reject a pending bridge mutation; the bridge discards the intent without touching disk." }),
   Object.freeze({ id: 'coding.context.ask_about_file', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Forward file context to the active agent as a structured prompt." }),
   Object.freeze({ id: 'coding.context.ask_about_selection', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Forward selected lines to the active agent as a structured prompt." }),
   Object.freeze({ id: 'coding.context.request_edit', status: 'implemented', scope: 'session', sideEffect: 'state', runtime: 'agent_forwarded', summary: "Ask the active agent to edit a file using current workspace context." }),

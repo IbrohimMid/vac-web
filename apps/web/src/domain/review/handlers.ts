@@ -4,8 +4,19 @@
 // events. Legacy `changeset.*` listeners are removed; the mock-engine has
 // been updated to emit `review.changeset_updated` and `review.file_diff_chunk`
 // to match. There is exactly one canonical event taxonomy here.
+//
+// Phase 1 (Sprint A): additionally subscribe to `review.file.action.updated`
+// and `review.hunk.action.updated` so any surface that renders review action
+// feedback (ReviewQueue, DiffViewer, TaskBoard, ...) reads from the same
+// store-backed state. Outbound helpers in domain/review/actions.ts have
+// already written an optimistic 'sending' status; these handlers reconcile
+// against the authoritative reply from the agent or bridge.
 
-import { useReview, type ReviewFile } from '../../stores/review';
+import {
+  useReview,
+  type ReviewActionStatus,
+  type ReviewFile,
+} from '../../stores/review';
 import type { TransportHandle } from '../../transport';
 
 function asStatus(raw: string): ReviewFile['status'] {
@@ -63,7 +74,6 @@ function deriveFilesFromReviewPayload(payload: Record<string, unknown>): ReviewF
 
   const fromArray = filesFromArray(payload.files, toolCallId, approvalId, sourceEventType);
   if (fromArray.length > 0) return fromArray;
-  // Empty-array payload signals "no changes" (e.g., revert_all). Return [] so the store clears.
   if (Array.isArray(payload.files)) return [];
 
   const files = new Map<string, ReviewFile>();
@@ -116,11 +126,57 @@ function deriveFilesFromReviewPayload(payload: Record<string, unknown>): ReviewF
   return derived;
 }
 
+const ACTION_STATUSES: ReviewActionStatus[] = [
+  'idle',
+  'sending',
+  'requested',
+  'failed',
+  'completed',
+];
+
+function asActionStatus(raw: string | null): ReviewActionStatus {
+  return raw && (ACTION_STATUSES as string[]).includes(raw)
+    ? (raw as ReviewActionStatus)
+    : 'requested';
+}
+
+function defaultFileActionMessage(status: ReviewActionStatus): string {
+  switch (status) {
+    case 'sending':
+      return 'Sending file revert request...';
+    case 'requested':
+      return 'File revert request sent to agent.';
+    case 'failed':
+      return 'File revert request failed.';
+    case 'completed':
+      return 'File revert completed.';
+    default:
+      return 'File revert status updated.';
+  }
+}
+
+function defaultHunkActionMessage(
+  status: ReviewActionStatus,
+  action: string,
+): string {
+  const verb = action === 'revert_hunk' ? 'revert' : 'revision';
+  switch (status) {
+    case 'sending':
+      return `Sending hunk ${verb} request...`;
+    case 'requested':
+      return `Hunk ${verb} request sent to agent.`;
+    case 'failed':
+      return `Hunk ${verb} request failed.`;
+    case 'completed':
+      return `Hunk ${verb} completed.`;
+    default:
+      return `Hunk ${verb} status updated.`;
+  }
+}
+
 export function registerReviewHandlers(transport: TransportHandle): () => void {
   const offs: Array<() => void> = [];
 
-  // Canonical review.changeset_updated: full file list, may also signal a single
-  // reverted path via reverted_path. Empty files: [] means "no changes" (revert_all).
   offs.push(
     transport.on('review.changeset_updated', (ev) => {
       const p = asRecord(ev.payload);
@@ -130,7 +186,6 @@ export function registerReviewHandlers(transport: TransportHandle): () => void {
         return;
       }
       const files = deriveFilesFromReviewPayload(p);
-      // setFiles also accepts [] as a clear; trust the canonical event.
       useReview.getState().setFiles(files);
       if (revertedPath) {
         useReview.getState().removeFile(revertedPath);
@@ -138,8 +193,6 @@ export function registerReviewHandlers(transport: TransportHandle): () => void {
     }),
   );
 
-  // Canonical review.file_diff_chunk: streaming diff body for a single file,
-  // fetched lazily after `review.open_file`.
   offs.push(
     transport.on('review.file_diff_chunk', (ev) => {
       const p = ev.payload as { path?: string; unified?: string; truncated?: boolean } | null;
@@ -148,6 +201,38 @@ export function registerReviewHandlers(transport: TransportHandle): () => void {
         path: p.path,
         unified: p.unified,
         truncated: Boolean(p.truncated),
+      });
+    }),
+  );
+
+  offs.push(
+    transport.on('review.file.action.updated', (ev) => {
+      const p = asRecord(ev.payload);
+      const path = asString(p.path);
+      if (!path) return;
+      const status = asActionStatus(asString(p.status));
+      const message = asString(p.message) ?? defaultFileActionMessage(status);
+      useReview.getState().setActionStatus({
+        key: `file:${path}`,
+        status,
+        message,
+      });
+    }),
+  );
+
+  offs.push(
+    transport.on('review.hunk.action.updated', (ev) => {
+      const p = asRecord(ev.payload);
+      const path = asString(p.path);
+      const hunkId = asString(p.hunk_id) ?? asString(p.hunkId);
+      const action = asString(p.action);
+      if (!path || !hunkId || !action) return;
+      const status = asActionStatus(asString(p.status));
+      const message = asString(p.message) ?? defaultHunkActionMessage(status, action);
+      useReview.getState().setActionStatus({
+        key: `hunk:${path}:${hunkId}:${action}`,
+        status,
+        message,
       });
     }),
   );

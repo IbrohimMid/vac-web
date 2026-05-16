@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildEditIntentPayload,
   buildFileContextPayload,
   buildSelectionContextPayload,
   buildFileIntentPayload,
@@ -78,6 +79,52 @@ describe('buildFileIntentPayload', () => {
   it('includes hint when provided', () => {
     const p = buildFileIntentPayload('s1', 'src/a.ts', 'extract helper');
     expect(p.hint).toBe('extract helper');
+  });
+});
+
+describe('buildEditIntentPayload', () => {
+  it('returns minimal payload when no chips/hint/selection', () => {
+    const p = buildEditIntentPayload('s1', 'src/a.ts');
+    expect(p).toEqual({ session_id: 's1', path: 'src/a.ts' });
+  });
+
+  it('trims hint and drops whitespace-only', () => {
+    const empty = buildEditIntentPayload('s1', 'src/a.ts', { hint: '   ' });
+    expect(empty.hint).toBeUndefined();
+    const trimmed = buildEditIntentPayload('s1', 'src/a.ts', {
+      hint: '  refactor this  ',
+    });
+    expect(trimmed.hint).toBe('refactor this');
+  });
+
+  it('deduplicates and trims chips, drops empty entries', () => {
+    const p = buildEditIntentPayload('s1', 'src/a.ts', {
+      chips: ['refactor', 'refactor', ' add types ', '', '  '],
+    });
+    expect(p.chips).toEqual(['refactor', 'add types']);
+  });
+
+  it('omits chips key when chips list is empty after filtering', () => {
+    const p = buildEditIntentPayload('s1', 'src/a.ts', { chips: ['', '  '] });
+    expect(p.chips).toBeUndefined();
+  });
+
+  it('attaches selected_range and selected_text sliced from content', () => {
+    const p = buildEditIntentPayload('s1', 'src/a.ts', {
+      selection: { start: 2, end: 4 },
+      content: 'a\nb\nc\nd\ne',
+    });
+    expect(p.selected_range).toEqual({ start_line: 2, end_line: 4 });
+    expect(p.selected_text).toBe('b\nc\nd');
+  });
+
+  it('clamps selected_range and slices content when selection runs past EOF', () => {
+    const p = buildEditIntentPayload('s1', 'src/a.ts', {
+      selection: { start: 0, end: 99 },
+      content: 'a\nb',
+    });
+    expect(p.selected_range).toEqual({ start_line: 1, end_line: 99 });
+    expect(p.selected_text).toBe('a\nb');
   });
 });
 

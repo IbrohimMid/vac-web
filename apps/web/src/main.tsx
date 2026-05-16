@@ -46,6 +46,7 @@ const CodeWorkspace = lazy(() =>
 
 import { registerApprovalHandlers } from './domain/approvals/handlers';
 import { registerAgentSessionHandlers } from './domain/agentSession/handlers';
+import { registerBridgeHandlers } from './domain/bridge/handlers';
 import { registerToolActivityHandlers } from './domain/toolActivity/handlers';
 import { registerWorkflowHandlers } from './domain/workflow/handlers';
 import { registerExtensionsHandlers } from './domain/extensions/handlers';
@@ -188,6 +189,7 @@ function App() {
         offs.push(registerNotifyHandlers(t));
         offs.push(registerApprovalHandlers(t));
         offs.push(registerReviewHandlers(t));
+        offs.push(registerBridgeHandlers(t));
         offs.push(registerSessionHandlers(t));
         offs.push(registerSessionHistoryHandlers(t));
         offs.push(registerRuntimeHandlers(t));

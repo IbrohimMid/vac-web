@@ -1,9 +1,13 @@
 // Project tree + file state for the Code Workspace (Phases 2-3).
 //
 // Phase 2 added the tree/file state machine.
-// Phase 3 adds selection state (selectedFilePath + selectedLines) so the
-// Code Workspace center pane can render a CodePanel and dispatch
-// file-level agent actions (see domain/coding/context.ts).
+// Phase 3 (UI maturity) adds:
+//   - tree options (maxDepth, pathPrefix, includeHidden) forwarded to
+//     project.tree.request as max_depth / path_prefix / include_hidden
+//   - tree meta (truncated, entryCount, capReason) parsed from
+//     project.tree.updated for the "Tree truncated" banner
+//   - per-directory expand state for the hierarchy view
+//   - a client-side filter string for the Explorer search input
 
 import { create } from 'zustand';
 
@@ -44,16 +48,34 @@ export interface ProjectSelection {
   end: number;
 }
 
+export interface ProjectTreeOptions {
+  maxDepth?: number;
+  pathPrefix?: string;
+  includeHidden?: boolean;
+}
+
+export interface ProjectTreeMeta {
+  truncated?: boolean;
+  entryCount?: number;
+  capReason?: string | null;
+}
+
 interface ProjectSlice {
   treeStatus: ProjectTreeStatus;
   entries: ProjectEntry[];
   treeError: string | null;
   treeRequestedAt: string | null;
+  truncated: boolean;
+  entryCount: number | null;
+  capReason: string | null;
   files: Record<string, ProjectFile>;
   selectedFilePath: string | null;
   selectedLines: ProjectSelection | null;
+  expanded: Record<string, boolean>;
+  filter: string;
+  treeOptions: ProjectTreeOptions;
   beginTreeRequest(): void;
-  setTreeLoaded(entries: ProjectEntry[]): void;
+  setTreeLoaded(entries: ProjectEntry[], meta?: ProjectTreeMeta): void;
   setTreeUnsupported(reason?: string | null): void;
   setTreeError(message: string): void;
   beginFileRequest(path: string): void;
@@ -63,6 +85,10 @@ interface ProjectSlice {
   selectPath(path: string | null): void;
   selectLines(range: ProjectSelection | null): void;
   clearSelection(): void;
+  setExpanded(path: string, value: boolean): void;
+  toggleExpanded(path: string): void;
+  setFilter(value: string): void;
+  setTreeOptions(opts: Partial<ProjectTreeOptions>): void;
   resetAll(): void;
 }
 
@@ -71,9 +97,15 @@ export const useProject = create<ProjectSlice>((set) => ({
   entries: [],
   treeError: null,
   treeRequestedAt: null,
+  truncated: false,
+  entryCount: null,
+  capReason: null,
   files: {},
   selectedFilePath: null,
   selectedLines: null,
+  expanded: {},
+  filter: '',
+  treeOptions: {},
   beginTreeRequest() {
     set({
       treeStatus: 'requesting',
@@ -81,24 +113,22 @@ export const useProject = create<ProjectSlice>((set) => ({
       treeRequestedAt: new Date().toISOString(),
     });
   },
-  setTreeLoaded(entries) {
+  setTreeLoaded(entries, meta) {
     set({
       treeStatus: entries.length === 0 ? 'empty' : 'loaded',
       entries: entries.slice(),
       treeError: null,
+      truncated: meta?.truncated === true,
+      entryCount:
+        typeof meta?.entryCount === 'number' ? meta.entryCount : entries.length,
+      capReason: typeof meta?.capReason === 'string' ? meta.capReason : null,
     });
   },
   setTreeUnsupported(reason) {
-    set({
-      treeStatus: 'unsupported',
-      treeError: reason ?? null,
-    });
+    set({ treeStatus: 'unsupported', treeError: reason ?? null });
   },
   setTreeError(message) {
-    set({
-      treeStatus: 'error',
-      treeError: message,
-    });
+    set({ treeStatus: 'error', treeError: message });
   },
   beginFileRequest(path) {
     set((s) => ({
@@ -160,15 +190,35 @@ export const useProject = create<ProjectSlice>((set) => ({
   clearSelection() {
     set({ selectedFilePath: null, selectedLines: null });
   },
+  setExpanded(path, value) {
+    set((s) => ({ expanded: { ...s.expanded, [path]: value } }));
+  },
+  toggleExpanded(path) {
+    set((s) => ({
+      expanded: { ...s.expanded, [path]: !(s.expanded[path] ?? false) },
+    }));
+  },
+  setFilter(value) {
+    set({ filter: value });
+  },
+  setTreeOptions(opts) {
+    set((s) => ({ treeOptions: { ...s.treeOptions, ...opts } }));
+  },
   resetAll() {
     set({
       treeStatus: 'idle',
       entries: [],
       treeError: null,
       treeRequestedAt: null,
+      truncated: false,
+      entryCount: null,
+      capReason: null,
       files: {},
       selectedFilePath: null,
       selectedLines: null,
+      expanded: {},
+      filter: '',
+      treeOptions: {},
     });
   },
 }));

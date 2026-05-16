@@ -2,10 +2,11 @@ import { useMemo } from 'react';
 import type { TransportHandle } from '../../transport';
 import { useApprovals } from '../../stores/approvals';
 import { useCockpit } from '../../stores/cockpit';
-import { useReview } from '../../stores/review';
+import { useReview, type ReviewActionFeedback } from '../../stores/review';
 import { useRuntime } from '../../stores/runtime';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useTasks, type TaskLifecycleStatus, type TaskRecord } from '../../stores/tasks';
+import { useValidation, type ValidationRun } from '../../stores/validation';
 import { requestTaskContinue, requestTaskPlanChanges, requestTaskValidation } from '../../domain/tasks/handlers';
 import { countTaskStatuses, findTaskFileConflicts, summarizeAgentActivity } from '../../domain/tasks/orchestration';
 
@@ -27,17 +28,29 @@ const STATUS_LABELS: Record<TaskLifecycleStatus, string> = {
   failed: 'failed',
 };
 
+function formatRunDuration(run: ValidationRun): string {
+  if (typeof run.durationMs === 'number') return `${Math.round(run.durationMs / 100) / 10}s`;
+  if (!run.finishedAt) return '\u2014';
+  const start = Date.parse(run.startedAt);
+  const end = Date.parse(run.finishedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '\u2014';
+  return `${Math.round((end - start) / 100) / 10}s`;
+}
+
 export function TaskBoard({ sessionId, transport }: Props) {
   const taskOrder = useTasks((s) => s.order);
   const taskMap = useTasks((s) => s.tasks);
   const activeTaskId = useTasks((s) => s.activeTaskId);
   const setActiveTask = useTasks((s) => s.setActiveTask);
   const reviewFiles = useReview((s) => s.files);
+  const reviewActionStatus = useReview((s) => s.actionStatus);
   const pendingApprovals = useApprovals((s) => s.pendingOrder.length);
   const runtimeJobs = useRuntime((s) => s.jobs);
   const runtimeOrder = useRuntime((s) => s.order);
   const activityOrder = useToolActivity((s) => s.activityOrder);
   const activitiesMap = useToolActivity((s) => s.activities);
+  const validationRunsMap = useValidation((s) => s.runs);
+  const validationRunOrder = useValidation((s) => s.order);
   const setRoute = useCockpit((s) => s.setRoute);
   const tasks = useMemo(
     () => taskOrder.map((id) => taskMap.get(id)).filter((task): task is TaskRecord => !!task && task.sessionId === sessionId),
@@ -57,6 +70,12 @@ export function TaskBoard({ sessionId, transport }: Props) {
     () => runtimeOrder.map((id) => runtimeJobs.get(id)).find((job) => job?.status === 'running' || job?.status === 'pending') ?? null,
     [runtimeOrder, runtimeJobs],
   );
+  const taskValidationRuns = useMemo(() => {
+    if (!activeTask) return [] as ValidationRun[];
+    return validationRunOrder
+      .map((id) => validationRunsMap.get(id))
+      .filter((run): run is ValidationRun => !!run && run.sessionId === activeTask.sessionId && run.taskId === activeTask.taskId);
+  }, [validationRunOrder, validationRunsMap, activeTask]);
   const ready = !!sessionId && !!transport;
 
   if (!sessionId) {
@@ -113,7 +132,7 @@ export function TaskBoard({ sessionId, transport }: Props) {
           {tasks.map((task) => (
             <button key={task.taskId} type="button" className="codeworkspace-task-chip" aria-pressed={task.taskId === activeTask.taskId} onClick={() => setActiveTask(task.taskId)}>
               <span>{task.title}</span>
-              <small>{STATUS_LABELS[task.status]} · {task.changedFiles.length} files</small>
+              <small>{STATUS_LABELS[task.status]} {'\u00B7'} {task.changedFiles.length} files</small>
             </button>
           ))}
         </div>
@@ -121,7 +140,13 @@ export function TaskBoard({ sessionId, transport }: Props) {
 
       <AgentActivitySummary summaries={specializedAgents} />
 
-      <TaskSummary task={activeTask} reviewCount={reviewFiles.length} pendingApprovalCount={pendingApprovals} />
+      <TaskSummary
+        task={activeTask}
+        reviewCount={reviewFiles.length}
+        pendingApprovalCount={pendingApprovals}
+        reviewActionStatus={reviewActionStatus}
+        validationRuns={taskValidationRuns}
+      />
 
       <div className="codeworkspace-task-actions" role="toolbar" aria-label="Task actions">
         <button type="button" className="codeworkspace-link-btn" onClick={continueTask} disabled={!ready}>Continue execution</button>
@@ -179,8 +204,8 @@ function AgentActivitySummary({ summaries }: { summaries: ReturnType<typeof summ
           <div key={`${summary.agentId}:${summary.agentKind}`} className="codeworkspace-task-agent-card">
             <span>{summary.agentKind}</span>
             <strong>{summary.agentId}</strong>
-            <small>{summary.total} tools · {summary.running} running · {summary.failed} failed</small>
-            <small>{summary.latestTitle} · {summary.latestStatus}</small>
+            <small>{summary.total} tools {'\u00B7'} {summary.running} running {'\u00B7'} {summary.failed} failed</small>
+            <small>{summary.latestTitle} {'\u00B7'} {summary.latestStatus}</small>
           </div>
         ))}
       </div>
@@ -188,7 +213,15 @@ function AgentActivitySummary({ summaries }: { summaries: ReturnType<typeof summ
   );
 }
 
-function TaskSummary({ task, reviewCount, pendingApprovalCount }: { task: TaskRecord; reviewCount: number; pendingApprovalCount: number }) {
+interface TaskSummaryProps {
+  task: TaskRecord;
+  reviewCount: number;
+  pendingApprovalCount: number;
+  reviewActionStatus: Record<string, ReviewActionFeedback>;
+  validationRuns: ValidationRun[];
+}
+
+function TaskSummary({ task, reviewCount, pendingApprovalCount, reviewActionStatus, validationRuns }: TaskSummaryProps) {
   return (
     <div className="codeworkspace-task-summary">
       <div className="codeworkspace-task-metrics" aria-label="Task metrics">
@@ -218,7 +251,7 @@ function TaskSummary({ task, reviewCount, pendingApprovalCount }: { task: TaskRe
       )}
 
       <div className="codeworkspace-task-artifacts">
-        <ArtifactList title="Changed files" items={task.changedFiles} empty="No changed files linked yet." />
+        <ChangedFilesList items={task.changedFiles} reviewActionStatus={reviewActionStatus} />
         <ArtifactList title="Commands" items={task.commands} empty="No commands linked yet." />
       </div>
 
@@ -229,6 +262,71 @@ function TaskSummary({ task, reviewCount, pendingApprovalCount }: { task: TaskRe
           {task.validation.message ? <span>{task.validation.message}</span> : null}
         </div>
       ) : null}
+
+      <ValidationHistory runs={validationRuns} />
+    </div>
+  );
+}
+
+function ChangedFilesList({ items, reviewActionStatus }: { items: string[]; reviewActionStatus: Record<string, ReviewActionFeedback> }) {
+  if (items.length === 0) {
+    return (
+      <div className="codeworkspace-task-artifact-list" data-testid="task-changed-files-empty">
+        <strong>Changed files</strong>
+        <span className="cw-empty-detail">No changed files linked yet.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="codeworkspace-task-artifact-list" data-testid="task-changed-files">
+      <strong>Changed files</strong>
+      <ul>
+        {items.slice(0, 5).map((path) => {
+          const feedback = reviewActionStatus[`file:${path}`];
+          return (
+            <li
+              key={path}
+              data-testid="task-changed-file"
+              data-action-status={feedback?.status ?? 'idle'}
+            >
+              <span>{path}</span>
+              {feedback && feedback.status !== 'idle' ? (
+                <small className="codeworkspace-task-action-badge" data-status={feedback.status}>
+                  {feedback.status}
+                </small>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function ValidationHistory({ runs }: { runs: ValidationRun[] }) {
+  if (runs.length === 0) {
+    return (
+      <div className="codeworkspace-task-validation-history" data-testid="task-validation-history-empty">
+        <strong>Validation history</strong>
+        <span className="cw-empty-detail">No validation runs linked to this task yet.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="codeworkspace-task-validation-history" data-testid="task-validation-history">
+      <strong>Validation history</strong>
+      <ol>
+        {runs.slice(0, 5).map((run) => (
+          <li
+            key={run.id}
+            data-testid="task-validation-history-row"
+            data-status={run.status}
+          >
+            <span>{run.label}</span>
+            <small>{run.status} {'\u00B7'} {formatRunDuration(run)}</small>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

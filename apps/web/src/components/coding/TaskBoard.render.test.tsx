@@ -9,6 +9,7 @@ import { useReview } from '../../stores/review';
 import { useRuntime } from '../../stores/runtime';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useTasks } from '../../stores/tasks';
+import { useValidation } from '../../stores/validation';
 import type { TransportHandle } from '../../transport';
 
 function fakeTransport(): TransportHandle {
@@ -30,6 +31,7 @@ describe('<TaskBoard/>', () => {
     useToolActivity.getState().clear();
     useApprovals.getState().clear();
     useCockpit.setState({ route: 'code' });
+    useValidation.getState().resetAll();
   });
   afterEach(() => {
     cleanup();
@@ -120,6 +122,39 @@ describe('<TaskBoard/>', () => {
     expect(screen.getByTestId('task-conflicts')).toHaveTextContent('apps/web/src/main.tsx shared by task1, task2');
     expect(screen.getByText(/Running command: pnpm test/i)).toBeInTheDocument();
     expect(screen.getByTestId('task-multitask-list')).toBeInTheDocument();
+  });
+
+  it('renders review action badge on changed files', () => {
+    seedTask();
+    useReview.getState().setActionStatus({ key: 'file:apps/web/src/main.tsx', status: 'requested', message: 'Ask local AI to edit acknowledged.' });
+    render(<TaskBoard sessionId="s1" transport={fakeTransport()} />);
+    const rows = screen.getAllByTestId('task-changed-file');
+    const row = rows.find((node) => node.getAttribute('data-action-status') === 'requested');
+    expect(row).toBeDefined();
+    expect(row).toHaveTextContent('apps/web/src/main.tsx');
+    expect(row).toHaveTextContent('requested');
+  });
+
+  it('renders per-task validation history including queued and cancelled statuses', () => {
+    seedTask();
+    useValidation.getState().upsertRun({ id: 'run-q', sessionId: 's1', taskId: 'task1', command: 'pnpm test', label: 'Queued check', status: 'queued', startedAt: '2026-05-14T00:00:00Z', relatedFiles: [] });
+    useValidation.getState().upsertRun({ id: 'run-x', sessionId: 's1', taskId: 'task1', command: 'pnpm test', label: 'Stopped check', status: 'cancelled', startedAt: '2026-05-14T00:00:01Z', finishedAt: '2026-05-14T00:00:02Z', relatedFiles: [] });
+    useValidation.getState().upsertRun({ id: 'run-other', sessionId: 's1', taskId: 'task2', command: 'pnpm test', label: 'Other task', status: 'passed', startedAt: '2026-05-14T00:00:03Z', relatedFiles: [] });
+    render(<TaskBoard sessionId="s1" transport={fakeTransport()} />);
+    const history = screen.getByTestId('task-validation-history');
+    expect(history).toHaveTextContent('Queued check');
+    expect(history).toHaveTextContent('Stopped check');
+    expect(history).not.toHaveTextContent('Other task');
+    const rows = screen.getAllByTestId('task-validation-history-row');
+    const statuses = rows.map((r) => r.getAttribute('data-status'));
+    expect(statuses).toContain('queued');
+    expect(statuses).toContain('cancelled');
+  });
+
+  it('renders validation history empty hint when no runs are linked', () => {
+    seedTask();
+    render(<TaskBoard sessionId="s1" transport={fakeTransport()} />);
+    expect(screen.getByTestId('task-validation-history-empty')).toBeInTheDocument();
   });
 
   it('renders specialized agent activity summaries', () => {

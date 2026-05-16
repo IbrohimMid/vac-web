@@ -24,7 +24,7 @@ interface ValidationRequestOpts {
   relatedFiles?: string[];
 }
 
-const STATUSES: ValidationRunStatus[] = ['idle', 'running', 'passed', 'failed'];
+const STATUSES: ValidationRunStatus[] = ['idle', 'queued', 'running', 'passed', 'failed', 'cancelled'];
 
 function asStatus(raw: string | undefined): ValidationRunStatus {
   return raw && STATUSES.includes(raw as ValidationRunStatus) ? (raw as ValidationRunStatus) : 'idle';
