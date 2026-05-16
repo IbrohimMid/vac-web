@@ -372,6 +372,39 @@ reason: {reason}"
     }
 }
 
+/// B12 — build a `bridge.mutation.updated` event for lifecycle changes on an
+/// existing ACP bash mutation. `terminal/create` emits the requested/applied
+/// pair; later terminal lifecycle methods (currently `terminal/kill`) can use
+/// this helper to keep the same MutationInbox row up to date instead of
+/// surfacing only as a disconnected `terminal.lifecycle` row.
+pub fn build_acp_terminal_lifecycle_update_event(
+    request_id: &str,
+    terminal_id: &str,
+    status: &str,
+    message: &str,
+    session_id: &str,
+    agent_id: &str,
+    ts: &str,
+) -> ServerEvent {
+    ServerEvent {
+        seq: 0,
+        session_id: session_id.to_string(),
+        event_type: "bridge.mutation.updated".into(),
+        payload: json!({
+            "request_id": request_id,
+            "kind": "bash",
+            "status": status,
+            "message": message,
+            "terminal_id": terminal_id,
+            "originating_session_id": session_id,
+            "originating_agent_id": agent_id,
+            "source": "acp.terminal.lifecycle",
+        }),
+        v: 1,
+        ts: ts.to_string(),
+    }
+}
+
 fn render_command_line(command: &str, args: &[String]) -> String {
     if args.is_empty() {
         command.to_string()
@@ -653,5 +686,24 @@ mod tests {
             preview.contains("binary 'curl' not in allowlist"),
             "got {preview:?}"
         );
+    }
+
+    #[test]
+    fn terminal_lifecycle_update_event_targets_existing_request_id() {
+        let evt = build_acp_terminal_lifecycle_update_event(
+            "mut-01ABC",
+            "trm_01ABC",
+            "superseded",
+            "Bridge killed terminal trm_01ABC",
+            "sess-1",
+            "claude-acp",
+            "2026-05-16T00:00:00Z",
+        );
+        assert_eq!(evt.event_type, "bridge.mutation.updated");
+        assert_eq!(evt.payload["request_id"], "mut-01ABC");
+        assert_eq!(evt.payload["kind"], "bash");
+        assert_eq!(evt.payload["status"], "superseded");
+        assert_eq!(evt.payload["terminal_id"], "trm_01ABC");
+        assert_eq!(evt.payload["source"], "acp.terminal.lifecycle");
     }
 }

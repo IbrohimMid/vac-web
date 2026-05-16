@@ -2499,6 +2499,11 @@ impl SessionHandle {
                 opts.audit.clone(),
             );
             let term_acp = Arc::clone(&acp_runtime);
+            // B12 — correlate ACP terminal handles back to the bash mutation
+            // row created by B9. `terminal/create` stores terminalId →
+            // request_id; `terminal/kill` uses it to emit
+            // bridge.mutation.updated on the same MutationInbox row.
+            let terminal_mutation_request_ids = Arc::new(dashmap::DashMap::<String, String>::new());
             let term_handle = Arc::clone(&handle);
             tokio::spawn(async move {
                 use crate::agent_runtime::acp::terminal_handler::*;
@@ -2549,6 +2554,12 @@ impl SessionHandle {
                                 );
                                     let mutation_request_id = mutation.request_id.clone();
                                     let mutation_kind = mutation.kind;
+                                    if !terminal_id.is_empty() {
+                                        terminal_mutation_request_ids.insert(
+                                            terminal_id.clone(),
+                                            mutation_request_id.clone(),
+                                        );
+                                    }
                                     emit_event(&term_handle, mutation.requested).await;
                                     emit_event(&term_handle, mutation.applied).await;
                                     if let Some(audit) = term_handle.audit.as_ref() {
@@ -2664,24 +2675,62 @@ impl SessionHandle {
                             if let Some(lp) =
                                 build_terminal_lifecycle_payload(&method, &params, &value)
                             {
+                                let terminal_id = lp.terminal_id.clone();
                                 let payload = serde_json::json!({
                                     "kind": lp.kind,
-                                    "terminal_id": lp.terminal_id,
+                                    "terminal_id": terminal_id,
                                     "command": lp.command,
                                     "args": lp.args,
                                     "exit_code": lp.exit_code,
                                     "agent_id": term_ctx.agent_id.clone(),
                                     "agent_kind": "acp",
                                 });
+                                let lifecycle_ts = chrono::Utc::now().to_rfc3339();
                                 let lifecycle = ServerEvent {
                                     seq: 0,
                                     session_id: term_handle.id.clone(),
                                     event_type: "terminal.lifecycle".into(),
                                     payload,
                                     v: 1,
-                                    ts: chrono::Utc::now().to_rfc3339(),
+                                    ts: lifecycle_ts.clone(),
                                 };
                                 emit_event(&term_handle, lifecycle).await;
+
+                                if method == "terminal/kill" {
+                                    if let Some(request_id) = terminal_mutation_request_ids
+                                        .get(&terminal_id)
+                                        .map(|entry| entry.value().clone())
+                                    {
+                                        let message =
+                                            format!("Bridge killed terminal {terminal_id}");
+                                        let updated = crate::session::bridge_mutation::build_acp_terminal_lifecycle_update_event(
+                                            &request_id,
+                                            &terminal_id,
+                                            "superseded",
+                                            &message,
+                                            &term_handle.id,
+                                            &term_ctx.agent_id,
+                                            &lifecycle_ts,
+                                        );
+                                        emit_event(&term_handle, updated).await;
+                                        if let Some(audit) = term_handle.audit.as_ref() {
+                                            audit.log(
+                                                &term_handle.id,
+                                                "bridge.mutation",
+                                                bridge_core::AuditSeverity::Info,
+                                                serde_json::json!({
+                                                    "event": "updated",
+                                                    "request_id": request_id,
+                                                    "kind": "bash",
+                                                    "status": "superseded",
+                                                    "terminal_id": terminal_id,
+                                                    "agent_id": term_ctx.agent_id,
+                                                    "source": "acp.terminal.kill",
+                                                }),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             let _ = term_acp.client.respond_result(req.id, value);
                         }
