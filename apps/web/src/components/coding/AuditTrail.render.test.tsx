@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { AuditTrail, useAuditEntryCount } from './AuditTrail';
 import { useAudit } from '../../stores/audit';
@@ -43,6 +43,64 @@ describe('<AuditTrail/>', () => {
       useAudit.getState().append({ source: 'system', kind: 'noise', summary: `n${i}` });
     }
     render(<AuditTrail limit={2} />);
+    expect(screen.getAllByTestId('audit-trail-entry').length).toBe(2);
+  });
+
+  it('renders error code filter chips with counts when showErrorCodeFilter is on (B11)', () => {
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'a', requestId: 'r1', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'b', requestId: 'r2', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'c', requestId: 'r3', status: 'failed', errorCode: 'fs.out_of_root' });
+    render(<AuditTrail showErrorCodeFilter />);
+    const shellChip = screen.getByTestId('audit-trail-filter-chip-shell.deny');
+    const fsChip = screen.getByTestId('audit-trail-filter-chip-fs.out_of_root');
+    expect(shellChip.textContent).toContain('shell.deny');
+    expect(shellChip.textContent).toContain('2');
+    expect(fsChip.textContent).toContain('1');
+  });
+
+  it('clicking a filter chip narrows the trail to that error code (B11)', () => {
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'shell-row', requestId: 'r1', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'fs-row', requestId: 'r2', status: 'failed', errorCode: 'fs.out_of_root' });
+    render(<AuditTrail showErrorCodeFilter />);
+    fireEvent.click(screen.getByTestId('audit-trail-filter-chip-shell.deny'));
+    const rows = screen.getAllByTestId('audit-trail-entry');
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.textContent).toContain('shell-row');
+    expect(screen.getByTestId('audit-trail-filter-chip-shell.deny')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clicking the clear button resets the filter (B11)', () => {
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'a', requestId: 'r1', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.applied', summary: 'ok', requestId: 'r2', status: 'applied' });
+    render(<AuditTrail showErrorCodeFilter />);
+    fireEvent.click(screen.getByTestId('audit-trail-filter-chip-shell.deny'));
+    expect(screen.getAllByTestId('audit-trail-entry').length).toBe(1);
+    fireEvent.click(screen.getByTestId('audit-trail-filter-clear'));
+    expect(screen.getAllByTestId('audit-trail-entry').length).toBe(2);
+  });
+
+  it('groupDeniedAttempts collapses consecutive same-errorCode entries into one group (B11)', () => {
+    // Newest-first ordering: applied is pushed first (oldest), then 3 shell.deny.
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.applied', summary: 'success', requestId: 'r0', status: 'applied' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'denied a', requestId: 'r1', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'denied b', requestId: 'r2', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'denied c', requestId: 'r3', status: 'failed', errorCode: 'shell.deny' });
+    render(<AuditTrail groupDeniedAttempts />);
+    const groups = screen.getAllByTestId('audit-trail-group');
+    expect(groups.length).toBe(1);
+    expect(groups[0]).toHaveAttribute('data-count', '3');
+    expect(groups[0]).toHaveAttribute('data-error-code', 'shell.deny');
+    // The applied row stays flat (no errorCode → not grouped).
+    const flat = screen.getAllByTestId('audit-trail-entry').filter((row) => row.getAttribute('data-error-code') === '');
+    expect(flat.length).toBe(1);
+    expect(flat[0]?.textContent).toContain('success');
+  });
+
+  it('groupDeniedAttempts off renders consecutive same-errorCode entries as flat list (B11)', () => {
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'a', requestId: 'r1', status: 'failed', errorCode: 'shell.deny' });
+    useAudit.getState().append({ source: 'bridge', kind: 'bridge.mutation.failed', summary: 'b', requestId: 'r2', status: 'failed', errorCode: 'shell.deny' });
+    render(<AuditTrail />);
+    expect(screen.queryAllByTestId('audit-trail-group').length).toBe(0);
     expect(screen.getAllByTestId('audit-trail-entry').length).toBe(2);
   });
 });

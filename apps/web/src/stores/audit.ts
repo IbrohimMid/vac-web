@@ -24,6 +24,13 @@ export interface AuditEntry {
   requestId?: string;
   status?: string;
   detail?: string;
+  /**
+   * B11 — stable error code emitted by the bridge for failed mutations
+   * (e.g. `shell.deny`, `shell.not_allowlisted`, `fs.out_of_root`,
+   * `terminal.spawn_failed`). Lets AuditTrail render filter chips and
+   * group consecutive denied attempts.
+   */
+  errorCode?: string;
 }
 
 export const AUDIT_CAP = 200;
@@ -58,6 +65,7 @@ export const useAudit = create<AuditState>((set) => ({
         ...(input.requestId ? { requestId: input.requestId } : {}),
         ...(input.status ? { status: input.status } : {}),
         ...(input.detail ? { detail: input.detail } : {}),
+        ...(input.errorCode ? { errorCode: input.errorCode } : {}),
       };
       // newest-first ordering keeps the UI render trivial (slice from top).
       const next = [entry, ...state.entries];
@@ -71,4 +79,20 @@ export const useAudit = create<AuditState>((set) => ({
 // a render selector (see React 19 selector stability rule).
 export function auditEntriesForRequest(state: { entries: AuditEntry[] }, requestId: string): AuditEntry[] {
   return state.entries.filter((e) => e.requestId === requestId);
+}
+
+
+// B11 — group denied attempts in the AuditTrail UI by error code. Returns
+// distinct error codes seen in the trail with their occurrence count, sorted
+// by count desc then code asc so the noisiest denial bubbles to the front of
+// the filter chip row.
+export function auditErrorCodeCounts(state: { entries: AuditEntry[] }): Array<{ code: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const e of state.entries) {
+    if (!e.errorCode) continue;
+    counts.set(e.errorCode, (counts.get(e.errorCode) ?? 0) + 1);
+  }
+  return Array.from(counts, ([code, count]) => ({ code, count })).sort(
+    (a, b) => b.count - a.count || a.code.localeCompare(b.code),
+  );
 }

@@ -31,10 +31,12 @@ function logBridgeAudit(
   summary: string,
   status: MutationStatus,
   detail?: string,
+  errorCode?: string,
 ): void {
   useAudit.getState().append({
     source: 'bridge', kind, requestId, summary, status,
     ...(detail ? { detail } : {}),
+    ...(errorCode ? { errorCode } : {}),
   });
 }
 
@@ -138,7 +140,7 @@ export function registerBridgeHandlers(transport: TransportHandle): () => void {
       const code = asString(p.error_code) ?? asString(p.errorCode);
       const message = code ? `Bridge apply failed [${code}]: ${reason}` : `Bridge apply failed: ${reason}`;
       useMutations.getState().setStatus(requestId, 'failed', message);
-      logBridgeAudit('bridge.mutation.failed', requestId, message, 'failed', reason);
+      logBridgeAudit('bridge.mutation.failed', requestId, message, 'failed', reason, code ?? undefined);
     }),
   );
   offs.push(
