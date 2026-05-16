@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import '@testing-library/jest-dom/vitest';
 import { useGates, type Gate, type GateId, type GateState } from '../../stores/gates';
 import { useRelease } from '../../stores/release';
+import { useMutations } from '../../stores/mutations';
 import { useSession } from '../../stores/session';
 import { useOverlays } from '../../stores/overlays';
 import type { TransportHandle } from '../../transport';
@@ -43,6 +44,7 @@ function reset() {
   useGates.getState().upsert(gate('DevComplete', 'pass'));
   useGates.getState().upsert(gate('ReadyToDeploy', 'pass'));
   useGates.getState().upsert(gate('ReadyToPublish', 'pass'));
+  useMutations.getState().clear();
   useSession.setState({ sessionId: 'sess_01' });
 }
 
@@ -131,5 +133,32 @@ describe('TargetCard', () => {
     fireEvent.click(gateButton);
     expect(useOverlays.getState().topmost()?.kind).toBe('gate_detail');
     expect(useOverlays.getState().topmost()?.params.gateId).toBe('ReadyToDeploy');
+  });
+
+  it('blocks Deploy and Publish when mutation audit is not clean (C1)', async () => {
+    const send = vi.fn(async () => ({ ackOf: 'x', ok: true }));
+    useMutations.getState().upsert({
+      requestId: 'mut_failed',
+      kind: 'bash',
+      summary: 'Agent attempted blocked command',
+      receivedAt: Date.now(),
+      status: 'failed',
+      sourceEventType: 'bridge.mutation.requested',
+    });
+    render(
+      <ul>
+        <TargetCard targetId="t_prod" transport={transportWith(send)} />
+      </ul>,
+    );
+    const deploy = screen.getByRole('button', { name: /^Deploy$/ });
+    const publish = screen.getByRole('button', { name: /^Publish$/ });
+    expect(deploy).toBeDisabled();
+    expect(publish).toBeDisabled();
+    const gateButton = screen.getByRole('button', { name: 'Open MutationAuditClean gate detail' });
+    expect(gateButton).toHaveAttribute('data-testid', 'release-blocked-gate-MutationAuditClean');
+    fireEvent.click(gateButton);
+    expect(useOverlays.getState().topmost()?.kind).toBe('gate_detail');
+    expect(useOverlays.getState().topmost()?.params.gateId).toBe('MutationAuditClean');
+    await waitFor(() => expect(send).not.toHaveBeenCalled());
   });
 });

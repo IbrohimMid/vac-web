@@ -2,9 +2,15 @@
 // so setTargets/upsertDeploy in the store flow through to the UI without prop drilling.
 // Keeps the affordance gating identical to the legacy ReleaseTab.
 
-import type { CSSProperties } from 'react';
-import { useGates, type GateId } from '../../stores/gates';
+import { useEffect, useMemo, type CSSProperties } from 'react';
+import { useGates, type Gate, type GateId } from '../../stores/gates';
 import { useRelease } from '../../stores/release';
+import {
+  mutationIntentList,
+  useMutations,
+  type MutationIntent,
+  type MutationStatus,
+} from '../../stores/mutations';
 import { useSession } from '../../stores/session';
 import { useOverlays } from '../../stores/overlays';
 import type { TransportHandle } from '../../transport';
@@ -83,19 +89,79 @@ const providerBadgeDryRun: CSSProperties = {
   color: 'var(--info, #3a8edb)',
 };
 
+const RELEASE_BLOCKING_MUTATION_STATUSES = new Set<MutationStatus>([
+  'pending',
+  'approved',
+  'applying',
+  'failed',
+]);
+
+function isReleaseBlockingMutation(intent: MutationIntent): boolean {
+  return RELEASE_BLOCKING_MUTATION_STATUSES.has(intent.status);
+}
+
+export function buildMutationAuditGate(intents: MutationIntent[], now = new Date().toISOString()): Gate {
+  const blockers = intents
+    .filter(isReleaseBlockingMutation)
+    .map((intent) => `${intent.requestId} · ${intent.status} · ${intent.summary}`);
+  const failedCount = intents.filter((intent) => intent.status === 'failed').length;
+  const unresolvedCount = blockers.length;
+  return {
+    id: 'MutationAuditClean',
+    state: unresolvedCount === 0 ? 'pass' : failedCount > 0 ? 'fail' : 'open',
+    summary:
+      unresolvedCount === 0
+        ? 'Mutation audit is clean.'
+        : `${unresolvedCount} mutation${unresolvedCount === 1 ? '' : 's'} must be resolved before release.`,
+    blockers,
+    criteria: [
+      {
+        id: 'no_unresolved_mutations',
+        label: 'No pending, applying, or failed bridge mutations remain',
+        satisfied: unresolvedCount === 0,
+      },
+    ],
+    signers: [],
+    required_signers: 0,
+    overridden: false,
+    last_changed_at: now,
+  };
+}
+
 export function TargetCard({ targetId, transport }: Props) {
   const target = useRelease((s) => s.targets.get(targetId));
   const gates = useGates((s) => s.gates);
+  const mutationIntentsById = useMutations((s) => s.intents);
+  const mutationOrder = useMutations((s) => s.order);
   const sessionId = useSession((s) => s.sessionId);
   const openOverlay = useOverlays((s) => s.open);
 
+  const mutationIntents = useMemo(
+    () => mutationIntentList({ intents: mutationIntentsById, order: mutationOrder }),
+    [mutationIntentsById, mutationOrder],
+  );
+  const mutationAuditGate = useMemo(
+    () => buildMutationAuditGate(mutationIntents),
+    [mutationIntents],
+  );
+  useEffect(() => {
+    useGates.getState().upsert(mutationAuditGate);
+  }, [mutationAuditGate]);
+  const effectiveGates = useMemo(() => {
+    const next = new Map(gates);
+    next.set('MutationAuditClean', mutationAuditGate);
+    return next;
+  }, [gates, mutationAuditGate]);
+
   if (!target) return null;
 
-  const required: GateId[] = ['DevComplete', 'ReadyToDeploy'];
+  const required: GateId[] = ['DevComplete', 'ReadyToDeploy', 'MutationAuditClean'];
   if (target.environment === 'staging') required.push('ReadyForStaging');
-  const missing = required.filter((id) => gates.get(id)?.state !== 'pass');
+  const missing = required.filter((id) => effectiveGates.get(id)?.state !== 'pass');
   const gateReady = missing.length === 0;
-  const publishOk = gates.get('ReadyToPublish')?.state === 'pass';
+  const publishOk =
+    effectiveGates.get('ReadyToPublish')?.state === 'pass' &&
+    effectiveGates.get('MutationAuditClean')?.state === 'pass';
 
   const deployDecision = affordanceFor('release.deploy.button', {
     commandStatus: toAffordanceStatus('release.deploy'),

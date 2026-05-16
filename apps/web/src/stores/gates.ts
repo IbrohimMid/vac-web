@@ -12,7 +12,8 @@ export type GateId =
   | 'QAComplete'
   | 'ReadyForStaging'
   | 'ReadyToPublish'
-  | 'ReadyForGrowth';
+  | 'ReadyForGrowth'
+  | 'MutationAuditClean';
 
 export const GATE_ORDER: GateId[] = [
   'DevComplete',
@@ -21,6 +22,7 @@ export const GATE_ORDER: GateId[] = [
   'ReadyToDeploy',
   'ReadyToPublish',
   'ReadyForGrowth',
+  'MutationAuditClean',
 ];
 export type GateState = 'open' | 'pass' | 'fail';
 
