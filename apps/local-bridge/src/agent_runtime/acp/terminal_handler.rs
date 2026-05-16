@@ -111,6 +111,31 @@ impl TerminalError {
             _ => json!({ "detail": self.to_string() }),
         }
     }
+
+    /// B9 — stable error code emitted on `bridge.mutation.failed` for ACP
+    /// `terminal/*` failures. `ProfileDenied` passes through the shell-
+    /// allowlist policy code (e.g. `shell.deny`, `shell.not_allowlisted`,
+    /// `shell.args_pattern_mismatch`); other variants get a stable
+    /// bridge-side classification so MutationInbox can render distinct
+    /// badges.
+    pub fn bridge_mutation_error_code(&self) -> String {
+        match self {
+            TerminalError::MissingParam(_) => "terminal.missing_param".into(),
+            TerminalError::ProfileDenied { code, .. } => code.clone(),
+            TerminalError::SpawnFailed(_) => "terminal.spawn_failed".into(),
+            TerminalError::AlreadyExited => "terminal.already_exited".into(),
+            TerminalError::Timeout => "terminal.timeout".into(),
+            TerminalError::NotFound(_) => "terminal.not_found".into(),
+            TerminalError::MethodNotFound(_) => "terminal.method_not_found".into(),
+        }
+    }
+
+    /// B9 — human-readable reason for `bridge.mutation.failed` payloads.
+    /// Wraps `Display` so MutationInbox + the audit log show the same
+    /// message the JSON-RPC error already carried.
+    pub fn bridge_mutation_reason(&self) -> String {
+        self.to_string()
+    }
 }
 
 pub async fn handle_terminal_create(

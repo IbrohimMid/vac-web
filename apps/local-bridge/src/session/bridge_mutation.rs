@@ -203,6 +203,183 @@ pub fn build_acp_fs_write_failure_events(
     }
 }
 
+/// B9 — paired `bridge.mutation.requested` + `bridge.mutation.applied`
+/// event for an ACP `terminal/create` that successfully spawned a child
+/// process under shell-allowlist policy. Mirrors
+/// [`AcpFsWriteMutationEvents`]: both events share a `request_id` and
+/// `kind: "bash"` so MutationInbox / AuditTrail reconcile the lifecycle
+/// in a single row.
+pub struct AcpTerminalCreateMutationEvents {
+    pub request_id: String,
+    pub kind: &'static str,
+    pub requested: ServerEvent,
+    pub applied: ServerEvent,
+}
+
+/// B9 — paired `bridge.mutation.requested` + `bridge.mutation.failed`
+/// event for an ACP `terminal/create` rejected by the shell allowlist,
+/// failed to spawn, or arrived with missing params. Lets MutationInbox
+/// render a denied-attempt card with the command, args, and reason
+/// instead of swallowing the JSON-RPC error.
+pub struct AcpTerminalCreateFailureEvents {
+    pub request_id: String,
+    pub kind: &'static str,
+    pub requested: ServerEvent,
+    pub failed: ServerEvent,
+}
+
+/// Build the requested + applied event pair for an agent-driven
+/// `terminal/create` that already spawned a child. The bash command
+/// runs under capability-profile policy, so emission mirrors the B6
+/// fs/write path: both events emit in the same instant because the
+/// agent both proposed and executed the spawn — there is no operator
+/// approval gap to model.
+pub fn build_acp_terminal_create_mutation_events(
+    command: &str,
+    args: &[String],
+    terminal_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    ts: &str,
+) -> AcpTerminalCreateMutationEvents {
+    let request_id = format!("mut-{}", Ulid::new());
+    let kind = "bash";
+    let command_line = render_command_line(command, args);
+    let summary = format!("Agent ran {command_line}");
+    let diff_preview = format!("(spawn) — agent ran {command_line}");
+
+    let requested_payload = json!({
+        "request_id": request_id,
+        "kind": kind,
+        "summary": summary,
+        "rationale": format!("ACP terminal/create from agent {agent_id}"),
+        "command": command,
+        "args": args,
+        "command_line": command_line,
+        "terminal_id": terminal_id,
+        "diff_preview": diff_preview,
+        "originating_session_id": session_id,
+        "originating_agent_id": agent_id,
+        "auto_applied": true,
+        "source": "acp.terminal.create",
+    });
+    let applied_payload = json!({
+        "request_id": request_id,
+        "kind": kind,
+        "command": command,
+        "args": args,
+        "command_line": command_line,
+        "terminal_id": terminal_id,
+        "applied_at": ts,
+        "originating_session_id": session_id,
+        "originating_agent_id": agent_id,
+        "source": "acp.terminal.create",
+    });
+
+    AcpTerminalCreateMutationEvents {
+        request_id: request_id.clone(),
+        kind,
+        requested: ServerEvent {
+            seq: 0,
+            session_id: session_id.to_string(),
+            event_type: "bridge.mutation.requested".into(),
+            payload: requested_payload,
+            v: 1,
+            ts: ts.to_string(),
+        },
+        applied: ServerEvent {
+            seq: 0,
+            session_id: session_id.to_string(),
+            event_type: "bridge.mutation.applied".into(),
+            payload: applied_payload,
+            v: 1,
+            ts: ts.to_string(),
+        },
+    }
+}
+
+/// Build the requested + failed event pair for a denied / errored ACP
+/// `terminal/create`. `error_code` is the bridge-side stable
+/// classification (e.g. `shell.deny`, `shell.not_allowlisted`,
+/// `terminal.spawn_failed`); `reason` is the human-readable display.
+pub fn build_acp_terminal_create_failure_events(
+    command: &str,
+    args: &[String],
+    error_code: &str,
+    reason: &str,
+    session_id: &str,
+    agent_id: &str,
+    ts: &str,
+) -> AcpTerminalCreateFailureEvents {
+    let request_id = format!("mut-{}", Ulid::new());
+    let kind = "bash";
+    let command_line = render_command_line(command, args);
+    let summary = format!("Agent attempted to run {command_line} (blocked)");
+    let diff_preview = format!(
+        "(blocked: {error_code}) — agent would have run {command_line}
+reason: {reason}"
+    );
+
+    let requested_payload = json!({
+        "request_id": request_id,
+        "kind": kind,
+        "summary": summary,
+        "rationale": format!(
+            "ACP terminal/create from agent {agent_id} (rejected before spawn)"
+        ),
+        "command": command,
+        "args": args,
+        "command_line": command_line,
+        "diff_preview": diff_preview,
+        "originating_session_id": session_id,
+        "originating_agent_id": agent_id,
+        "auto_applied": false,
+        "source": "acp.terminal.create",
+    });
+    let failed_payload = json!({
+        "request_id": request_id,
+        "kind": kind,
+        "error_code": error_code,
+        "reason": reason,
+        "message": reason,
+        "command": command,
+        "args": args,
+        "command_line": command_line,
+        "originating_session_id": session_id,
+        "originating_agent_id": agent_id,
+        "source": "acp.terminal.create",
+    });
+
+    AcpTerminalCreateFailureEvents {
+        request_id: request_id.clone(),
+        kind,
+        requested: ServerEvent {
+            seq: 0,
+            session_id: session_id.to_string(),
+            event_type: "bridge.mutation.requested".into(),
+            payload: requested_payload,
+            v: 1,
+            ts: ts.to_string(),
+        },
+        failed: ServerEvent {
+            seq: 0,
+            session_id: session_id.to_string(),
+            event_type: "bridge.mutation.failed".into(),
+            payload: failed_payload,
+            v: 1,
+            ts: ts.to_string(),
+        },
+    }
+}
+
+fn render_command_line(command: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{} {}", command, args.join(" "))
+    }
+}
+
 fn build_diff_preview(meta: &FsWriteMeta) -> String {
     let preview = match meta.old_content.as_deref() {
         Some(old) if old != meta.new_content => format!(
@@ -378,5 +555,103 @@ mod tests {
         assert_eq!(evt.requested.payload["target_path"], "outside/etc.txt");
         let preview = evt.requested.payload["diff_preview"].as_str().unwrap_or("");
         assert!(preview.contains("fs.out_of_root"));
+    }
+
+    #[test]
+    fn terminal_create_events_share_request_id_and_carry_command() {
+        let evt = build_acp_terminal_create_mutation_events(
+            "cargo",
+            &[
+                "test".to_string(),
+                "-p".to_string(),
+                "local-bridge".to_string(),
+            ],
+            "trm_01ABC",
+            "sess-1",
+            "claude-acp",
+            "2026-05-16T00:00:00Z",
+        );
+        assert!(evt.request_id.starts_with("mut-"));
+        assert_eq!(evt.kind, "bash");
+        assert_eq!(evt.requested.event_type, "bridge.mutation.requested");
+        assert_eq!(evt.applied.event_type, "bridge.mutation.applied");
+        assert_eq!(
+            evt.requested.payload["request_id"],
+            evt.applied.payload["request_id"]
+        );
+        assert_eq!(evt.requested.payload["command"], "cargo");
+        assert_eq!(evt.applied.payload["terminal_id"], "trm_01ABC");
+        assert_eq!(evt.requested.payload["auto_applied"], true);
+        assert_eq!(evt.requested.payload["source"], "acp.terminal.create");
+    }
+
+    #[test]
+    fn terminal_create_summary_contains_command_line() {
+        let evt = build_acp_terminal_create_mutation_events(
+            "echo",
+            &["hello".to_string()],
+            "trm_1",
+            "s",
+            "a",
+            "t",
+        );
+        let summary = evt.requested.payload["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("echo hello"), "got {summary:?}");
+        let cmdline = evt.applied.payload["command_line"].as_str().unwrap_or("");
+        assert_eq!(cmdline, "echo hello");
+    }
+
+    #[test]
+    fn terminal_create_with_no_args_still_renders() {
+        let evt = build_acp_terminal_create_mutation_events("uname", &[], "trm_z", "s", "a", "t");
+        assert_eq!(evt.applied.payload["command_line"], "uname");
+        let summary = evt.requested.payload["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("uname"));
+    }
+
+    #[test]
+    fn terminal_create_failure_events_share_request_id_and_carry_error_code() {
+        let evt = build_acp_terminal_create_failure_events(
+            "rm",
+            &["-rf".to_string(), "/".to_string()],
+            "shell.deny",
+            "denied: rm is not on shell allowlist",
+            "sess-1",
+            "claude-acp",
+            "2026-05-16T00:00:00Z",
+        );
+        assert!(evt.request_id.starts_with("mut-"));
+        assert_eq!(evt.kind, "bash");
+        assert_eq!(evt.requested.event_type, "bridge.mutation.requested");
+        assert_eq!(evt.failed.event_type, "bridge.mutation.failed");
+        assert_eq!(
+            evt.requested.payload["request_id"],
+            evt.failed.payload["request_id"]
+        );
+        assert_eq!(evt.failed.payload["error_code"], "shell.deny");
+        assert_eq!(evt.requested.payload["auto_applied"], false);
+    }
+
+    #[test]
+    fn terminal_create_failure_diff_preview_carries_command_and_error() {
+        let evt = build_acp_terminal_create_failure_events(
+            "curl",
+            &["http://evil.example".to_string()],
+            "shell.not_allowlisted",
+            "binary 'curl' not in allowlist",
+            "s",
+            "a",
+            "t",
+        );
+        let preview = evt.requested.payload["diff_preview"].as_str().unwrap_or("");
+        assert!(preview.contains("shell.not_allowlisted"), "got {preview:?}");
+        assert!(
+            preview.contains("curl http://evil.example"),
+            "got {preview:?}"
+        );
+        assert!(
+            preview.contains("binary 'curl' not in allowlist"),
+            "got {preview:?}"
+        );
     }
 }

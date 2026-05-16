@@ -2506,9 +2506,131 @@ impl SessionHandle {
                     let method = req.method.clone();
                     let params = req.params.clone();
                     let result = match method.as_str() {
-                        "terminal/create" => handle_terminal_create(&term_ctx, &req.params)
-                            .await
-                            .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
+                        "terminal/create" => {
+                            match handle_terminal_create(&term_ctx, &req.params).await {
+                                Ok(value) => {
+                                    // B9 — emit bridge.mutation.{requested,applied}
+                                    // for the agent-driven spawn so MutationInbox +
+                                    // AuditTrail see it alongside browser-initiated
+                                    // mutations. Shell-allowlist enforcement is
+                                    // upstream in handle_terminal_create; this pair
+                                    // models a one-shot lifecycle because the agent
+                                    // both proposed and executed under capability
+                                    // policy.
+                                    let terminal_id = value
+                                        .get("terminalId")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let command = req
+                                        .params
+                                        .get("command")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let args: Vec<String> = req
+                                        .params
+                                        .get("args")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let ts = chrono::Utc::now().to_rfc3339();
+                                    let mutation = crate::session::bridge_mutation::build_acp_terminal_create_mutation_events(
+                                    &command,
+                                    &args,
+                                    &terminal_id,
+                                    &term_handle.id,
+                                    &term_ctx.agent_id,
+                                    &ts,
+                                );
+                                    let mutation_request_id = mutation.request_id.clone();
+                                    let mutation_kind = mutation.kind;
+                                    emit_event(&term_handle, mutation.requested).await;
+                                    emit_event(&term_handle, mutation.applied).await;
+                                    if let Some(audit) = term_handle.audit.as_ref() {
+                                        audit.log(
+                                            &term_handle.id,
+                                            "bridge.mutation",
+                                            bridge_core::AuditSeverity::Info,
+                                            serde_json::json!({
+                                                "event": "applied",
+                                                "request_id": mutation_request_id,
+                                                "kind": mutation_kind,
+                                                "command": command,
+                                                "args": args,
+                                                "terminal_id": terminal_id,
+                                                "agent_id": term_ctx.agent_id,
+                                                "source": "acp.terminal.create",
+                                            }),
+                                        );
+                                    }
+                                    Ok(value)
+                                }
+                                Err(e) => {
+                                    // B9 — surface shell-allowlist denials / spawn
+                                    // errors / missing params as
+                                    // bridge.mutation.{requested,failed} so
+                                    // MutationInbox + AuditTrail render the denied
+                                    // attempt with its reason instead of silently
+                                    // swallowing it.
+                                    let command = req
+                                        .params
+                                        .get("command")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let args: Vec<String> = req
+                                        .params
+                                        .get("args")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let error_code = e.bridge_mutation_error_code();
+                                    let reason = e.bridge_mutation_reason();
+                                    let ts = chrono::Utc::now().to_rfc3339();
+                                    let failure = crate::session::bridge_mutation::build_acp_terminal_create_failure_events(
+                                    &command,
+                                    &args,
+                                    &error_code,
+                                    &reason,
+                                    &term_handle.id,
+                                    &term_ctx.agent_id,
+                                    &ts,
+                                );
+                                    let failure_request_id = failure.request_id.clone();
+                                    let failure_kind = failure.kind;
+                                    emit_event(&term_handle, failure.requested).await;
+                                    emit_event(&term_handle, failure.failed).await;
+                                    if let Some(audit) = term_handle.audit.as_ref() {
+                                        audit.log(
+                                            &term_handle.id,
+                                            "bridge.mutation",
+                                            bridge_core::AuditSeverity::Warn,
+                                            serde_json::json!({
+                                                "event": "failed",
+                                                "request_id": failure_request_id,
+                                                "kind": failure_kind,
+                                                "command": command,
+                                                "args": args,
+                                                "agent_id": term_ctx.agent_id,
+                                                "error_code": error_code,
+                                                "reason": reason,
+                                                "source": "acp.terminal.create",
+                                            }),
+                                        );
+                                    }
+                                    Err((e.jsonrpc_code(), e.to_string(), e.jsonrpc_data()))
+                                }
+                            }
+                        }
                         "terminal/output" => handle_terminal_output(&term_ctx, &req.params)
                             .await
                             .map_err(|e| (e.jsonrpc_code(), e.to_string(), e.jsonrpc_data())),
