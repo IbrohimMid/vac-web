@@ -41,6 +41,11 @@ const blockedStyle: CSSProperties = {
   gap: 4,
   flexWrap: 'wrap',
 };
+const mutationCountChipStyle: CSSProperties = {
+  fontSize: 11,
+  opacity: 0.75,
+  marginLeft: 2,
+};
 const gateLinkStyle: CSSProperties = {
   appearance: 'none',
   border: 0,
@@ -142,6 +147,10 @@ export function TargetCard({ targetId, transport }: Props) {
   );
   const mutationAuditGate = useMemo(
     () => buildMutationAuditGate(mutationIntents),
+    [mutationIntents],
+  );
+  const mutationBlockingCount = useMemo(
+    () => mutationIntents.filter(isReleaseBlockingMutation).length,
     [mutationIntents],
   );
   useEffect(() => {
@@ -302,6 +311,15 @@ export function TargetCard({ targetId, transport }: Props) {
               >
                 {gateId}
               </button>
+              {gateId === 'MutationAuditClean' && mutationBlockingCount > 0 && (
+                <span
+                  style={mutationCountChipStyle}
+                  data-testid="release-blocked-gate-MutationAuditClean-count"
+                >
+                  {' '}
+                  ({mutationBlockingCount} mutation{mutationBlockingCount === 1 ? '' : 's'})
+                </span>
+              )}
             </span>
           ))}
         </div>

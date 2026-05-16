@@ -3,8 +3,15 @@
 // unchanged from Phase 6: ReadyToDeploy still requires two signers; bridge
 // commands `gate.signoff` / `gate.override` still dispatched on submit.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useGates, type GateId } from '../../stores/gates';
+import {
+  mutationIntentList,
+  useMutations,
+  type MutationIntent,
+  type MutationStatus,
+} from '../../stores/mutations';
+import { useCockpit } from '../../stores/cockpit';
 import { useSession } from '../../stores/session';
 import type { OverlayRenderProps } from '../../overlays/registry';
 import type { TransportHandle } from '../../transport';
@@ -13,11 +20,93 @@ import {
   toAffordanceStatus,
 } from '../../domain/capabilities/affordanceCatalog';
 
+const MUTATION_AUDIT_BLOCKING_STATUSES = new Set<MutationStatus>([
+  'pending',
+  'approved',
+  'applying',
+  'failed',
+]);
+
+function statusBadgeClass(status: MutationStatus): string {
+  if (status === 'failed') return 'badge crit';
+  if (status === 'applying' || status === 'approved') return 'badge warn';
+  return 'badge';
+}
+
+function statusLabel(status: MutationStatus): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+interface MutationAuditBlockersProps {
+  blocking: MutationIntent[];
+  onOpenInbox: () => void;
+}
+
+function MutationAuditBlockers({
+  blocking,
+  onOpenInbox,
+}: MutationAuditBlockersProps) {
+  if (blocking.length === 0) return null;
+  const failedCount = blocking.filter((m) => m.status === 'failed').length;
+  return (
+    <section data-testid="mutation-audit-blockers" style={mutationSectionStyle}>
+      <strong style={sectionTitle}>Mutasi yang menahan rilis</strong>
+      <p
+        className="muted"
+        style={mutationLeadStyle}
+        data-testid="mutation-audit-lead"
+      >
+        Rilis dipause sampai {blocking.length} mutasi
+        {failedCount > 0 ? ` (${failedCount} gagal)` : ''} diselesaikan di Mutation Inbox.
+      </p>
+      <ul style={listStyle} data-testid="mutation-audit-list">
+        {blocking.map((m) => (
+          <li
+            key={m.requestId}
+            data-testid="mutation-audit-blocker-row"
+            data-request-id={m.requestId}
+            data-status={m.status}
+            style={mutationRowStyle}
+          >
+            <span className={statusBadgeClass(m.status)} style={mutationBadgeStyle}>
+              {statusLabel(m.status)}
+            </span>
+            <span style={mutationKindStyle}>{m.kind}</span>
+            <span className="mono" style={mutationIdStyle}>
+              {m.requestId}
+            </span>
+            <span style={mutationSummaryStyle}>{m.summary}</span>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        className="btn"
+        onClick={onOpenInbox}
+        data-testid="mutation-audit-open-inbox"
+        style={mutationOpenInboxStyle}
+      >
+        Buka Mutation Inbox
+      </button>
+    </section>
+  );
+}
+
 export function GateDetail({ params, dismiss }: OverlayRenderProps) {
   const gateId = typeof params.gateId === 'string' ? (params.gateId as GateId) : null;
   const transport = (params.transport as TransportHandle | undefined) ?? null;
   const sessionId = useSession((s) => s.sessionId);
   const gate = useGates((s) => (gateId ? s.gates.get(gateId) : undefined));
+  const mutationIntentsById = useMutations((s) => s.intents);
+  const mutationOrder = useMutations((s) => s.order);
+  const setRoute = useCockpit((s) => s.setRoute);
+  const blockingMutations = useMemo(
+    () =>
+      mutationIntentList({ intents: mutationIntentsById, order: mutationOrder }).filter(
+        (m) => MUTATION_AUDIT_BLOCKING_STATUSES.has(m.status),
+      ),
+    [mutationIntentsById, mutationOrder],
+  );
   const [overrideReason, setOverrideReason] = useState('');
   const [signerName, setSignerName] = useState('');
 
@@ -129,7 +218,17 @@ export function GateDetail({ params, dismiss }: OverlayRenderProps) {
           </section>
         )}
 
-        {gate.blockers.length > 0 && (
+        {gateId === 'MutationAuditClean' && (
+          <MutationAuditBlockers
+            blocking={blockingMutations}
+            onOpenInbox={() => {
+              setRoute('code');
+              dismiss();
+            }}
+          />
+        )}
+
+        {gateId !== 'MutationAuditClean' && gate.blockers.length > 0 && (
           <section style={{ marginBottom: 14 }}>
             <strong style={sectionTitle}>Blockers</strong>
             <ul style={listStyle}>
@@ -298,6 +397,56 @@ const listStyle: React.CSSProperties = {
   listStyle: 'none',
   padding: 0,
   margin: 0,
+};
+
+const mutationSectionStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  paddingTop: 12,
+  borderTop: '1px solid var(--line)',
+  marginTop: 8,
+};
+
+const mutationLeadStyle: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.5,
+  margin: 0,
+};
+
+const mutationRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '4px 0',
+  flexWrap: 'wrap',
+  fontSize: 12,
+};
+
+const mutationBadgeStyle: React.CSSProperties = {
+  fontSize: 10.5,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+};
+
+const mutationKindStyle: React.CSSProperties = {
+  fontSize: 11,
+  opacity: 0.7,
+  textTransform: 'lowercase',
+};
+
+const mutationIdStyle: React.CSSProperties = {
+  fontSize: 11,
+  opacity: 0.85,
+};
+
+const mutationSummaryStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 160,
+};
+
+const mutationOpenInboxStyle: React.CSSProperties = {
+  alignSelf: 'flex-start',
 };
 
 const inputStyle: React.CSSProperties = {

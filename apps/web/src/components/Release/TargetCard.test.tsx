@@ -135,6 +135,32 @@ describe('TargetCard', () => {
     expect(useOverlays.getState().topmost()?.params.gateId).toBe('ReadyToDeploy');
   });
 
+  it('renders mutation count chip when MutationAuditClean blocks release (C2)', async () => {
+    useMutations.getState().upsert({
+      requestId: 'mut_pending_a',
+      kind: 'edit',
+      summary: 'Edit foo.ts',
+      receivedAt: Date.now(),
+      status: 'pending',
+      sourceEventType: 'bridge.mutation.requested',
+    });
+    useMutations.getState().upsert({
+      requestId: 'mut_failed_b',
+      kind: 'bash',
+      summary: 'Blocked bash',
+      receivedAt: Date.now(),
+      status: 'failed',
+      sourceEventType: 'bridge.mutation.requested',
+    });
+    render(
+      <ul>
+        <TargetCard targetId="t_prod" transport={transportWith(vi.fn(async () => ({ ackOf: 'x', ok: true })))} />
+      </ul>,
+    );
+    const chip = screen.getByTestId('release-blocked-gate-MutationAuditClean-count');
+    expect(chip).toHaveTextContent('(2 mutations)');
+  });
+
   it('blocks Deploy and Publish when mutation audit is not clean (C1)', async () => {
     const send = vi.fn(async () => ({ ackOf: 'x', ok: true }));
     useMutations.getState().upsert({
