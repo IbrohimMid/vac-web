@@ -20,6 +20,7 @@ pub const KNOWN_GATES: &[&str] = &[
     "ReadyToDeploy",
     "ReadyToPublish",
     "ReadyForGrowth",
+    "MutationAuditClean",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,8 +125,8 @@ pub fn build_session_gate_state(
 
 pub fn required_gate_ids_for_environment(environment: &str) -> Vec<&'static str> {
     match environment {
-        "staging" => vec!["DevComplete", "ReadyToDeploy", "ReadyForStaging"],
-        _ => vec!["DevComplete", "ReadyToDeploy"],
+        "staging" => vec!["DevComplete", "ReadyToDeploy", "ReadyForStaging", "MutationAuditClean"],
+        _ => vec!["DevComplete", "ReadyToDeploy", "MutationAuditClean"],
     }
 }
 
@@ -172,6 +173,27 @@ fn override_is_expired(snapshot: &GateSnapshot) -> bool {
 }
 
 fn default_gate_snapshot(gate_id: &str) -> GateSnapshot {
+    // C3 — MutationAuditClean is driven externally via gate.sync_mutation_audit.
+    // Starts "pass" (no pending mutations at init) with no sign-off requirement.
+    if gate_id == "MutationAuditClean" {
+        return GateSnapshot {
+            id: gate_id.to_string(),
+            state: "pass".into(),
+            summary: "No blocking mutations".into(),
+            blockers: Vec::new(),
+            criteria: vec![GateCriterion {
+                id: "no_blocking_mutations".into(),
+                label: "No blocking mutations".into(),
+                satisfied: true,
+            }],
+            signers: Vec::new(),
+            required_signers: 0,
+            overridden: false,
+            last_changed_at: now_iso(),
+            override_reason: None,
+            override_expires_at: None,
+        };
+    }
     let required_signers = if gate_id == "ReadyToDeploy" || gate_id == "ReadyToPublish" {
         2
     } else {
@@ -311,6 +333,12 @@ fn parse_expiry(raw: Option<&str>) -> Result<String, &'static str> {
 }
 
 fn touch_gate(snapshot: &mut GateSnapshot) {
+    // C3 — MutationAuditClean state is managed via gate.sync_mutation_audit;
+    // skip sign-off recompute so externally-synced state is not clobbered.
+    if snapshot.id == "MutationAuditClean" {
+        snapshot.last_changed_at = now_iso();
+        return;
+    }
     if let Some(expiry) = snapshot.override_expires_at.as_deref() {
         if let Ok(expiry_dt) = DateTime::parse_from_rfc3339(expiry) {
             if expiry_dt.with_timezone(&Utc) <= Utc::now() {
@@ -707,6 +735,77 @@ pub fn emit_gate_snapshot(handle: &SessionHandleRef, snapshot: GateSnapshot) {
     });
 }
 
+/// C3 — sync `MutationAuditClean` gate state from the frontend's current
+/// blocking mutation count. The cockpit calls this whenever the count changes
+/// so the backend gate reflects real-time mutation-inbox state and can block
+/// `release.deploy` accordingly.
+pub async fn handle_sync_mutation_audit(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let Some(handle) = state.sessions.get(&cmd.session_id) else {
+        return error_ack(
+            cmd,
+            "session.not_found",
+            format!("session {} not found", cmd.session_id),
+        );
+    };
+    let blocking_count = cmd
+        .payload
+        .get("blocking_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let snapshot = {
+        let mut guard = match handle.gate_state.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                return error_ack(cmd, "persistence.write_failed", "gate state lock poisoned");
+            }
+        };
+        let mut snap = guard
+            .get("MutationAuditClean")
+            .unwrap_or_else(|| default_gate_snapshot("MutationAuditClean"));
+        if blocking_count == 0 {
+            snap.state = "pass".into();
+            snap.summary = "No blocking mutations".into();
+            snap.blockers = Vec::new();
+            snap.criteria = vec![GateCriterion {
+                id: "no_blocking_mutations".into(),
+                label: "No blocking mutations".into(),
+                satisfied: true,
+            }];
+        } else {
+            snap.state = "open".into();
+            let s = if blocking_count == 1 { "" } else { "s" };
+            snap.summary = format!("{blocking_count} blocking mutation{s} pending review");
+            snap.blockers =
+                vec![format!("Awaiting review of {blocking_count} blocking mutation{s}")];
+            snap.criteria = vec![GateCriterion {
+                id: "no_blocking_mutations".into(),
+                label: "No blocking mutations".into(),
+                satisfied: false,
+            }];
+        }
+        snap.last_changed_at = now_iso();
+        guard.upsert(snap.clone());
+        snap
+    };
+    log_tool_event(
+        state,
+        &cmd.session_id,
+        "gate",
+        json!({
+            "command": "gate.sync_mutation_audit",
+            "blocking_count": blocking_count,
+            "new_state": snapshot.state,
+            "decision": "allow",
+        }),
+    );
+    let event = gate_snapshot_event(handle.id.clone(), &snapshot);
+    emit_session_event(&handle, event).await;
+    ok_ack(cmd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,10 +824,73 @@ mod tests {
         deploy.override_reason = Some("temporary exception".into());
         deploy.override_expires_at = Some((Utc::now() - Duration::days(1)).to_rfc3339());
         state.upsert(deploy);
+        // C3: MutationAuditClean is now required for prod; seed it as pass so
+        // only the expired-override ReadyToDeploy appears as missing.
+        let mac = default_gate_snapshot("MutationAuditClean");
+        state.upsert(mac);
 
         let (ready, missing) = state.ready_for_target("prod");
 
         assert!(!ready);
         assert_eq!(missing, vec!["ReadyToDeploy".to_string()]);
+    }
+
+    #[test]
+    fn default_mutation_audit_gate_starts_pass() {
+        let snap = default_gate_snapshot("MutationAuditClean");
+        assert_eq!(snap.state, "pass");
+        assert_eq!(snap.required_signers, 0);
+        assert!(snap.blockers.is_empty());
+        assert_eq!(snap.criteria.len(), 1);
+        assert!(snap.criteria[0].satisfied);
+    }
+
+    #[test]
+    fn mutation_audit_clean_required_for_prod() {
+        let required = required_gate_ids_for_environment("prod");
+        assert!(
+            required.contains(&"MutationAuditClean"),
+            "MutationAuditClean must be required for prod"
+        );
+    }
+
+    #[test]
+    fn mutation_audit_clean_required_for_staging() {
+        let required = required_gate_ids_for_environment("staging");
+        assert!(
+            required.contains(&"MutationAuditClean"),
+            "MutationAuditClean must be required for staging"
+        );
+    }
+
+    #[test]
+    fn touch_gate_skips_mutation_audit_clean() {
+        let mut snap = default_gate_snapshot("MutationAuditClean");
+        snap.state = "pass".into();
+        touch_gate(&mut snap);
+        // sign-off logic must not overwrite externally-controlled state
+        assert_eq!(snap.state, "pass");
+    }
+
+    #[test]
+    fn sync_mutation_audit_gate_state_tracks_blocking_count() {
+        let mut state = SessionGateState::default();
+        state.upsert(default_gate_snapshot("MutationAuditClean"));
+
+        // 0 blockers -> pass
+        let mut snap = state.get("MutationAuditClean").unwrap();
+        snap.state = "pass".into();
+        snap.blockers = Vec::new();
+        state.upsert(snap);
+        assert_eq!(state.get("MutationAuditClean").unwrap().state, "pass");
+
+        // 2 blockers -> open
+        let mut snap2 = state.get("MutationAuditClean").unwrap();
+        snap2.state = "open".into();
+        snap2.blockers = vec!["Awaiting review of 2 blocking mutations".into()];
+        state.upsert(snap2);
+        let g = state.get("MutationAuditClean").unwrap();
+        assert_eq!(g.state, "open");
+        assert!(!g.blockers.is_empty());
     }
 }

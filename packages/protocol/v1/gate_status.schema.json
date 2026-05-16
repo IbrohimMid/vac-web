@@ -8,7 +8,7 @@
   "properties": {
     "gate": {
       "type": "string",
-      "enum": ["DevComplete", "QAComplete", "ReadyForStaging", "ReadyToDeploy", "ReadyToPublish", "ReadyForGrowth"]
+      "enum": ["DevComplete", "QAComplete", "ReadyForStaging", "ReadyToDeploy", "ReadyToPublish", "ReadyForGrowth", "MutationAuditClean"]
     },
     "project_root": { "type": "string" },
     "branch": { "type": ["string", "null"] },

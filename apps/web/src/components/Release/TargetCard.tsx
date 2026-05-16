@@ -156,6 +156,12 @@ export function TargetCard({ targetId, transport }: Props) {
   useEffect(() => {
     useGates.getState().upsert(mutationAuditGate);
   }, [mutationAuditGate]);
+
+  // C3 — keep backend MutationAuditClean gate in sync with blocking mutation count.
+  useEffect(() => {
+    if (!sessionId || !transport) return;
+    transport.send(sessionId, 'gate.sync_mutation_audit', { blocking_count: mutationBlockingCount });
+  }, [sessionId, transport, mutationBlockingCount]);
   const effectiveGates = useMemo(() => {
     const next = new Map(gates);
     next.set('MutationAuditClean', mutationAuditGate);

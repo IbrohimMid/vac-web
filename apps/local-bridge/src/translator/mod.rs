@@ -261,6 +261,7 @@ pub async fn dispatch_command(
         }
         "gate.evaluate" => crate::gate::handle_evaluate(&cmd, &state).await,
         "gate.signoff" => crate::gate::handle_signoff(&cmd, &state, principal.clone()).await,
+        "gate.sync_mutation_audit" => crate::gate::handle_sync_mutation_audit(&cmd, &state).await,
         "gate.override" => crate::gate::handle_override(&cmd, &state, principal.clone()).await,
         "gate.revoke_override" => {
             crate::gate::handle_revoke_override(&cmd, &state, principal.clone()).await

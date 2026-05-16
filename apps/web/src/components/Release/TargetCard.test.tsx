@@ -95,7 +95,13 @@ describe('TargetCard', () => {
     expect(publish.getAttribute('data-affordance-id')).toBe('release.publish.button');
     expect(publish.getAttribute('title') ?? '').toMatch(/gate/i);
     fireEvent.click(publish);
-    await waitFor(() => expect(send).not.toHaveBeenCalled());
+    // C3: gate.sync_mutation_audit fires on mount as a background sync;
+    // assert no user-action commands (non-sync) were dispatched.
+    await waitFor(() =>
+      expect(
+        send.mock.calls.filter((call) => (call as unknown[])[1] !== 'gate.sync_mutation_audit'),
+      ).toHaveLength(0),
+    );
     expect(
       screen.getByText(/Publish: Release publish gate is not ready\./),
     ).toHaveAttribute('tabindex', '0');
@@ -185,6 +191,12 @@ describe('TargetCard', () => {
     fireEvent.click(gateButton);
     expect(useOverlays.getState().topmost()?.kind).toBe('gate_detail');
     expect(useOverlays.getState().topmost()?.params.gateId).toBe('MutationAuditClean');
-    await waitFor(() => expect(send).not.toHaveBeenCalled());
+    // C3: gate.sync_mutation_audit fires on mount as a background sync;
+    // assert no user-action commands (non-sync) were dispatched.
+    await waitFor(() =>
+      expect(
+        send.mock.calls.filter((call) => (call as unknown[])[1] !== 'gate.sync_mutation_audit'),
+      ).toHaveLength(0),
+    );
   });
 });
