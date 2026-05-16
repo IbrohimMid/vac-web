@@ -5213,7 +5213,7 @@ fn mutation_apply_to_project(
             std::fs::remove_file(&path).map_err(|e| (e.to_string(), "mutation.fs_failed"))?;
             Ok(Some(path))
         }
-        "rename" | "bash" | "unknown" | _ => Err((
+        _ => Err((
             format!("mutation kind `{kind}` is not supported by bridge approval"),
             "mutation.kind_unsupported",
         )),

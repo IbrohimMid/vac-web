@@ -66,9 +66,32 @@ impl FsError {
             _ => json!({ "detail": self.to_string() }),
         }
     }
+
+    /// B8 — stable error code emitted on `bridge.mutation.failed`
+    /// when an ACP `fs/write_text_file` is rejected before it
+    /// touches disk. For `ProfileDenied` this is the upstream
+    /// profile gate code (e.g. `fs.tool_denied`, `fs.deny_glob`);
+    /// for the other variants this is a deterministic short
+    /// string the FE can branch on.
+    pub fn bridge_mutation_error_code(&self) -> String {
+        match self {
+            FsError::ProfileDenied { code, .. } => code.clone(),
+            FsError::SizeExceeded { .. } => "fs.size_exceeded".into(),
+            FsError::IoError(_) => "fs.io_error".into(),
+            FsError::MissingParam(_) => "fs.missing_param".into(),
+            FsError::NotUtf8 => "fs.not_utf8".into(),
+            FsError::MethodNotFound(_) => "fs.method_not_found".into(),
+        }
+    }
+
+    /// B8 — human-readable reason for `bridge.mutation.failed`
+    /// payloads. Same string as the `Display` impl.
+    pub fn bridge_mutation_reason(&self) -> String {
+        self.to_string()
+    }
 }
 
-fn resolve_path(raw: &str, project_root: &Path) -> PathBuf {
+pub fn resolve_path(raw: &str, project_root: &Path) -> PathBuf {
     let p = Path::new(raw);
     if p.is_absolute() {
         p.to_path_buf()

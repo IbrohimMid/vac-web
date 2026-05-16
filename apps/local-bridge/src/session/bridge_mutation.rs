@@ -105,6 +105,104 @@ pub fn build_acp_fs_write_mutation_events(
     }
 }
 
+/// B8 — paired `bridge.mutation.requested` + `bridge.mutation.failed`
+/// event for an ACP `fs/write_text_file` that did NOT land on disk
+/// because the capability profile denied it (tool_denied, deny_glob,
+/// out_of_root), the request exceeded `max_bytes_per_write`, or the
+/// io path errored. The two events share a `request_id` so the inbox
+/// renders a single row that transitions pending → failed in one
+/// tick — the operator sees the denied attempt with its reason
+/// instead of a silent JSON-RPC error.
+pub struct AcpFsWriteFailureEvents {
+    pub request_id: String,
+    pub kind: &'static str,
+    pub requested: ServerEvent,
+    pub failed: ServerEvent,
+}
+
+/// Build the requested + failed event pair for a denied / errored
+/// ACP `fs/write_text_file`.
+///
+/// - `path` / `new_content` come straight from `req.params`.
+/// - `old_content_existed` distinguishes intended `edit` (file was
+///   already on disk) from intended `write` (new file). Same
+///   semantics as [`classify_fs_write_kind`], but driven by an
+///   out-of-band probe in the caller because the failure path
+///   never produces an [`FsWriteMeta`].
+/// - `error_code` is a stable bridge-side classification (e.g.
+///   `fs.tool_denied`, `fs.deny_glob`, `fs.size_exceeded`,
+///   `fs.io_error`); `reason` is the human-readable display.
+pub fn build_acp_fs_write_failure_events(
+    path: &str,
+    new_content: &str,
+    old_content_existed: bool,
+    error_code: &str,
+    reason: &str,
+    session_id: &str,
+    agent_id: &str,
+    ts: &str,
+) -> AcpFsWriteFailureEvents {
+    let request_id = format!("mut-{}", Ulid::new());
+    let kind: &'static str = if old_content_existed { "edit" } else { "write" };
+    let summary = match kind {
+        "edit" => format!("Agent attempted to edit {} (blocked)", path),
+        _ => format!("Agent attempted to write {} (blocked)", path),
+    };
+    let diff_preview =
+        format!("(blocked: {error_code}) — agent would have {kind} {path}\nreason: {reason}");
+
+    let requested_payload = json!({
+        "request_id": request_id,
+        "kind": kind,
+        "summary": summary,
+        "rationale": format!(
+            "ACP fs/write_text_file from agent {agent_id} (rejected before disk)"
+        ),
+        "target_path": path,
+        "path": path,
+        "file_path": path,
+        "diff_preview": diff_preview,
+        "new_text": new_content,
+        "originating_session_id": session_id,
+        "originating_agent_id": agent_id,
+        "auto_applied": false,
+        "source": "acp.fs.write_text_file",
+    });
+    let failed_payload = json!({
+        "request_id": request_id,
+        "kind": kind,
+        "error_code": error_code,
+        "reason": reason,
+        "message": reason,
+        "path": path,
+        "applied_path": path,
+        "originating_session_id": session_id,
+        "originating_agent_id": agent_id,
+        "source": "acp.fs.write_text_file",
+    });
+
+    AcpFsWriteFailureEvents {
+        request_id: request_id.clone(),
+        kind,
+        requested: ServerEvent {
+            seq: 0,
+            session_id: session_id.to_string(),
+            event_type: "bridge.mutation.requested".into(),
+            payload: requested_payload,
+            v: 1,
+            ts: ts.to_string(),
+        },
+        failed: ServerEvent {
+            seq: 0,
+            session_id: session_id.to_string(),
+            event_type: "bridge.mutation.failed".into(),
+            payload: failed_payload,
+            v: 1,
+            ts: ts.to_string(),
+        },
+    }
+}
+
 fn build_diff_preview(meta: &FsWriteMeta) -> String {
     let preview = match meta.old_content.as_deref() {
         Some(old) if old != meta.new_content => format!(
@@ -198,5 +296,87 @@ mod tests {
         let meta = meta_for("big.txt", Some(&huge_old), &huge_new);
         let preview = build_diff_preview(&meta);
         assert!(preview.len() <= DIFF_PREVIEW_MAX_BYTES + 32);
+    }
+
+    #[test]
+    fn failure_events_share_request_id_and_carry_error_code() {
+        let evt = build_acp_fs_write_failure_events(
+            "secrets/key.txt",
+            "AKIA...",
+            false,
+            "fs.deny_glob",
+            "denied: matches deny_glob '**/secrets/**'",
+            "sess-1",
+            "claude-acp",
+            "2026-05-16T00:00:00Z",
+        );
+        assert!(evt.request_id.starts_with("mut-"));
+        assert_eq!(evt.requested.event_type, "bridge.mutation.requested");
+        assert_eq!(evt.failed.event_type, "bridge.mutation.failed");
+        assert_eq!(
+            evt.requested.payload["request_id"],
+            evt.failed.payload["request_id"]
+        );
+        assert_eq!(evt.failed.payload["error_code"], "fs.deny_glob");
+        assert_eq!(evt.requested.payload["auto_applied"], false);
+    }
+
+    #[test]
+    fn failure_kind_is_edit_when_old_existed() {
+        let evt = build_acp_fs_write_failure_events(
+            "src/lib.rs",
+            "new",
+            true,
+            "fs.tool_denied",
+            "blocked",
+            "s",
+            "a",
+            "t",
+        );
+        assert_eq!(evt.kind, "edit");
+        assert_eq!(evt.requested.payload["kind"], "edit");
+        assert!(evt.requested.payload["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("edit"));
+    }
+
+    #[test]
+    fn failure_kind_is_write_when_new_file() {
+        let evt = build_acp_fs_write_failure_events(
+            "brand.txt",
+            "hi",
+            false,
+            "fs.size_exceeded",
+            "too big",
+            "s",
+            "a",
+            "t",
+        );
+        assert_eq!(evt.kind, "write");
+        assert_eq!(evt.requested.payload["kind"], "write");
+        assert!(evt.requested.payload["summary"]
+            .as_str()
+            .unwrap_or("")
+            .contains("write"));
+    }
+
+    #[test]
+    fn failure_payload_carries_reason_and_path() {
+        let evt = build_acp_fs_write_failure_events(
+            "outside/etc.txt",
+            "x",
+            false,
+            "fs.out_of_root",
+            "path escapes project_root",
+            "s",
+            "a",
+            "t",
+        );
+        assert_eq!(evt.failed.payload["reason"], "path escapes project_root");
+        assert_eq!(evt.failed.payload["path"], "outside/etc.txt");
+        assert_eq!(evt.requested.payload["target_path"], "outside/etc.txt");
+        let preview = evt.requested.payload["diff_preview"].as_str().unwrap_or("");
+        assert!(preview.contains("fs.out_of_root"));
     }
 }

@@ -2408,6 +2408,65 @@ impl SessionHandle {
                                 }
                             }
                             Err(e) => {
+                                // B8 — surface profile denials / io errors / oversize as
+                                // bridge.mutation.{requested,failed} so MutationInbox +
+                                // AuditTrail render the denied attempt with its reason
+                                // instead of silently swallowing it. Skipped when
+                                // req.params lacks `path`/`content` (agents shouldn't
+                                // reach this branch in practice; we still return the
+                                // JSON-RPC error to them either way).
+                                let path_opt = req
+                                    .params
+                                    .get("path")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                let content_opt = req
+                                    .params
+                                    .get("content")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                if let (Some(path), Some(content)) = (path_opt, content_opt) {
+                                    let error_code = e.bridge_mutation_error_code();
+                                    let reason = e.bridge_mutation_reason();
+                                    let resolved =
+                                        crate::agent_runtime::acp::fs_handler::resolve_path(
+                                            &path,
+                                            &fs_ctx.project_root,
+                                        );
+                                    let old_existed = tokio::fs::metadata(&resolved).await.is_ok();
+                                    let ts = chrono::Utc::now().to_rfc3339();
+                                    let failure = crate::session::bridge_mutation::build_acp_fs_write_failure_events(
+                                        &path,
+                                        &content,
+                                        old_existed,
+                                        &error_code,
+                                        &reason,
+                                        &fs_handle.id,
+                                        &fs_ctx.agent_id,
+                                        &ts,
+                                    );
+                                    let failure_request_id = failure.request_id.clone();
+                                    let failure_kind = failure.kind;
+                                    emit_event(&fs_handle, failure.requested).await;
+                                    emit_event(&fs_handle, failure.failed).await;
+                                    if let Some(audit) = fs_handle.audit.as_ref() {
+                                        audit.log(
+                                            &fs_handle.id,
+                                            "bridge.mutation",
+                                            bridge_core::AuditSeverity::Warn,
+                                            serde_json::json!({
+                                                "event": "failed",
+                                                "request_id": failure_request_id,
+                                                "kind": failure_kind,
+                                                "path": path,
+                                                "agent_id": fs_ctx.agent_id,
+                                                "error_code": error_code,
+                                                "reason": reason,
+                                                "source": "acp.fs.write_text_file",
+                                            }),
+                                        );
+                                    }
+                                }
                                 let _ = fs_acp.client.respond_error(
                                     req.id,
                                     e.jsonrpc_code(),
