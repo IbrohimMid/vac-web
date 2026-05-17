@@ -53,6 +53,10 @@ export async function createRelayTransport(p: RelayParams): Promise<TransportHan
 
   const ws = new BridgeWs({
     url: buildRelayUrl(p),
+    // Relay forwards opaque `{header, payload}` wire frames; the bridge
+    // `hello` handshake (and its localStorage-backed bearer token) must
+    // never traverse the relay WAN socket. See finding S10-F01.
+    disableHelloAuth: true,
     onMessage: (raw: InboundFrame) => {
       // Relay wraps inner frames; unwrap here before dispatching to handlers.
       const wire = raw as unknown as WireFrame;

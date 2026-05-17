@@ -123,6 +123,11 @@ export interface BridgeWsOptions {
   onClose?: (code: number, reason: string) => void;
   onMessage?: EventHandler;
   onError?: (e: unknown) => void;
+  /// When true, suppress the local-bridge `hello` handshake (and the
+  /// localStorage-backed `access_token` it carries). Required for the
+  /// relay socket: relay is blind to bridge protocol and the bridge
+  /// bearer token must never traverse the WAN. See finding S10-F01.
+  disableHelloAuth?: boolean;
 }
 
 export class BridgeWs {
@@ -143,10 +148,12 @@ export class BridgeWs {
 
       ws.onopen = () => {
         this.reconnectAttempts = 0;
-        const hello: Record<string, unknown> = { type: 'hello', protocol_version: 1 };
-        const token = getAccessToken();
-        if (token) hello.auth = { access_token: token };
-        ws.send(JSON.stringify(hello));
+        if (!this.opts.disableHelloAuth) {
+          const hello: Record<string, unknown> = { type: 'hello', protocol_version: 1 };
+          const token = getAccessToken();
+          if (token) hello.auth = { access_token: token };
+          ws.send(JSON.stringify(hello));
+        }
         this.opts.onOpen?.();
         resolve();
       };
@@ -161,6 +168,7 @@ export class BridgeWs {
             // HMR preserves React state across bridge restarts.
             const f = parsed as Record<string, unknown>;
             if (
+              !this.opts.disableHelloAuth &&
               'ackOf' in f &&
               f.ok === false &&
               typeof f.error === 'object' &&

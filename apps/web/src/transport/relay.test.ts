@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRelayUrl } from './relay';
+import { buildRelayUrl, createRelayTransport } from './relay';
 import {
   IdentitySealer,
   RejectingSealer,
@@ -160,5 +160,59 @@ describe('e2e X25519 + XChaCha20-Poly1305 sealer', () => {
         sessionSalt: new Uint8Array([1]),
       }),
     ).rejects.toThrow(/32 bytes/);
+  });
+});
+
+describe('createRelayTransport hello suppression (S10-F01)', () => {
+  it('never sends bridge hello or access_token over the relay socket', async () => {
+    localStorage.setItem('vac_web_access_token', 'bridge-secret-leak-canary');
+
+    const sent: string[] = [];
+    class MockWebSocket {
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = 0;
+      onopen: ((e?: unknown) => void) | null = null;
+      onmessage: ((e: { data: string }) => void) | null = null;
+      onerror: ((e: unknown) => void) | null = null;
+      onclose: ((e: { code: number; reason: string }) => void) | null = null;
+      constructor(public url: string) {
+        setTimeout(() => {
+          this.readyState = MockWebSocket.OPEN;
+          this.onopen?.();
+        }, 0);
+      }
+      send(data: string): void {
+        sent.push(data);
+      }
+      close(): void {
+        this.readyState = MockWebSocket.CLOSED;
+      }
+    }
+
+    const originalWs = globalThis.WebSocket;
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = MockWebSocket;
+    try {
+      const handle = await createRelayTransport({
+        relayUrl: 'wss://relay.example.com',
+        deviceId: 'dev1',
+        sessionId: 'sess1',
+        token: 'relay-token-ok',
+      });
+
+      // Strict: the relay socket must send nothing on open. The bridge
+      // hello (and any bearer token it carries) must never leak.
+      expect(sent).toEqual([]);
+      for (const frame of sent) {
+        expect(frame).not.toContain('access_token');
+        expect(frame).not.toContain('bridge-secret-leak-canary');
+        expect(frame).not.toContain('"type":"hello"');
+      }
+
+      handle.close();
+    } finally {
+      (globalThis as unknown as { WebSocket: typeof globalThis.WebSocket }).WebSocket = originalWs;
+      localStorage.removeItem('vac_web_access_token');
+    }
   });
 });
