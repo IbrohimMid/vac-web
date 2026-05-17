@@ -128,6 +128,12 @@ export interface BridgeWsOptions {
   /// relay socket: relay is blind to bridge protocol and the bridge
   /// bearer token must never traverse the WAN. See finding S10-F01.
   disableHelloAuth?: boolean;
+  /// Invoked at the start of each `connect()` (initial AND every
+  /// reconnect). When set, overrides `url`. Lets the relay rebuild the
+  /// URL with the latest `last_event_id` query parameter so a flap does
+  /// not silently drop events the bridge already trimmed. See finding
+  /// S10-F02.
+  urlProvider?: () => string;
 }
 
 export class BridgeWs {
@@ -143,7 +149,8 @@ export class BridgeWs {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.opts.url);
+      const url = this.opts.urlProvider?.() ?? this.opts.url;
+      const ws = new WebSocket(url);
       this.ws = ws;
 
       ws.onopen = () => {

@@ -216,3 +216,77 @@ describe('createRelayTransport hello suppression (S10-F01)', () => {
     }
   });
 });
+
+describe('createRelayTransport replay.out_of_range surfacing (S10-F02)', () => {
+  it('routes top-level replay.out_of_range frames to handle.on subscribers', async () => {
+    class MockReplayWS {
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = 0;
+      onopen: ((e?: unknown) => void) | null = null;
+      onmessage: ((e: { data: string }) => void) | null = null;
+      onerror: ((e: unknown) => void) | null = null;
+      onclose: ((e: { code: number; reason: string }) => void) | null = null;
+      constructor(public url: string) {
+        sockets.push(this);
+        setTimeout(() => {
+          this.readyState = MockReplayWS.OPEN;
+          this.onopen?.();
+        }, 0);
+      }
+      send(_data: string): void {}
+      close(): void {
+        this.readyState = MockReplayWS.CLOSED;
+      }
+    }
+    const sockets: MockReplayWS[] = [];
+
+    const originalWs = globalThis.WebSocket;
+    (globalThis as unknown as { WebSocket: unknown }).WebSocket = MockReplayWS;
+    try {
+      const handle = await createRelayTransport({
+        relayUrl: 'wss://relay.example.com',
+        deviceId: 'devA',
+        sessionId: 'sessA',
+        token: 'tok',
+      });
+
+      const observed: unknown[] = [];
+      handle.on('replay.out_of_range', (ev) => {
+        observed.push(ev);
+      });
+
+      expect(sockets.length).toBe(1);
+      const ws0 = sockets[0]!;
+      // Initial URL must NOT carry last_event_id (lastSeq starts at 0).
+      expect(ws0.url).not.toMatch(/last_event_id=/);
+
+      // Bridge forwards a top-level control frame (no {header, payload} wrap).
+      ws0.onmessage?.({
+        data: JSON.stringify({
+          type: 'replay.out_of_range',
+          session_id: 'sessA',
+          oldest: 100,
+          requested: 5,
+          lagged: 95,
+        }),
+      });
+
+      // EventQueue drains on requestAnimationFrame; vitest jsdom env
+      // shims rAF to setTimeout(_, 16). Wait one drain tick.
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(observed.length).toBe(1);
+      expect(observed[0]).toMatchObject({
+        type: 'replay.out_of_range',
+        session_id: 'sessA',
+        oldest: 100,
+        requested: 5,
+      });
+
+      handle.close();
+    } finally {
+      (globalThis as unknown as { WebSocket: typeof globalThis.WebSocket }).WebSocket = originalWs;
+    }
+  });
+});

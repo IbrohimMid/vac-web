@@ -57,7 +57,29 @@ export async function createRelayTransport(p: RelayParams): Promise<TransportHan
     // `hello` handshake (and its localStorage-backed bearer token) must
     // never traverse the relay WAN socket. See finding S10-F01.
     disableHelloAuth: true,
+    // Rebuild the relay URL on every (re)connect so the bridge resumes
+    // from the latest delivered `seq`. Without this, `BridgeWs` would
+    // dial the original URL on reconnect and the bridge would replay
+    // from `last_event_id=0`, silently dropping/duplicating events the
+    // queue already saw. See finding S10-F02.
+    urlProvider: () =>
+      lastSeq > 0 ? buildRelayUrl({ ...p, lastEventId: lastSeq }) : buildRelayUrl(p),
     onMessage: (raw: InboundFrame) => {
+      // Relay may forward bridge control frames un-wrapped (e.g. a
+      // top-level `replay.out_of_range` notice when the requested
+      // `last_event_id` is below the bridge's retention window). Route
+      // these directly into the queue so a
+      // `handle.on('replay.out_of_range', ...)` subscriber can surface
+      // the hard-resync/session-stale state to the user. See finding
+      // S10-F02.
+      if (
+        raw &&
+        typeof raw === 'object' &&
+        (raw as { type?: string }).type === 'replay.out_of_range'
+      ) {
+        queue.enqueue(raw as InboundFrame);
+        return;
+      }
       // Relay wraps inner frames; unwrap here before dispatching to handlers.
       const wire = raw as unknown as WireFrame;
       if (wire && wire.header && typeof wire.payload === 'string') {
@@ -94,7 +116,13 @@ export async function createRelayTransport(p: RelayParams): Promise<TransportHan
     },
     on(type, handler) {
       return queue.on(type, (frame) => {
-        if ((frame as EventFrame).seq !== undefined) {
+        // `EventFrame` carries `seq`; the bridge also emits control
+        // frames (currently only `replay.out_of_range`) that have no
+        // `seq` but still need to reach the subscriber so the cockpit
+        // can flip the session into a hard-resync/session-stale state.
+        // See finding S10-F02.
+        const f = frame as { seq?: number; type?: string };
+        if (f.seq !== undefined || f.type === 'replay.out_of_range') {
           handler(frame as EventFrame);
         }
       });
