@@ -64,6 +64,11 @@
           "items": { "type": "string" },
           "description": "AUDIT-015: allowlist of read-only directories outside project_root that fs.read='project_and_docs' may read. Empty (default) = strict project-only scope. Inheritance is additive (child profiles may extend, never remove). Entries are canonicalized at enforce time; '~/...' expands to $HOME."
         },
+        "deny_globs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "S09-F06: deny-wins glob filter applied on every read and write enforcement, matched against both the path relative to project_root and the file's basename. Child profiles may extend this list (additive union); they MUST NOT remove entries inherited from a parent profile. Runtime: see profile-core::glob_deny_match."
+        },
         "max_bytes_per_read": { "type": "integer", "default": 10485760 },
         "max_bytes_per_write": { "type": "integer", "default": 5242880 }
       }
@@ -111,6 +116,33 @@
 
     "approval_required_for": { "type": "array", "items": { "type": "string" } },
 
+    "allowed_agent_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["mock", "vac-native", "acp"]
+      },
+      "description": "S09-F06: allowlist of agent runtime kinds this profile may be paired with. An empty list rejects every kind, so every shipped profile lists at least one entry. Child profiles may only NARROW the parent set (intersection); they cannot re-add a kind the parent denied. Runtime: see profile-core::enforce_agent_kind and profile-core::merge_into."
+    },
+
+    "required_signers": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "S09-F06: minimum number of distinct signoffs required on the HandoffPacket before this profile may dispatch destructive actions. Profile-level invariant — packets cannot override downward. Runtime enforcement: see local-bridge gate.rs (two-party signoff path)."
+    },
+    "require_dry_run_first": {
+      "type": "boolean",
+      "description": "S09-F06: when true, a successful dry-run MUST precede the real apply for the same migration plan. Profile-level invariant on executor.migration; runtime enforcement is tracked separately and is currently advisory."
+    },
+    "require_reversibility_proof": {
+      "type": "boolean",
+      "description": "S09-F06: when true, the executor MUST verify that the supplied rollback plan applies cleanly against a scratch snapshot before the forward plan is dispatched against the real target. Profile-level invariant on executor.migration; runtime enforcement is tracked separately."
+    },
+    "require_maintenance_window": {
+      "type": "boolean",
+      "description": "S09-F06: when true, the executor MUST refuse dispatch outside an explicitly scheduled maintenance window. Profile-level invariant on executor.migration; runtime enforcement is tracked separately."
+    },
+
     "resource_limits": {
       "type": "object",
       "additionalProperties": false,
@@ -127,6 +159,7 @@
       "properties": {
         "log_every_tool_call": { "type": "boolean", "default": true },
         "log_tool_args": { "type": "string", "enum": ["full", "redacted", "none"], "default": "redacted" },
+        "subsystem_tag": { "type": "string", "description": "S09-F06: optional short tag included on every audit entry emitted under this profile (e.g. 'migration', 'release'). Used for downstream grouping and alerting." },
         "retain_for_days": { "type": "integer", "default": 90 }
       }
     }
