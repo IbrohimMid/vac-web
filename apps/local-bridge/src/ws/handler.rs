@@ -11,6 +11,7 @@ use super::envelope::{
     WelcomeFrame,
 };
 use crate::audit;
+use crate::auth::Claims;
 use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};
 use crate::server::AppStateHandle;
 use crate::translator::dispatch_command;
@@ -73,7 +74,7 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
     }
 
     // 2. Authenticate (optional in dev mode; strict with JWT otherwise).
-    let device_id = match authenticate(&hello.auth, &state) {
+    let (device_id, auth_claims) = match authenticate(&hello.auth, &state) {
         Ok(d) => d,
         Err(code) => {
             let builder =
@@ -150,6 +151,7 @@ async fn run_socket(socket: WebSocket, state: AppStateHandle, client_id: String)
                     &client_id,
                     &mut subscribed,
                     principal.as_ref(),
+                    auth_claims.as_ref(),
                 )
                 .await;
             }
@@ -176,6 +178,7 @@ async fn handle_incoming(
     client_id: &str,
     subscribed: &mut std::collections::HashSet<String>,
     principal: Option<&String>,
+    auth_claims: Option<&Claims>,
 ) {
     // Try replay first (has distinct field pattern).
     if let Ok(r) = serde_json::from_str::<ReplayRequest>(&line) {
@@ -215,7 +218,8 @@ async fn handle_incoming(
 
     debug!(%client_id, cmd_id = %cmd.id, cmd_type = %cmd.cmd_type, "dispatch");
     let cmd_type = cmd.cmd_type.clone();
-    let (ack, events) = dispatch_command(cmd, state.clone(), principal.cloned()).await;
+    let (ack, events) =
+        dispatch_command(cmd, state.clone(), principal.cloned(), auth_claims.cloned()).await;
     let _ = out_tx.send(serde_ack_from(ack)).await;
     for ev in events {
         // When session.create returns session.ready (or session.resume
@@ -319,17 +323,20 @@ async fn handle_replay(
     }
 }
 
-fn authenticate(auth: &Option<AuthFrame>, state: &AppStateHandle) -> Result<String, &'static str> {
+fn authenticate(
+    auth: &Option<AuthFrame>,
+    state: &AppStateHandle,
+) -> Result<(String, Option<Claims>), &'static str> {
     match auth {
         Some(a) => state
             .auth
             .verify(&a.access_token)
-            .map(|c| c.device_id.clone())
+            .map(|c| (c.device_id.clone(), Some(c)))
             .map_err(|_| "auth.invalid_token"),
         None => {
             // Phase 1.1 default: accept unauthenticated (tests). Production: deny.
             if state.auth.allow_anonymous() {
-                Ok("anon".to_string())
+                Ok(("anon".to_string(), None))
             } else {
                 Err("auth.required")
             }

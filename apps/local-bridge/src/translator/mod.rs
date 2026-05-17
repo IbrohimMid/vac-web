@@ -3,6 +3,7 @@
 use crate::agent_runtime::acp::types::{SetConfigOptionRequest, SetSessionModeRequest};
 use crate::agent_runtime::acp::{sha256_hex_canonical_excluding, TOOL_CALL_HASH_DROP_FIELDS};
 use crate::audit::{log_structured, log_tool_event};
+use crate::auth::Claims;
 use crate::handoff::packet::{ExecutionOutcome, TaskExecutionProgress};
 use crate::observability::{LogActor, LogSeverity, StructuredLogBuilder};
 use crate::profile_layer::{enforce_action, EnforceOutcome};
@@ -21,6 +22,72 @@ use ulid::Ulid;
 mod assessment;
 mod assessment_query;
 pub mod assessment_schema;
+
+/// S02-F01 — enforce JWT `claims.project_root` scope on a payload-supplied
+/// project root. Returns `true` when the path is allowed for this caller.
+///
+/// - `claims = None` -> no JWT present (dev `allow_anonymous` mode), so
+///   the bridge cannot apply scope. Allowed.
+/// - `claims.project_root` empty -> legacy token minted before scope
+///   enforcement; treat as no-scope and allow.
+/// - Otherwise canonicalize both paths and require equality. Canonicalize
+///   failures (path may not exist yet on disk for fresh `session.create`)
+///   fall back to the lexical PathBuf so tests with synthetic paths still
+///   compare correctly.
+fn claims_scope_allows_path(claims: Option<&Claims>, requested: &Path) -> bool {
+    let Some(c) = claims else {
+        return true;
+    };
+    if c.project_root.is_empty() {
+        return true;
+    }
+    let claimed = PathBuf::from(&c.project_root);
+    let req_canon = requested
+        .canonicalize()
+        .unwrap_or_else(|_| requested.to_path_buf());
+    let claim_canon = claimed.canonicalize().unwrap_or_else(|_| claimed.clone());
+    req_canon == claim_canon
+}
+
+/// S02-F01 — emit a `session.scope_mismatch` audit row + ack so every
+/// scope-enforcement sink uses an identical error shape. The ack code is
+/// stable so the cockpit can render a distinct "cross-repo denied" state.
+fn scope_mismatch_response(
+    cmd: &ClientCommand,
+    state: &AppStateHandle,
+    sink: &str,
+    claims_root: &str,
+    requested: &Path,
+    events: Vec<ServerEvent>,
+) -> (ServerAck, Vec<ServerEvent>) {
+    let requested_str = requested.display().to_string();
+    state.audit.log(
+        &cmd.session_id,
+        "session",
+        AuditSeverity::Warn,
+        json!({
+            "event": "scope_mismatch",
+            "code": "session.scope_mismatch",
+            "sink": sink,
+            "claimed_root": claims_root,
+            "requested_root": requested_str,
+        }),
+    );
+    (
+        ServerAck {
+            ack_of: cmd.id.clone(),
+            ok: false,
+            error: Some(ErrorInfo {
+                code: "session.scope_mismatch".into(),
+                message: format!(
+                    "requested project_root `{}` is outside JWT scope `{}`",
+                    requested_str, claims_root
+                ),
+            }),
+        },
+        events,
+    )
+}
 
 pub(crate) fn session_ready_payload(handle: &SessionHandleRef) -> serde_json::Value {
     let mut payload = json!({
@@ -109,6 +176,7 @@ pub async fn dispatch_command(
     cmd: ClientCommand,
     state: AppStateHandle,
     principal: Option<String>,
+    auth_claims: Option<Claims>,
 ) -> (ServerAck, Vec<ServerEvent>) {
     let mut events = vec![];
 
@@ -284,6 +352,25 @@ pub async fn dispatch_command(
                 .and_then(|v| v.as_str())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default();
+            // S02-F01 — enforce JWT claims.project_root scope before any
+            // side-effects so a token minted for repo A cannot spawn a
+            // session in repo B. Out-of-scope `session.create` is denied
+            // with `session.scope_mismatch` so the cockpit can render a
+            // distinct error from `profile.not_found`/`agent.disabled`.
+            if !claims_scope_allows_path(auth_claims.as_ref(), &project_root) {
+                let claims_root = auth_claims
+                    .as_ref()
+                    .map(|c| c.project_root.clone())
+                    .unwrap_or_default();
+                return scope_mismatch_response(
+                    &cmd,
+                    &state,
+                    "session.create",
+                    &claims_root,
+                    &project_root,
+                    events,
+                );
+            }
             // Stage X.4 — additive `agent_id` on session.create.
             // Pre-X.4 payloads omit this field and fall through to the
             // bridge's default agent.
@@ -1133,6 +1220,23 @@ pub async fn dispatch_command(
                         );
                     }
                 };
+                // S02-F01 — scope check against the persisted session's
+                // project_root so a stolen `vac_session_id` from a
+                // different repo cannot drive a native resume here.
+                if !claims_scope_allows_path(auth_claims.as_ref(), &meta.project_root) {
+                    let claims_root = auth_claims
+                        .as_ref()
+                        .map(|c| c.project_root.clone())
+                        .unwrap_or_default();
+                    return scope_mismatch_response(
+                        &cmd,
+                        &state,
+                        "session.resume.native",
+                        &claims_root,
+                        &meta.project_root,
+                        events,
+                    );
+                }
                 let caps_supported = meta.native_resume.load_session_supported;
 
                 // acp_load REQUIRES caps=true. caps=false is a hard reject.
@@ -1813,6 +1917,22 @@ pub async fn dispatch_command(
                         );
                     }
                 };
+                // S02-F01 — scope check against the persisted session's
+                // project_root before the replay_only branch.
+                if !claims_scope_allows_path(auth_claims.as_ref(), &meta.project_root) {
+                    let claims_root = auth_claims
+                        .as_ref()
+                        .map(|c| c.project_root.clone())
+                        .unwrap_or_default();
+                    return scope_mismatch_response(
+                        &cmd,
+                        &state,
+                        "session.resume.replay_only",
+                        &claims_root,
+                        &meta.project_root,
+                        events,
+                    );
+                }
                 return resume_persistence_replay(
                     cmd,
                     state,
@@ -1950,11 +2070,21 @@ pub async fn dispatch_command(
                 );
             };
 
-            let project_root = cmd
-                .payload
-                .get("project_root")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from);
+            // S02-F01 — when the JWT carries a scope, force the history
+            // filter to that scope so a caller can never enumerate
+            // sessions in a different repo. Falls through to the
+            // payload-supplied value only when there is no claim (dev
+            // anon) or the claim is empty (legacy token).
+            let project_root = match auth_claims.as_ref() {
+                Some(c) if !c.project_root.is_empty() => {
+                    Some(std::path::PathBuf::from(&c.project_root))
+                }
+                _ => cmd
+                    .payload
+                    .get("project_root")
+                    .and_then(|v| v.as_str())
+                    .map(std::path::PathBuf::from),
+            };
             let agent_id = cmd
                 .payload
                 .get("agent_id")
