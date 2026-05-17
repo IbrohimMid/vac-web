@@ -471,6 +471,41 @@ pub async fn handle_deploy(
         let (ready, missing) = gate::missing_gate_ids(&gate_guard, required);
         drop(gate_guard);
         if !ready {
+            // C4 — emit an audit trail when a deploy is denied so the gate
+            // decision is observable in the session event stream (cockpit
+            // timeline / audit log). Tag MutationAuditClean specifically so
+            // mutation-driven blocks are distinguishable from other gates.
+            let blocked_by_mutation = missing.iter().any(|g| g == "MutationAuditClean");
+            let ts = now_iso();
+            log_tool_event(
+                state,
+                &cmd.session_id,
+                "release",
+                json!({
+                    "command": "release.deploy",
+                    "target_id": target_id,
+                    "environment": target_environment.clone(),
+                    "decision": "deny",
+                    "reason": if blocked_by_mutation { "mutation_audit_unclean" } else { "gate_not_ready" },
+                    "missing_gates": missing.clone(),
+                }),
+            );
+            let audit_event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "release.audit".into(),
+                payload: json!({
+                    "command": "release.deploy",
+                    "target_id": target_id,
+                    "environment": target_environment,
+                    "decision": "deny",
+                    "blocked_by": missing.clone(),
+                    "mutation_audit_blocked": blocked_by_mutation,
+                    "ts": ts.clone(),
+                }),
+                v: 1,
+                ts,
+            };
             return (
                 ServerAck {
                     ack_of: cmd.id.clone(),
@@ -480,7 +515,7 @@ pub async fn handle_deploy(
                         message: format!("release gates not ready: {}", missing.join(", ")),
                     }),
                 },
-                Vec::new(),
+                vec![audit_event],
             );
         }
         let commit = current_commit_short(&handle.project_root).unwrap_or_else(|| "unknown".into());
@@ -612,6 +647,36 @@ pub async fn handle_publish(
         let (ready, missing) = gate::missing_gate_ids(&gate_guard, required);
         drop(gate_guard);
         if !ready {
+            // C4 — emit release.audit on publish denial, same pattern as deploy.
+            let blocked_by_mutation = missing.iter().any(|g| g == "MutationAuditClean");
+            let ts = now_iso();
+            log_tool_event(
+                state,
+                &cmd.session_id,
+                "release",
+                json!({
+                    "command": "release.publish",
+                    "target_id": target_id,
+                    "decision": "deny",
+                    "reason": if blocked_by_mutation { "mutation_audit_unclean" } else { "gate_not_ready" },
+                    "missing_gates": missing.clone(),
+                }),
+            );
+            let audit_event = ServerEvent {
+                seq: 0,
+                session_id: handle.id.clone(),
+                event_type: "release.audit".into(),
+                payload: json!({
+                    "command": "release.publish",
+                    "target_id": target_id,
+                    "decision": "deny",
+                    "blocked_by": missing.clone(),
+                    "mutation_audit_blocked": blocked_by_mutation,
+                    "ts": ts.clone(),
+                }),
+                v: 1,
+                ts,
+            };
             return (
                 ServerAck {
                     ack_of: cmd.id.clone(),
@@ -621,7 +686,7 @@ pub async fn handle_publish(
                         message: format!("release gates not ready: {}", missing.join(", ")),
                     }),
                 },
-                Vec::new(),
+                vec![audit_event],
             );
         }
         let commit = current_commit_short(&handle.project_root).unwrap_or_else(|| "unknown".into());
