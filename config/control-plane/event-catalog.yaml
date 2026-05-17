@@ -65,6 +65,113 @@ events:
       - ResumeStatus
       - PersistentSessions
 
+  # ---- session resume lifecycle -----------------------------------------
+  - id: session.resume.initializing
+    owner: bridge
+    status: implemented
+    producer: session.handle.resume_native
+    consumers:
+      - capabilities.sessionLifecycle
+      - ResumeStatus
+  - id: session.resume.started
+    owner: bridge
+    status: implemented
+    producer: translator.session_resume
+    consumers:
+      - capabilities.sessionLifecycle
+      - ResumeStatus
+  - id: session.resumed
+    owner: bridge
+    status: implemented
+    producer: translator.session_resume
+    consumers:
+      - capabilities.sessionLifecycle
+      - ResumeStatus
+      - SessionPicker
+  - id: session.resume.failed
+    owner: bridge
+    status: implemented
+    producer: translator.session_resume
+    consumers:
+      - capabilities.sessionLifecycle
+      - NotifyLane
+  - id: session.resume.warning
+    owner: bridge
+    status: implemented
+    producer: translator.session_resume
+    consumers:
+      - capabilities.sessionLifecycle
+
+  # ---- session history & replay -----------------------------------------
+  - id: session.history.listed
+    owner: bridge
+    status: implemented
+    producer: translator.session_history_list
+    consumers:
+      - domain.sessions.history
+      - SessionPicker
+  - id: session.history.forgotten
+    owner: bridge
+    status: implemented
+    producer: translator.session_history_forget
+    consumers:
+      - domain.sessions.history
+      - SessionPicker
+  - id: session.replay.progress
+    owner: bridge
+    status: implemented
+    producer: translator.session_replay
+    consumers:
+      - capabilities.persistenceEvents
+      - ResumeStatus
+
+  # ---- config validate & reload -----------------------------------------
+  - id: config.validated
+    owner: bridge
+    status: implemented
+    producer: translator.config_validate
+    consumers:
+      - capabilities.configLifecycle
+      - ConfigPanel
+  - id: config.reload.started
+    owner: bridge
+    status: implemented
+    producer: translator.config_reload
+    consumers:
+      - capabilities.configLifecycle
+      - ConfigPanel
+  - id: config.reloaded
+    owner: bridge
+    status: implemented
+    producer: translator.config_reload
+    consumers:
+      - capabilities.configLifecycle
+      - ConfigPanel
+  - id: config.reload_failed
+    owner: bridge
+    status: implemented
+    producer: translator.config_reload
+    consumers:
+      - capabilities.configLifecycle
+      - ConfigPanel
+      - NotifyLane
+
+  # ---- registry sync & reload -------------------------------------------
+  - id: registry.synced
+    owner: bridge
+    status: implemented
+    producer: translator.registry_sync
+    consumers:
+      - capabilities.registryEvents
+      - RegistryPanel
+  - id: registry.reloaded
+    owner: bridge
+    status: implemented
+    producer: translator.registry_reload
+    consumers:
+      - capabilities.registryEvents
+      - RegistryPanel
+
   # ---- review taxonomy ---------------------------------------------------
   - id: review.changeset_updated
     owner: bridge
@@ -569,6 +676,26 @@ events:
     consumers:
       - domain.release.handlers
       - ReleaseTab
+  - id: release.audit
+    owner: bridge
+    status: implemented
+    classification: implemented
+    producer: release.handle_deploy_publish
+    consumers:
+      - audit
+      - domain.release.audit
+
+  # ---- synthetic / native bridge events ---------------------------------
+  # vac.session_resumed_native is emitted by session.handle.resume_native
+  # as a synthetic marker (not a translator-derived bridge event) so the web
+  # cockpit can distinguish native-resume vs translator-resume paths.
+  - id: vac.session_resumed_native
+    owner: bridge
+    status: implemented
+    producer: session.handle.resume_native
+    consumers:
+      - capabilities.sessionLifecycle
+      - ResumeStatus
 
   # ---- extensions surface ------------------------------------------------
   - id: extensions.list_response

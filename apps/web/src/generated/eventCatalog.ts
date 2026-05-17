@@ -36,6 +36,10 @@ export type EventId =
   | 'bridge.mutation.requested'
   | 'bridge.mutation.updated'
   | 'changeset.updated'
+  | 'config.reload.started'
+  | 'config.reload_failed'
+  | 'config.reloaded'
+  | 'config.validated'
   | 'extensions.approvals_list_response'
   | 'extensions.list_response'
   | 'extensions.promotion_approved'
@@ -58,6 +62,9 @@ export type EventId =
   | 'project.tree.error'
   | 'project.tree.unsupported'
   | 'project.tree.updated'
+  | 'registry.reloaded'
+  | 'registry.synced'
+  | 'release.audit'
   | 'release.deploy_progress'
   | 'release.notes_draft'
   | 'release.post_deploy_observation'
@@ -70,9 +77,17 @@ export type EventId =
   | 'runtime.job_started'
   | 'session.closed'
   | 'session.context.updated'
+  | 'session.history.forgotten'
+  | 'session.history.listed'
   | 'session.mcp_server_drift'
   | 'session.persistence_degraded'
   | 'session.renamed'
+  | 'session.replay.progress'
+  | 'session.resume.failed'
+  | 'session.resume.initializing'
+  | 'session.resume.started'
+  | 'session.resume.warning'
+  | 'session.resumed'
   | 'session.started'
   | 'shell.output'
   | 'shell.started'
@@ -88,6 +103,7 @@ export type EventId =
   | 'tool.failed'
   | 'tool.observed'
   | 'tool.updated'
+  | 'vac.session_resumed_native'
   | 'validation.run.updated'
   | 'workflow.artifact.created'
   | 'workflow.completed'
@@ -128,6 +144,10 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'bridge.mutation.requested', status: 'implemented', owner: 'bridge', producer: "translate_mutation_approve", consumers: Object.freeze(["domain.bridge.handlers", "MutationInbox"]) }),
   Object.freeze({ id: 'bridge.mutation.updated', status: 'implemented', owner: 'bridge', producer: "translate_mutation_approve", consumers: Object.freeze(["domain.bridge.handlers", "MutationInbox"]) }),
   Object.freeze({ id: 'changeset.updated', status: 'legacy_mock_only', owner: 'mock', consumers: Object.freeze(["tools.mock_engine.scenarios"]), replacement: 'review.changeset_updated' }),
+  Object.freeze({ id: 'config.reload.started', status: 'implemented', owner: 'bridge', producer: "translator.config_reload", consumers: Object.freeze(["capabilities.configLifecycle", "ConfigPanel"]) }),
+  Object.freeze({ id: 'config.reload_failed', status: 'implemented', owner: 'bridge', producer: "translator.config_reload", consumers: Object.freeze(["capabilities.configLifecycle", "ConfigPanel", "NotifyLane"]) }),
+  Object.freeze({ id: 'config.reloaded', status: 'implemented', owner: 'bridge', producer: "translator.config_reload", consumers: Object.freeze(["capabilities.configLifecycle", "ConfigPanel"]) }),
+  Object.freeze({ id: 'config.validated', status: 'implemented', owner: 'bridge', producer: "translator.config_validate", consumers: Object.freeze(["capabilities.configLifecycle", "ConfigPanel"]) }),
   Object.freeze({ id: 'extensions.approvals_list_response', status: 'implemented', owner: 'bridge', producer: "extensions.handlers.handle_list_approvals", consumers: Object.freeze(["ExtensionsList"]) }),
   Object.freeze({ id: 'extensions.list_response', status: 'implemented', owner: 'bridge', producer: "translator.extensions_list", consumers: Object.freeze(["domain.extensions.handlers", "ExtensionsList"]) }),
   Object.freeze({ id: 'extensions.promotion_approved', status: 'implemented', owner: 'bridge', producer: "extensions.handlers.handle_approve_promotion", consumers: Object.freeze(["audit", "ExtensionsList"]) }),
@@ -150,6 +170,9 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'project.tree.error', status: 'implemented', owner: 'bridge', producer: "translator.project_tree_request", consumers: Object.freeze(["domain.project.handlers", "ProjectExplorer"]) }),
   Object.freeze({ id: 'project.tree.unsupported', status: 'implemented', owner: 'bridge', producer: "translator.project_tree_request", consumers: Object.freeze(["domain.project.handlers", "ProjectExplorer"]) }),
   Object.freeze({ id: 'project.tree.updated', status: 'implemented', owner: 'bridge', producer: "translator.project_tree_request", consumers: Object.freeze(["domain.project.handlers", "ProjectExplorer"]) }),
+  Object.freeze({ id: 'registry.reloaded', status: 'implemented', owner: 'bridge', producer: "translator.registry_reload", consumers: Object.freeze(["capabilities.registryEvents", "RegistryPanel"]) }),
+  Object.freeze({ id: 'registry.synced', status: 'implemented', owner: 'bridge', producer: "translator.registry_sync", consumers: Object.freeze(["capabilities.registryEvents", "RegistryPanel"]) }),
+  Object.freeze({ id: 'release.audit', status: 'implemented', owner: 'bridge', producer: "release.handle_deploy_publish", consumers: Object.freeze(["audit", "domain.release.audit"]) }),
   Object.freeze({ id: 'release.deploy_progress', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'release.notes_draft', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
   Object.freeze({ id: 'release.post_deploy_observation', status: 'implemented', owner: 'bridge', producer: "release.handlers", consumers: Object.freeze(["domain.release.handlers", "ReleaseTab"]) }),
@@ -162,9 +185,17 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'runtime.job_started', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.runtimeJobs"]) }),
   Object.freeze({ id: 'session.closed', status: 'implemented', owner: 'bridge', producer: "translator.session_closed", consumers: Object.freeze(["domain.sessions.handlers", "capabilities.sessionLifecycle"]) }),
   Object.freeze({ id: 'session.context.updated', status: 'implemented', owner: 'bridge', producer: "session.handle.prompt_response_usage", consumers: Object.freeze(["domain.sessions.handlers", "Topbar.ModelContextChip"]) }),
+  Object.freeze({ id: 'session.history.forgotten', status: 'implemented', owner: 'bridge', producer: "translator.session_history_forget", consumers: Object.freeze(["domain.sessions.history", "SessionPicker"]) }),
+  Object.freeze({ id: 'session.history.listed', status: 'implemented', owner: 'bridge', producer: "translator.session_history_list", consumers: Object.freeze(["domain.sessions.history", "SessionPicker"]) }),
   Object.freeze({ id: 'session.mcp_server_drift', status: 'implemented', owner: 'bridge', producer: "translator.session_resume", consumers: Object.freeze(["capabilities.registryEvents", "domain.sessions.history", "ResumeStatus", "PersistentSessions"]) }),
   Object.freeze({ id: 'session.persistence_degraded', status: 'implemented', owner: 'bridge', producer: "session.persistence.sink", consumers: Object.freeze(["capabilities.persistenceEvents", "domain.sessions.history", "NotifyLane"]) }),
   Object.freeze({ id: 'session.renamed', status: 'implemented', owner: 'bridge', producer: "translator.session_renamed", consumers: Object.freeze(["SessionPicker", "capabilities.sessionLifecycle"]) }),
+  Object.freeze({ id: 'session.replay.progress', status: 'implemented', owner: 'bridge', producer: "translator.session_replay", consumers: Object.freeze(["capabilities.persistenceEvents", "ResumeStatus"]) }),
+  Object.freeze({ id: 'session.resume.failed', status: 'implemented', owner: 'bridge', producer: "translator.session_resume", consumers: Object.freeze(["capabilities.sessionLifecycle", "NotifyLane"]) }),
+  Object.freeze({ id: 'session.resume.initializing', status: 'implemented', owner: 'bridge', producer: "session.handle.resume_native", consumers: Object.freeze(["capabilities.sessionLifecycle", "ResumeStatus"]) }),
+  Object.freeze({ id: 'session.resume.started', status: 'implemented', owner: 'bridge', producer: "translator.session_resume", consumers: Object.freeze(["capabilities.sessionLifecycle", "ResumeStatus"]) }),
+  Object.freeze({ id: 'session.resume.warning', status: 'implemented', owner: 'bridge', producer: "translator.session_resume", consumers: Object.freeze(["capabilities.sessionLifecycle"]) }),
+  Object.freeze({ id: 'session.resumed', status: 'implemented', owner: 'bridge', producer: "translator.session_resume", consumers: Object.freeze(["capabilities.sessionLifecycle", "ResumeStatus", "SessionPicker"]) }),
   Object.freeze({ id: 'session.started', status: 'implemented', owner: 'bridge', producer: "translator.session_started", consumers: Object.freeze(["domain.sessions.handlers", "SessionPicker", "capabilities.sessionLifecycle"]) }),
   Object.freeze({ id: 'shell.output', status: 'not_wired', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
   Object.freeze({ id: 'shell.started', status: 'not_wired', owner: 'bridge', consumers: Object.freeze(["capabilities.shellTerminal"]) }),
@@ -180,6 +211,7 @@ export const EVENT_CATALOG: ReadonlyArray<EventEntry> = Object.freeze([
   Object.freeze({ id: 'tool.failed', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
   Object.freeze({ id: 'tool.observed', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
   Object.freeze({ id: 'tool.updated', status: 'implemented', owner: 'bridge', producer: "session.handle.tool_activity", consumers: Object.freeze(["domain.toolActivity.handlers", "stores.toolActivity", "workflows.adapters"]) }),
+  Object.freeze({ id: 'vac.session_resumed_native', status: 'implemented', owner: 'bridge', producer: "session.handle.resume_native", consumers: Object.freeze(["capabilities.sessionLifecycle", "ResumeStatus"]) }),
   Object.freeze({ id: 'validation.run.updated', status: 'implemented', owner: 'bridge', producer: "translator.validation_run_request", consumers: Object.freeze(["domain.validation.handlers", "ValidationPanel", "domain.tasks.handlers"]) }),
   Object.freeze({ id: 'workflow.artifact.created', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
   Object.freeze({ id: 'workflow.completed', status: 'implemented', owner: 'bridge', consumers: Object.freeze(["capabilities.workflowEvents"]) }),
