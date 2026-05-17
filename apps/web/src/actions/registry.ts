@@ -1,6 +1,7 @@
 // ActionSpec registry — populated from bridge `system.capabilities` event.
 
 import { create } from 'zustand';
+import type { CommandScope, CommandSideEffect, CommandStatus } from '../generated/commandCatalog';
 
 export interface ActionSpec {
   id: string;
@@ -13,6 +14,10 @@ export interface ActionSpec {
   required_capabilities: string[];
   available_when?: string | null;
   source?: 'vac' | 'acp';
+  command_status?: CommandStatus;
+  command_scope?: CommandScope;
+  command_side_effect?: CommandSideEffect;
+  disabled_reason?: string;
   insert_text?: string | null;
   acp_command?: unknown;
 }
