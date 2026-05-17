@@ -5,130 +5,268 @@
   "description": "Security boundary definition for assessor/executor sessions. SSOT is docs/capability-profiles.md.",
   "type": "object",
   "required": [
-    "id", "class", "version", "tool_allow", "tool_deny",
-    "shell_allowlist", "fs", "git", "connectors",
-    "network_egress", "approval_required_for"
+    "id",
+    "class",
+    "version",
+    "tool_allow",
+    "tool_deny",
+    "shell_allowlist",
+    "fs",
+    "git",
+    "connectors",
+    "network_egress",
+    "approval_required_for"
   ],
   "additionalProperties": false,
   "properties": {
-    "id": { "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned" },
-    "class": { "type": "string", "enum": ["assessor", "executor"] },
-    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
-    "description": { "type": "string" },
-    "inherits_from": { "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned" },
-
-    "tool_allow": { "type": "array", "items": { "type": "string" } },
-    "tool_deny": { "type": "array", "items": { "type": "string" } },
-
+    "id": {
+      "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned"
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "assessor",
+        "executor"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "inherits_from": {
+      "$ref": "_defs/primitives.schema.json#/$defs/profile_id_versioned"
+    },
+    "tool_allow": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tool_deny": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "shell_allowlist": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["bin"],
+        "required": [
+          "bin"
+        ],
         "additionalProperties": false,
         "properties": {
-          "bin": { "type": "string" },
-          "args_pattern": { "type": "string" },
-          "max_args": { "type": "integer", "minimum": 0, "default": 32 },
+          "bin": {
+            "type": "string"
+          },
+          "args_pattern": {
+            "type": "string"
+          },
+          "max_args": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 32
+          },
           "cwd_scope": {
             "type": "string",
-            "enum": ["project_root", "project_root_subtree", "tempdir"],
+            "enum": [
+              "project_root",
+              "project_root_subtree",
+              "tempdir"
+            ],
             "default": "project_root_subtree"
           },
-          "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 120000, "default": 15000 },
-          "env_allowlist": { "type": "array", "items": { "type": "string" }, "default": [] },
-          "output_cap_bytes": { "type": "integer", "default": 2097152 }
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 120000,
+            "default": 15000
+          },
+          "env_allowlist": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "output_cap_bytes": {
+            "type": "integer",
+            "default": 2097152
+          }
         }
       }
     },
-
     "fs": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "read": {
           "type": "string",
-          "enum": ["none", "project_root", "project_and_docs"],
+          "enum": [
+            "none",
+            "project_root",
+            "project_and_docs"
+          ],
           "description": "Read scope. 'project_and_docs' additionally permits reading paths under any directory listed in fs.docs_roots; with an empty docs_roots list it is equivalent to 'project_root' for read enforcement.",
           "_audit": "AUDIT-015",
           "default": "project_root"
         },
         "write": {
           "type": "string",
-          "enum": ["none", "project_root", "scoped_paths"],
+          "enum": [
+            "none",
+            "project_root",
+            "scoped_paths"
+          ],
           "default": "none"
         },
-        "scoped_paths": { "type": "array", "items": { "type": "string" } },
+        "scoped_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "docs_roots": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "AUDIT-015: allowlist of read-only directories outside project_root that fs.read='project_and_docs' may read. Empty (default) = strict project-only scope. Inheritance is additive (child profiles may extend, never remove). Entries are canonicalized at enforce time; '~/...' expands to $HOME."
         },
         "deny_globs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "S09-F06: deny-wins glob filter applied on every read and write enforcement, matched against both the path relative to project_root and the file's basename. Child profiles may extend this list (additive union); they MUST NOT remove entries inherited from a parent profile. Runtime: see profile-core::glob_deny_match."
         },
-        "max_bytes_per_read": { "type": "integer", "default": 10485760 },
-        "max_bytes_per_write": { "type": "integer", "default": 5242880 }
+        "max_bytes_per_read": {
+          "type": "integer",
+          "default": 10485760
+        },
+        "max_bytes_per_write": {
+          "type": "integer",
+          "default": 5242880
+        }
       }
     },
-
     "git": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "read": { "type": "boolean", "default": true },
-        "branch": { "type": "boolean", "default": false },
-        "commit": { "type": "boolean", "default": false },
-        "tag": { "type": "boolean", "default": false },
-        "push": { "type": "boolean", "default": false },
-        "push_remotes_allow": { "type": "array", "items": { "type": "string" } },
-        "protected_refs": { "type": "array", "items": { "type": "string" } }
+        "read": {
+          "type": "boolean",
+          "default": true
+        },
+        "branch": {
+          "type": "boolean",
+          "default": false
+        },
+        "commit": {
+          "type": "boolean",
+          "default": false
+        },
+        "tag": {
+          "type": "boolean",
+          "default": false
+        },
+        "push": {
+          "type": "boolean",
+          "default": false
+        },
+        "push_remotes_allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "protected_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
-
     "connectors": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "read": { "type": "array", "items": { "type": "string" } },
-        "write": { "type": "array", "items": { "type": "string" } }
+        "read": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "write": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
-
     "network_egress": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["off", "allowlist", "unrestricted"],
+          "enum": [
+            "off",
+            "allowlist",
+            "unrestricted"
+          ],
           "default": "allowlist"
         },
-        "host_allowlist": { "type": "array", "items": { "type": "string" } },
+        "host_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "methods_allow": {
           "type": "array",
-          "items": { "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] }
+          "items": {
+            "enum": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ]
+          }
         }
       }
     },
-
-    "approval_required_for": { "type": "array", "items": { "type": "string" } },
-
+    "approval_required_for": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "allowed_agent_kinds": {
       "type": "array",
       "items": {
         "type": "string",
-        "enum": ["mock", "vac-native", "acp"]
+        "enum": [
+          "mock",
+          "vac-native",
+          "acp"
+        ]
       },
       "description": "S09-F06: allowlist of agent runtime kinds this profile may be paired with. An empty list rejects every kind, so every shipped profile lists at least one entry. Child profiles may only NARROW the parent set (intersection); they cannot re-add a kind the parent denied. Runtime: see profile-core::enforce_agent_kind and profile-core::merge_into."
     },
-
     "required_signers": {
       "type": "integer",
       "minimum": 1,
-      "description": "S09-F06: minimum number of distinct signoffs required on the HandoffPacket before this profile may dispatch destructive actions. Profile-level invariant — packets cannot override downward. Runtime enforcement: see local-bridge gate.rs (two-party signoff path)."
+      "description": "S09-F06: minimum number of distinct signoffs required on the HandoffPacket before this profile may dispatch destructive actions. Profile-level invariant \u2014 packets cannot override downward. Runtime enforcement: see local-bridge gate.rs (two-party signoff path)."
     },
     "require_dry_run_first": {
       "type": "boolean",
@@ -142,32 +280,99 @@
       "type": "boolean",
       "description": "S09-F06: when true, the executor MUST refuse dispatch outside an explicitly scheduled maintenance window. Profile-level invariant on executor.migration; runtime enforcement is tracked separately."
     },
-
     "resource_limits": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "max_session_wallclock_ms": { "type": "integer", "default": 3600000 },
-        "max_tool_calls": { "type": "integer", "default": 2000 },
-        "max_concurrent_children": { "type": "integer", "default": 4 }
+        "max_session_wallclock_ms": {
+          "type": "integer",
+          "default": 3600000
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "default": 2000
+        },
+        "max_concurrent_children": {
+          "type": "integer",
+          "default": 4
+        }
       }
     },
-
     "audit": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "log_every_tool_call": { "type": "boolean", "default": true },
-        "log_tool_args": { "type": "string", "enum": ["full", "redacted", "none"], "default": "redacted" },
-        "subsystem_tag": { "type": "string", "description": "S09-F06: optional short tag included on every audit entry emitted under this profile (e.g. 'migration', 'release'). Used for downstream grouping and alerting." },
-        "retain_for_days": { "type": "integer", "default": 90 }
+        "log_every_tool_call": {
+          "type": "boolean",
+          "default": true
+        },
+        "log_tool_args": {
+          "type": "string",
+          "enum": [
+            "full",
+            "redacted",
+            "none"
+          ],
+          "default": "redacted"
+        },
+        "subsystem_tag": {
+          "type": "string",
+          "description": "S09-F06: optional short tag included on every audit entry emitted under this profile (e.g. 'migration', 'release'). Used for downstream grouping and alerting."
+        },
+        "retain_for_days": {
+          "type": "integer",
+          "default": 90
+        }
       }
     }
   },
-
   "x-assertions": [
+    "If class='assessor', fs.write must be 'none' and git.commit must be false."
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "class": {
+            "const": "assessor"
+          }
+        },
+        "required": [
+          "class"
+        ]
+      },
+      "then": {
+        "properties": {
+          "fs": {
+            "properties": {
+              "write": {
+                "const": "none"
+              }
+            },
+            "required": [
+              "write"
+            ]
+          },
+          "git": {
+            "properties": {
+              "commit": {
+                "const": false
+              }
+            },
+            "required": [
+              "commit"
+            ]
+          }
+        },
+        "required": [
+          "fs",
+          "git"
+        ]
+      }
+    }
+  ],
+  "x-runtime-assertions": [
     "If connectors.write is non-empty, each entry must appear in tool_allow as 'connector.write.<id>'.",
-    "If class='assessor', fs.write must be 'none' and git.commit must be false.",
     "tool_deny is evaluated before tool_allow (deny wins)."
   ]
 }

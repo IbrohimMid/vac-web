@@ -21,7 +21,7 @@
     }
   ],
   "fixability": "assisted",
-  "identity_hash": "sha256:7af38ba5b6f3644386272239db64be4e900943f792cd2e85179a22bc1aa89f90",
+  "identity_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "created_at": "2026-04-24T10:00:01Z",
   "emitted_by": "agent:devops_readiness"
 }

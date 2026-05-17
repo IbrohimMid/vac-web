@@ -12,4 +12,5 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-exec node scripts/schema-validate.mjs "$@"
+node scripts/schema-validate.mjs "$@"
+node scripts/check-schema-assertions.mjs

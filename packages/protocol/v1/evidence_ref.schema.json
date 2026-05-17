@@ -4,41 +4,123 @@
   "title": "EvidenceRef",
   "description": "Typed reference to source material backing a finding. SSOT: docs/evidence-freshness.md.",
   "type": "object",
-  "required": ["id", "kind", "uri", "observed_at", "fresh_until", "staleness_policy", "captured_by"],
+  "required": [
+    "id",
+    "kind",
+    "uri",
+    "observed_at",
+    "fresh_until",
+    "staleness_policy",
+    "captured_by"
+  ],
   "additionalProperties": false,
   "properties": {
-    "id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
+    "id": {
+      "$ref": "_defs/primitives.schema.json#/$defs/ulid"
+    },
     "kind": {
       "type": "string",
-      "enum": ["file", "commit", "pr", "doc", "connector", "screenshot", "metric", "log", "missing"]
+      "enum": [
+        "file",
+        "commit",
+        "pr",
+        "doc",
+        "connector",
+        "screenshot",
+        "metric",
+        "log",
+        "missing"
+      ]
     },
-    "uri": { "type": "string" },
+    "uri": {
+      "type": "string"
+    },
     "locator": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "line_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
-        "cell": { "type": "string" },
-        "timestamp": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
-        "selector": { "type": "string" }
+        "line_range": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "cell": {
+          "type": "string"
+        },
+        "timestamp": {
+          "$ref": "_defs/primitives.schema.json#/$defs/iso8601"
+        },
+        "selector": {
+          "type": "string"
+        }
       }
     },
-    "connector_id": { "type": "string" },
-    "snapshot_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
-    "digest": { "$ref": "_defs/primitives.schema.json#/$defs/sha256" },
-    "source_etag": { "type": "string" },
-    "observed_at": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
-    "fresh_until": { "$ref": "_defs/primitives.schema.json#/$defs/iso8601" },
+    "connector_id": {
+      "type": "string"
+    },
+    "snapshot_id": {
+      "$ref": "_defs/primitives.schema.json#/$defs/ulid"
+    },
+    "digest": {
+      "$ref": "_defs/primitives.schema.json#/$defs/sha256"
+    },
+    "source_etag": {
+      "type": "string"
+    },
+    "observed_at": {
+      "$ref": "_defs/primitives.schema.json#/$defs/iso8601"
+    },
+    "fresh_until": {
+      "$ref": "_defs/primitives.schema.json#/$defs/iso8601"
+    },
     "staleness_policy": {
       "type": "string",
-      "enum": ["hard_expire", "warn_only", "immutable"]
+      "enum": [
+        "hard_expire",
+        "warn_only",
+        "immutable"
+      ]
     },
-    "captured_by": { "type": "string" },
-    "captured_snapshot_id": { "$ref": "_defs/primitives.schema.json#/$defs/ulid" },
-    "size": { "type": "integer" },
-    "mime_type": { "type": "string" }
+    "captured_by": {
+      "type": "string"
+    },
+    "captured_snapshot_id": {
+      "$ref": "_defs/primitives.schema.json#/$defs/ulid"
+    },
+    "size": {
+      "type": "integer"
+    },
+    "mime_type": {
+      "type": "string"
+    }
   },
   "x-assertions": [
     "digest is required when kind in {file, commit, pr}."
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "file",
+              "commit",
+              "pr"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "digest"
+        ]
+      }
+    }
   ]
 }

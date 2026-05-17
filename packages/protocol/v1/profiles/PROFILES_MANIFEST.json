@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "profiles": {
-    "assessor.base@1.0.0": "sha256:e0c81d008debcdb2d1efb3dc8c06fe61de12d202c6243dfeec16095014b5ac54",
+    "assessor.base@1.0.0": "sha256:b6c3931914ad88a7b180e1455344c660acd857a5ed02a8770e3e60d1172b2849",
     "assessor.docs@1.0.0": "sha256:991cd4bdce3bd7e8e412a1fd29f5b95c5253ba5981c5c25f9ea8a47a1186a118",
     "assessor.frontend@1.0.0": "sha256:97f32a9bab85007fda34ce07c54684309cebff0697331a294da9b39fdf59c893",
     "assessor.growth@1.0.0": "sha256:0034299337346d3538bb9fa843681a3343d47cfd6f04133f025c943eb173dbdd",

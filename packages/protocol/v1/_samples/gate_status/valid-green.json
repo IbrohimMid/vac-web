@@ -15,7 +15,8 @@
         "observed_at": "2026-04-24T10:00:00Z",
         "fresh_until": "2026-04-25T10:00:00Z",
         "staleness_policy": "warn_only",
-        "captured_by": "gate.evaluator"
+        "captured_by": "gate.evaluator",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       },
       "checked_at": "2026-04-24T10:00:00Z"
     }

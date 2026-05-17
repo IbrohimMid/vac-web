@@ -1,0 +1,15 @@
+{
+  "id": "01J0000000000000000000EV01",
+  "kind": "file",
+  "uri": "file:///repo/src/auth/login.ts",
+  "locator": {
+    "line_range": [
+      42,
+      68
+    ]
+  },
+  "observed_at": "2026-04-24T10:00:00Z",
+  "fresh_until": "2030-01-01T00:00:00Z",
+  "staleness_policy": "immutable",
+  "captured_by": "agent:devops_readiness"
+}
