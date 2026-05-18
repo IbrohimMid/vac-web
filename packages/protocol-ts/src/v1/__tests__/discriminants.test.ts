@@ -89,7 +89,7 @@ describe('handoff and remediation surface shapes', () => {
     expect(Array.isArray(hp.tasks)).toBe(true);
     expect(hp.tasks.length).toBeGreaterThan(0);
     expect(hp.target).toBeTypeOf('object');
-    expect((hp.target as Record<string, unknown>)['kind']).toBe('dispatch_to_local_vac');
+    expect(hp.target.kind).toBe('dispatch_to_local_vac');
     expect(hp.state).toBe('draft');
   });
 
@@ -98,8 +98,9 @@ describe('handoff and remediation surface shapes', () => {
     expect(typeof plan.id).toBe('string');
     expect(Array.isArray(plan.groups)).toBe(true);
     expect(plan.groups.length).toBeGreaterThan(0);
-    const firstGroup = plan.groups[0] as Record<string, unknown>;
-    expect(Array.isArray(firstGroup['tasks'])).toBe(true);
+    const firstGroup = plan.groups[0];
+    expect(firstGroup).toBeDefined();
+    expect(Array.isArray(firstGroup?.tasks)).toBe(true);
   });
 
   it('EvidenceRef file fixture has observed_at + kind', () => {

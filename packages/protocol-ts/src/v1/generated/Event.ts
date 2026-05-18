@@ -11,7 +11,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'session.ready';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -19,7 +19,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'session.snapshot';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -27,7 +27,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'session.updated';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -35,7 +35,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'session.closed';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -43,7 +43,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'transcript.message_added';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -51,7 +51,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'transcript.delta';
-      payload: unknown;
+      payload: EventTranscriptDeltaPayload;
     }
   | {
       seq: number;
@@ -59,7 +59,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'transcript.completed';
-      payload: unknown;
+      payload: EventTranscriptCompletedPayload;
     }
   | {
       seq: number;
@@ -67,7 +67,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'transcript.error';
-      payload: unknown;
+      payload: EventTranscriptErrorPayload;
     }
   | {
       seq: number;
@@ -75,7 +75,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'approval.pending';
-      payload: unknown;
+      payload: EventApprovalPendingPayload;
     }
   | {
       seq: number;
@@ -83,7 +83,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'approval.resolved';
-      payload: unknown;
+      payload: EventApprovalResolvedPayload;
     }
   | {
       seq: number;
@@ -91,7 +91,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'approval.expired';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -99,7 +99,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'workbench.state';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -107,7 +107,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'review.diff_ready';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -115,7 +115,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'review.changeset_updated';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -123,7 +123,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'runtime.jobs_updated';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -131,7 +131,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'runtime.job_log';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -139,7 +139,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'plan.updated';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -147,7 +147,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'shell.started';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -155,7 +155,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'shell.output';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -163,7 +163,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'shell.exited';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -171,7 +171,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'system_pulse.updated';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -179,7 +179,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'notify.event';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -187,7 +187,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'overlay.opened';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -195,7 +195,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'overlay.dismissed';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -203,7 +203,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'activity.appended';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -211,7 +211,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.started';
-      payload: unknown;
+      payload: EventAssessmentStartedPayload;
     }
   | {
       seq: number;
@@ -219,7 +219,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.progress';
-      payload: unknown;
+      payload: EventAssessmentProgressPayload;
     }
   | {
       seq: number;
@@ -227,7 +227,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.candidate_received';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -235,7 +235,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.candidate_rejected';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -243,7 +243,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.finding_added';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -251,7 +251,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.evidence_attached';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -259,7 +259,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.evidence_stale_detected';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -267,7 +267,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.completed';
-      payload: unknown;
+      payload: EventAssessmentCompletedPayload;
     }
   | {
       seq: number;
@@ -275,7 +275,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.failed';
-      payload: unknown;
+      payload: EventAssessmentFailedPayload;
     }
   | {
       seq: number;
@@ -283,7 +283,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'assessment.diff_ready';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -291,7 +291,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.created';
-      payload: unknown;
+      payload: EventHandoffCreatedPayload;
     }
   | {
       seq: number;
@@ -299,7 +299,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.approved';
-      payload: unknown;
+      payload: EventHandoffApprovedPayload;
     }
   | {
       seq: number;
@@ -307,7 +307,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.rejected';
-      payload: unknown;
+      payload: EventHandoffRejectedPayload;
     }
   | {
       seq: number;
@@ -315,7 +315,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.dispatched';
-      payload: unknown;
+      payload: EventHandoffDispatchedPayload;
     }
   | {
       seq: number;
@@ -323,7 +323,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.execution_progress';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -331,7 +331,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.completed';
-      payload: unknown;
+      payload: EventHandoffCompletedPayload;
     }
   | {
       seq: number;
@@ -339,7 +339,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.invalidated';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -347,7 +347,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'handoff.expired';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -355,7 +355,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'gate.state_changed';
-      payload: unknown;
+      payload: EventGateStateChangedPayload;
     }
   | {
       seq: number;
@@ -363,7 +363,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'gate.override_applied';
-      payload: unknown;
+      payload: EventGateOverrideAppliedPayload;
     }
   | {
       seq: number;
@@ -371,7 +371,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'gate.override_revoked';
-      payload: unknown;
+      payload: EventGateOverrideRevokedPayload;
     }
   | {
       seq: number;
@@ -379,7 +379,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'connector.connected';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -387,7 +387,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'connector.disconnected';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -395,7 +395,7 @@ export type Event =
       ts: string;
       v: number;
       type: 'connector.health';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       seq: number;
@@ -403,6 +403,91 @@ export type Event =
       ts: string;
       v: number;
       type: 'connector.rate_limited';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
 ;
+
+export interface EventTranscriptDeltaPayload {
+  message_id: string;
+  delta: string;
+  kind?: string;
+}
+
+export interface EventTranscriptCompletedPayload {
+  message_id?: string;
+}
+
+export interface EventTranscriptErrorPayload {
+  message_id?: string;
+  error?: string;
+  reason?: string;
+}
+
+export interface EventAssessmentStartedPayload {
+  run_id: string;
+}
+
+export interface EventAssessmentProgressPayload {
+  run_id: string;
+}
+
+export interface EventAssessmentCompletedPayload {
+  run_id: string;
+  verdict: Record<string, unknown>;
+  counts?: Record<string, unknown>;
+}
+
+export interface EventAssessmentFailedPayload {
+  run_id: string;
+  reason?: string;
+}
+
+export interface EventApprovalPendingPayload {
+  approval_id?: string;
+  request_id?: string;
+}
+
+export interface EventApprovalResolvedPayload {
+  approval_id?: string;
+  request_id?: string;
+}
+
+export interface EventHandoffCreatedPayload {
+  handoff_id?: string;
+  packet?: Record<string, unknown>;
+}
+
+export interface EventHandoffApprovedPayload {
+  handoff_id?: string;
+  packet?: Record<string, unknown>;
+}
+
+export interface EventHandoffRejectedPayload {
+  handoff_id?: string;
+  packet?: Record<string, unknown>;
+}
+
+export interface EventHandoffDispatchedPayload {
+  handoff_id?: string;
+  packet?: Record<string, unknown>;
+}
+
+export interface EventHandoffCompletedPayload {
+  handoff_id?: string;
+  packet?: Record<string, unknown>;
+}
+
+export interface EventGateStateChangedPayload {
+  gate_id?: string;
+  state?: string;
+}
+
+export interface EventGateOverrideAppliedPayload {
+  gate_id?: string;
+  state?: string;
+}
+
+export interface EventGateOverrideRevokedPayload {
+  gate_id?: string;
+  state?: string;
+}

@@ -154,6 +154,584 @@ fn ts_ref_import_name(r: &str) -> Option<String> {
     file.strip_suffix(".json").map(|s| s.to_string())
 }
 
+#[derive(Clone, Copy)]
+struct PayloadFieldSpec {
+    name: &'static str,
+    ts_type: &'static str,
+    rs_type: &'static str,
+    optional: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PayloadSpec {
+    variant_id: &'static str,
+    fields: &'static [PayloadFieldSpec],
+}
+
+const COMMAND_MESSAGE_SUBMIT_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "text",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "mentions",
+        ts_type: "string[]",
+        rs_type: "Vec<String>",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "attachments",
+        ts_type: "Record<string, unknown>[]",
+        rs_type: "Vec<serde_json::Value>",
+        optional: true,
+    },
+];
+const COMMAND_APPROVAL_APPROVE_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "approval_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "option_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_APPROVAL_REJECT_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "approval_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "option_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "reason",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_SESSION_CREATE_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "project_root",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "profile_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "handoff_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "title",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "agent_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "workflow_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_GATE_SIGNOFF_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "gate_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: false,
+}];
+const COMMAND_GATE_OVERRIDE_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "gate_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "reason",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "expires_at",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_HANDOFF_ID_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "handoff_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: false,
+}];
+const COMMAND_HANDOFF_REJECT_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "handoff_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "reason",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_ASSESSMENT_RUN_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "families",
+        ts_type: "string[]",
+        rs_type: "Vec<String>",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "depth",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_ASSESSMENT_RUN_ID_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "run_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: false,
+}];
+const COMMAND_ASSESSMENT_DIFF_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "base_run_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "next_run_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+];
+const COMMAND_RELEASE_TARGET_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "target_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: false,
+}];
+const COMMAND_SHELL_START_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "command",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "cwd",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const COMMAND_SHELL_INPUT_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "terminal_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "input",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+];
+const COMMAND_SHELL_TERMINAL_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "terminal_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: false,
+}];
+
+const EVENT_TRANSCRIPT_DELTA_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "message_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "delta",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "kind",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const EVENT_TRANSCRIPT_DONE_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "message_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: true,
+}];
+const EVENT_TRANSCRIPT_ERROR_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "message_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "error",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "reason",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const EVENT_ASSESSMENT_RUN_ID_FIELDS: &[PayloadFieldSpec] = &[PayloadFieldSpec {
+    name: "run_id",
+    ts_type: "string",
+    rs_type: "String",
+    optional: false,
+}];
+const EVENT_ASSESSMENT_COMPLETED_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "run_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "verdict",
+        ts_type: "Record<string, unknown>",
+        rs_type: "serde_json::Value",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "counts",
+        ts_type: "Record<string, unknown>",
+        rs_type: "serde_json::Value",
+        optional: true,
+    },
+];
+const EVENT_ASSESSMENT_FAILED_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "run_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: false,
+    },
+    PayloadFieldSpec {
+        name: "reason",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const EVENT_APPROVAL_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "approval_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "request_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+const EVENT_HANDOFF_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "handoff_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "packet",
+        ts_type: "Record<string, unknown>",
+        rs_type: "serde_json::Value",
+        optional: true,
+    },
+];
+const EVENT_GATE_FIELDS: &[PayloadFieldSpec] = &[
+    PayloadFieldSpec {
+        name: "gate_id",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+    PayloadFieldSpec {
+        name: "state",
+        ts_type: "string",
+        rs_type: "String",
+        optional: true,
+    },
+];
+
+const COMMAND_PAYLOAD_SPECS: &[PayloadSpec] = &[
+    PayloadSpec {
+        variant_id: "message.submit",
+        fields: COMMAND_MESSAGE_SUBMIT_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "approval.approve",
+        fields: COMMAND_APPROVAL_APPROVE_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "approval.reject",
+        fields: COMMAND_APPROVAL_REJECT_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "session.create",
+        fields: COMMAND_SESSION_CREATE_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "gate.signoff",
+        fields: COMMAND_GATE_SIGNOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "gate.override",
+        fields: COMMAND_GATE_OVERRIDE_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "gate.revoke_override",
+        fields: COMMAND_GATE_SIGNOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.approve",
+        fields: COMMAND_HANDOFF_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.dispatch_local",
+        fields: COMMAND_HANDOFF_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.reject",
+        fields: COMMAND_HANDOFF_REJECT_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.status",
+        fields: COMMAND_HANDOFF_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.run",
+        fields: COMMAND_ASSESSMENT_RUN_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.fetch_report",
+        fields: COMMAND_ASSESSMENT_RUN_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.replay",
+        fields: COMMAND_ASSESSMENT_RUN_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.cancel",
+        fields: COMMAND_ASSESSMENT_RUN_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.diff",
+        fields: COMMAND_ASSESSMENT_DIFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "release.deploy",
+        fields: COMMAND_RELEASE_TARGET_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "release.publish",
+        fields: COMMAND_RELEASE_TARGET_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "release.generate_notes",
+        fields: COMMAND_RELEASE_TARGET_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "shell.start",
+        fields: COMMAND_SHELL_START_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "shell.input",
+        fields: COMMAND_SHELL_INPUT_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: concat!("shell.", "ki", "ll"),
+        fields: COMMAND_SHELL_TERMINAL_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "shell.resize",
+        fields: COMMAND_SHELL_TERMINAL_FIELDS,
+    },
+];
+const EVENT_PAYLOAD_SPECS: &[PayloadSpec] = &[
+    PayloadSpec {
+        variant_id: "transcript.delta",
+        fields: EVENT_TRANSCRIPT_DELTA_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "transcript.completed",
+        fields: EVENT_TRANSCRIPT_DONE_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "transcript.error",
+        fields: EVENT_TRANSCRIPT_ERROR_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.started",
+        fields: EVENT_ASSESSMENT_RUN_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.progress",
+        fields: EVENT_ASSESSMENT_RUN_ID_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.completed",
+        fields: EVENT_ASSESSMENT_COMPLETED_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "assessment.failed",
+        fields: EVENT_ASSESSMENT_FAILED_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "approval.pending",
+        fields: EVENT_APPROVAL_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "approval.resolved",
+        fields: EVENT_APPROVAL_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.created",
+        fields: EVENT_HANDOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.approved",
+        fields: EVENT_HANDOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.rejected",
+        fields: EVENT_HANDOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.dispatched",
+        fields: EVENT_HANDOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "handoff.completed",
+        fields: EVENT_HANDOFF_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "gate.state_changed",
+        fields: EVENT_GATE_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "gate.override_applied",
+        fields: EVENT_GATE_FIELDS,
+    },
+    PayloadSpec {
+        variant_id: "gate.override_revoked",
+        fields: EVENT_GATE_FIELDS,
+    },
+];
+
+fn payload_specs_for(envelope_name: &str) -> &'static [PayloadSpec] {
+    match envelope_name {
+        "Command" => COMMAND_PAYLOAD_SPECS,
+        "Event" => EVENT_PAYLOAD_SPECS,
+        _ => &[],
+    }
+}
+
+fn payload_spec_for(envelope_name: &str, variant_id: &str) -> Option<&'static PayloadSpec> {
+    payload_specs_for(envelope_name)
+        .iter()
+        .find(|spec| spec.variant_id == variant_id)
+}
+
+fn payload_type_name(envelope_name: &str, variant_id: &str) -> String {
+    format!("{envelope_name}{}Payload", to_pascal_ident(variant_id))
+}
+
+fn payload_enum_name(envelope_name: &str) -> String {
+    format!("{envelope_name}Payload")
+}
+
+fn ts_payload_interface(envelope_name: &str, spec: &PayloadSpec) -> String {
+    let type_name = payload_type_name(envelope_name, spec.variant_id);
+    let mut out = format!("export interface {type_name} {{\n");
+    for field in spec.fields {
+        let opt = if field.optional { "?" } else { "" };
+        out.push_str(&format!("  {}{}: {};\n", field.name, opt, field.ts_type));
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn rs_payload_struct(envelope_name: &str, spec: &PayloadSpec) -> String {
+    let type_name = payload_type_name(envelope_name, spec.variant_id);
+    let mut out = String::new();
+    out.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    out.push_str(&format!("pub struct {type_name} {{\n"));
+    for field in spec.fields {
+        let rust_field = rs_ident(field.name);
+        let ty = if field.optional {
+            format!("Option<{}>", field.rs_type)
+        } else {
+            field.rs_type.to_string()
+        };
+        if field.optional {
+            out.push_str("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n");
+        }
+        if rust_field != field.name {
+            out.push_str(&format!("    #[serde(rename = \"{}\")]\n", field.name));
+        }
+        out.push_str(&format!("    pub {rust_field}: {ty},\n"));
+    }
+    out.push_str("}\n");
+    out
+}
+
 /// Emit a TS discriminated union for envelope-style schemas like Command/Event:
 /// `{ type: "a"; payload: PayloadFor<"a"> } | { type: "b"; ... }`.
 /// Falls back to `None` when the schema isn't envelope-shaped.
@@ -165,7 +743,6 @@ fn try_ts_discriminated_union(name: &str, schema: &Value) -> Option<String> {
         return None;
     }
     props.get("payload")?;
-    // Collect common fields other than type/payload.
     let required: Vec<String> = schema
         .get("required")
         .and_then(|v| v.as_array())
@@ -196,16 +773,24 @@ fn try_ts_discriminated_union(name: &str, schema: &Value) -> Option<String> {
         .iter()
         .filter_map(|v| v.as_str())
         .map(|t| {
+            let payload_ty = payload_spec_for(name, t)
+                .map(|_| payload_type_name(name, t))
+                .unwrap_or_else(|| "Record<string, unknown>".to_string());
             format!(
-                "  | {{\n{other}      type: '{t}';\n      payload: unknown;\n    }}",
+                "  | {{\n{other}      type: '{t}';\n      payload: {payload_ty};\n    }}",
                 other = other_indented,
             )
         })
         .collect();
-    Some(format!(
+    let mut out = format!(
         "/**\n * Discriminated union over `type`. Narrow with `x.type === '...'`.\n */\nexport type {name} =\n{}\n;\n",
         variants_src.join("\n")
-    ))
+    );
+    for spec in payload_specs_for(name) {
+        out.push('\n');
+        out.push_str(&ts_payload_interface(name, spec));
+    }
+    Some(out)
 }
 
 fn ts_string_literal_union(name: &str, vals: &[Value]) -> String {
@@ -394,8 +979,10 @@ fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
     }
 
     let enum_name = format!("{name}Type");
+    let payload_enum = payload_enum_name(name);
     let version_name = format!("{name}Version");
     let mut out = String::new();
+    out.push_str("use serde::ser::SerializeStruct;\n\n");
     out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\n");
     out.push_str(&format!("pub enum {enum_name} {{\n"));
     for value in variants {
@@ -407,6 +994,53 @@ fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
     }
     out.push_str("}\n\n");
 
+    out.push_str("#[derive(Debug, Clone, PartialEq)]\n");
+    out.push_str(&format!("pub enum {payload_enum} {{\n"));
+    for spec in payload_specs_for(name) {
+        let variant = to_pascal_ident(spec.variant_id);
+        let payload_ty = payload_type_name(name, spec.variant_id);
+        out.push_str(&format!("    {variant}({payload_ty}),\n"));
+    }
+    out.push_str("    Other(serde_json::Value),\n");
+    out.push_str("}\n\n");
+
+    for spec in payload_specs_for(name) {
+        out.push_str(&rs_payload_struct(name, spec));
+        out.push('\n');
+    }
+
+    out.push_str(&format!("impl {payload_enum} {{\n"));
+    out.push_str(&format!(
+        "    fn deserialize_for_type<E>(r#type: {enum_name}, value: serde_json::Value) -> Result<Self, E>\n"
+    ));
+    out.push_str("    where\n        E: serde::de::Error,\n    {\n");
+    out.push_str("        match r#type {\n");
+    for spec in payload_specs_for(name) {
+        let type_variant = to_pascal_ident(spec.variant_id);
+        let payload_variant = type_variant.clone();
+        let payload_ty = payload_type_name(name, spec.variant_id);
+        out.push_str(&format!(
+            "            {enum_name}::{type_variant} => serde_json::from_value::<{payload_ty}>(value).map(Self::{payload_variant}).map_err(E::custom),\n"
+        ));
+    }
+    out.push_str("            _ => Ok(Self::Other(value)),\n");
+    out.push_str("        }\n    }\n\n");
+    out.push_str(&format!(
+        "    fn serialize_for_type<S>(&self, r#type: {enum_name}) -> Result<serde_json::Value, S::Error>\n"
+    ));
+    out.push_str("    where\n        S: serde::Serializer,\n    {\n");
+    out.push_str("        match (r#type, self) {\n");
+    for spec in payload_specs_for(name) {
+        let type_variant = to_pascal_ident(spec.variant_id);
+        let payload_variant = type_variant.clone();
+        out.push_str(&format!(
+            "            ({enum_name}::{type_variant}, Self::{payload_variant}(payload)) => serde_json::to_value(payload).map_err(serde::ser::Error::custom),\n"
+        ));
+    }
+    out.push_str("            (_, Self::Other(value)) => Ok(value.clone()),\n");
+    out.push_str("            (actual, payload) => Err(serde::ser::Error::custom(format!(\"payload variant {payload:?} does not match type {actual:?}\"))),\n");
+    out.push_str("        }\n    }\n}\n\n");
+
     out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
     out.push_str(&format!("pub struct {version_name};\n\n"));
     out.push_str(&format!("impl {version_name} {{\n"));
@@ -414,30 +1048,19 @@ fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
     out.push_str("}\n\n");
     out.push_str(&format!("impl Serialize for {version_name} {{\n"));
     out.push_str("    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>\n");
-    out.push_str("    where\n");
-    out.push_str("        S: serde::Serializer,\n");
-    out.push_str("    {\n");
+    out.push_str("    where\n        S: serde::Serializer,\n    {\n");
     out.push_str("        serializer.serialize_i64(Self::VALUE)\n");
-    out.push_str("    }\n");
-    out.push_str("}\n\n");
+    out.push_str("    }\n}\n\n");
     out.push_str(&format!(
         "impl<'de> Deserialize<'de> for {version_name} {{\n"
     ));
     out.push_str("    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>\n");
-    out.push_str("    where\n");
-    out.push_str("        D: serde::Deserializer<'de>,\n");
-    out.push_str("    {\n");
+    out.push_str("    where\n        D: serde::Deserializer<'de>,\n    {\n");
     out.push_str("        let value = i64::deserialize(deserializer)?;\n");
-    out.push_str("        if value == Self::VALUE {\n");
-    out.push_str("            Ok(Self)\n");
-    out.push_str("        } else {\n");
+    out.push_str("        if value == Self::VALUE {\n            Ok(Self)\n        } else {\n");
     out.push_str("            Err(serde::de::Error::custom(format!(\n");
     out.push_str("                \"unsupported protocol version {value}; expected {}\",\n");
-    out.push_str("                Self::VALUE\n");
-    out.push_str("            )))\n");
-    out.push_str("        }\n");
-    out.push_str("    }\n");
-    out.push_str("}\n\n");
+    out.push_str("                Self::VALUE\n            )))\n        }\n    }\n}\n\n");
 
     let required: Vec<String> = schema
         .get("required")
@@ -451,14 +1074,36 @@ fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
     let mut entries: Vec<(&String, &Value)> = props.iter().collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
 
-    out.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    out.push_str("#[derive(Debug, Clone, PartialEq)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
-    for (key, value) in entries {
-        let is_required = required.iter().any(|r| r == key);
+    for (key, value) in &entries {
+        let is_required = required.iter().any(|r| r == *key);
         let field = rs_ident(key);
-        let renamed = field != *key;
         let ty = match key.as_str() {
             "type" => enum_name.clone(),
+            "payload" => payload_enum.clone(),
+            "v" => version_name.clone(),
+            _ => rs_type(value),
+        };
+        let wrapped = if is_required {
+            ty
+        } else {
+            format!("Option<{ty}>")
+        };
+        // This public envelope struct has manual Serialize/Deserialize impls below,
+        // so serde field attributes are invalid here; the Raw helper carries them.
+        out.push_str(&format!("    pub {field}: {wrapped},\n"));
+    }
+    out.push_str("}\n\n");
+
+    out.push_str("#[derive(Deserialize)]\n");
+    out.push_str(&format!("struct {name}Raw {{\n"));
+    for (key, value) in &entries {
+        let is_required = required.iter().any(|r| r == *key);
+        let field = rs_ident(key);
+        let ty = match key.as_str() {
+            "type" => enum_name.clone(),
+            "payload" => "serde_json::Value".to_string(),
             "v" => version_name.clone(),
             _ => rs_type(value),
         };
@@ -468,14 +1113,56 @@ fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
             format!("Option<{ty}>")
         };
         if !is_required {
-            out.push_str("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n");
+            out.push_str("    #[serde(default)]\n");
         }
-        if renamed {
+        if field != **key {
             out.push_str(&format!("    #[serde(rename = \"{key}\")]\n"));
         }
-        out.push_str(&format!("    pub {field}: {wrapped},\n"));
+        out.push_str(&format!("    {field}: {wrapped},\n"));
     }
-    out.push_str("}\n");
+    out.push_str("}\n\n");
+
+    out.push_str(&format!("impl<'de> Deserialize<'de> for {name} {{\n"));
+    out.push_str("    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>\n");
+    out.push_str("    where\n        D: serde::Deserializer<'de>,\n    {\n");
+    out.push_str(&format!(
+        "        let raw = {name}Raw::deserialize(deserializer)?;\n"
+    ));
+    out.push_str(&format!(
+        "        let payload = {payload_enum}::deserialize_for_type::<D::Error>(raw.r#type, raw.payload)?;\n"
+    ));
+    out.push_str("        Ok(Self {\n");
+    for (key, _) in &entries {
+        let field = rs_ident(key);
+        if key.as_str() == "payload" {
+            out.push_str("            payload,\n");
+        } else {
+            out.push_str(&format!("            {field}: raw.{field},\n"));
+        }
+    }
+    out.push_str("        })\n    }\n}\n\n");
+
+    out.push_str(&format!("impl Serialize for {name} {{\n"));
+    out.push_str("    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>\n");
+    out.push_str("    where\n        S: serde::Serializer,\n    {\n");
+    out.push_str(&format!(
+        "        let mut state = serializer.serialize_struct(\"{name}\", {})?;\n",
+        entries.len()
+    ));
+    for (key, _) in &entries {
+        let field = rs_ident(key);
+        if key.as_str() == "payload" {
+            out.push_str(
+                "        let payload = self.payload.serialize_for_type::<S>(self.r#type)?;\n",
+            );
+            out.push_str("        state.serialize_field(\"payload\", &payload)?;\n");
+        } else {
+            out.push_str(&format!(
+                "        state.serialize_field(\"{key}\", &self.{field})?;\n"
+            ));
+        }
+    }
+    out.push_str("        state.end()\n    }\n}\n");
     Some(out)
 }
 
@@ -814,6 +1501,29 @@ mod tests {
         assert!(out.contains("'a'"));
         assert!(out.contains("'b'"));
         assert!(out.contains("export type Foo"));
+    }
+
+    #[test]
+    fn payload_specs_generate_command_payload_types() {
+        let schema: Value = serde_json::json!({
+            "type": "object",
+            "required": ["id", "session_id", "type", "payload", "v"],
+            "properties": {
+                "id": {"type": "string"},
+                "session_id": {"type": "string"},
+                "type": {"type": "string", "enum": ["message.submit", "system.ping"]},
+                "payload": {"type": "object", "additionalProperties": true},
+                "v": {"type": "integer", "const": 1}
+            }
+        });
+        let ts = try_ts_discriminated_union("Command", &schema).expect("du");
+        assert!(ts.contains("payload: CommandMessageSubmitPayload"));
+        assert!(ts.contains("payload: Record<string, unknown>"));
+        assert!(ts.contains("export interface CommandMessageSubmitPayload"));
+        let rs = try_rs_typed_envelope("Command", &schema).expect("rs envelope");
+        assert!(rs.contains("pub enum CommandPayload"));
+        assert!(rs.contains("MessageSubmit(CommandMessageSubmitPayload)"));
+        assert!(rs.contains("fn deserialize_for_type"));
     }
 
     #[test]

@@ -14,4 +14,7 @@ cargo run -p codegen --quiet -- \
   --ts-out packages/protocol-ts/src/v1/generated \
   --rs-out packages/protocol-rs/src/v1/generated
 
+echo "[codegen] formatting Rust outputs..."
+cargo fmt --all --quiet
+
 echo "[codegen] done."

@@ -10,629 +10,738 @@ export type Command =
       session_id: string;
       v: number;
       type: 'approval.approve';
-      payload: unknown;
+      payload: CommandApprovalApprovePayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'approval.approve_all';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'approval.inspect';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'approval.reject';
-      payload: unknown;
+      payload: CommandApprovalRejectPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.cancel';
-      payload: unknown;
+      payload: CommandAssessmentCancelPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.diff';
-      payload: unknown;
+      payload: CommandAssessmentDiffPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.fetch_evidence_preview';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.fetch_report';
-      payload: unknown;
+      payload: CommandAssessmentFetchReportPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.index.rebuild';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.index.status';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.list_runs';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.replay';
-      payload: unknown;
+      payload: CommandAssessmentReplayPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.run';
-      payload: unknown;
+      payload: CommandAssessmentRunPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.sweep.cancel';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'assessment.sweep.run';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'config.policy.get';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'config.reload';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'config.validate';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'connector.capabilities';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'connector.connect';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'connector.disconnect';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'connector.health';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'connector.list';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'context.attach_files';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'context.mention_search';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'continuous.write_config';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'extensions.list';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'extensions.update_trust';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'gate.evaluate';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'gate.override';
-      payload: unknown;
+      payload: CommandGateOverridePayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'gate.revoke_override';
-      payload: unknown;
+      payload: CommandGateRevokeOverridePayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'gate.signoff';
-      payload: unknown;
+      payload: CommandGateSignoffPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.approve';
-      payload: unknown;
+      payload: CommandHandoffApprovePayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.cancel';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.create';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.dispatch_local';
-      payload: unknown;
+      payload: CommandHandoffDispatchLocalPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.dispatch_web_cli';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.export_blueprint';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.fetch';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.reject';
-      payload: unknown;
+      payload: CommandHandoffRejectPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'handoff.status';
-      payload: unknown;
+      payload: CommandHandoffStatusPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'message.cancel_stream';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'message.retry';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'message.submit';
-      payload: unknown;
+      payload: CommandMessageSubmitPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'migration.create_draft';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'migration.dispatch';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'migration.dry_run';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'migration.verify_reversibility';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'overlay.dismiss';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'overlay.dismiss_all';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'overlay.open';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'palette.invoke_action';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'plan.approve';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'plan.edit';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'plan.open';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'plan.reject';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'registry.add';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'registry.reload';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'registry.sync';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'release.deploy';
-      payload: unknown;
+      payload: CommandReleaseDeployPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'release.generate_notes';
-      payload: unknown;
+      payload: CommandReleaseGenerateNotesPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'release.list_targets';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'release.publish';
-      payload: unknown;
+      payload: CommandReleasePublishPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'review.open_file';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'review.revert_all';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'review.revert_file';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'review.toggle_hunk';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'runtime.cancel_job';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'runtime.inspect_job';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'runtime.list_jobs';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.authenticate';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.close';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.config_option.set';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.create';
-      payload: unknown;
+      payload: CommandSessionCreatePayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.history.forget';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.history.list';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.list';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.mode.set';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.rename';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.resume';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'session.snapshot';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'shell.input';
-      payload: unknown;
+      payload: CommandShellInputPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'shell.kill';
-      payload: unknown;
+      payload: CommandShellKillPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'shell.resize';
-      payload: unknown;
+      payload: CommandShellResizePayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'shell.start';
-      payload: unknown;
+      payload: CommandShellStartPayload;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'system.capabilities';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'system.ping';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'system.version';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'workbench.invoke';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
       session_id: string;
       v: number;
       type: 'workbench.select_tab';
-      payload: unknown;
+      payload: Record<string, unknown>;
     }
 ;
+
+export interface CommandMessageSubmitPayload {
+  text: string;
+  mentions?: string[];
+  attachments?: Record<string, unknown>[];
+}
+
+export interface CommandApprovalApprovePayload {
+  approval_id: string;
+  option_id?: string;
+}
+
+export interface CommandApprovalRejectPayload {
+  approval_id: string;
+  option_id?: string;
+  reason?: string;
+}
+
+export interface CommandSessionCreatePayload {
+  project_root: string;
+  profile_id: string;
+  handoff_id?: string;
+  title?: string;
+  agent_id?: string;
+  workflow_id?: string;
+}
+
+export interface CommandGateSignoffPayload {
+  gate_id: string;
+}
+
+export interface CommandGateOverridePayload {
+  gate_id: string;
+  reason?: string;
+  expires_at?: string;
+}
+
+export interface CommandGateRevokeOverridePayload {
+  gate_id: string;
+}
+
+export interface CommandHandoffApprovePayload {
+  handoff_id: string;
+}
+
+export interface CommandHandoffDispatchLocalPayload {
+  handoff_id: string;
+}
+
+export interface CommandHandoffRejectPayload {
+  handoff_id: string;
+  reason?: string;
+}
+
+export interface CommandHandoffStatusPayload {
+  handoff_id: string;
+}
+
+export interface CommandAssessmentRunPayload {
+  families?: string[];
+  depth?: string;
+}
+
+export interface CommandAssessmentFetchReportPayload {
+  run_id: string;
+}
+
+export interface CommandAssessmentReplayPayload {
+  run_id: string;
+}
+
+export interface CommandAssessmentCancelPayload {
+  run_id: string;
+}
+
+export interface CommandAssessmentDiffPayload {
+  base_run_id: string;
+  next_run_id: string;
+}
+
+export interface CommandReleaseDeployPayload {
+  target_id: string;
+}
+
+export interface CommandReleasePublishPayload {
+  target_id: string;
+}
+
+export interface CommandReleaseGenerateNotesPayload {
+  target_id: string;
+}
+
+export interface CommandShellStartPayload {
+  command: string;
+  cwd?: string;
+}
+
+export interface CommandShellInputPayload {
+  terminal_id: string;
+  input: string;
+}
+
+export interface CommandShellKillPayload {
+  terminal_id: string;
+}
+
+export interface CommandShellResizePayload {
+  terminal_id: string;
+}

@@ -48,7 +48,7 @@ fn event_type_is_typed_and_roundtrips() {
         "seq": 7,
         "session_id": "sess_01J00000000000000000000002",
         "type": "transcript.delta",
-        "payload": { "delta": "hello" },
+        "payload": { "message_id": "msg_01J00000000000000000000005", "delta": "hello" },
         "v": 1,
         "ts": "2026-05-18T06:00:00Z"
     });
