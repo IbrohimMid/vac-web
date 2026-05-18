@@ -1,7 +1,8 @@
 //! Slice 32 (event-catalog parity): static-source check that every event id
-//! emitted by the bridge translator (via `emit_controller_event(_, "X", _)`)
-//! is present in the generated `EVENT_CATALOG` constant or in an explicit
-//! allowlist of ids we know are intentionally undeclared today.
+//! emitted by the local bridge (via `emit_controller_event(_, "X", _)` or
+//! direct `ServerEvent { event_type: "X".into(), .. }` literals) is present
+//! in the generated `EVENT_CATALOG` constant or in an explicit allowlist of
+//! ids we know are intentionally undeclared today.
 //!
 //! This intentionally scans *source files* on disk rather than runtime
 //! call sites because the bridge runtime is large and most emitters live
@@ -21,19 +22,24 @@ use std::path::PathBuf;
 
 use local_bridge::generated::event_catalog::EVENT_CATALOG;
 
-/// Source files inside `apps/local-bridge/src/` that the parity scan
-/// reads. Add to this list when a new translator/mock-engine module
-/// starts emitting controller events.
-const SOURCE_FILES: &[&str] = &["src/translator/assessment.rs", "src/translator/mod.rs"];
+/// Source subtree inside `apps/local-bridge/` that the parity scan reads.
+/// Keep this broad: direct `ServerEvent` literals now live outside translator
+/// modules too, and they must not bypass catalog ownership.
+const SOURCE_ROOT: &str = "src";
 
 /// Event ids that are emitted today but are not yet declared in
 /// `event-catalog.yaml`. This list is the explicit migration backlog;
 /// every entry here is a TODO to either promote into the catalog or
 /// remove the emitter. Keep it sorted alphabetically.
-// Slice 32: drained on 2026-05-03. Every emitted id is now in
+// Slice 32: drained on 2026-05-18. Every production emitted id is now in
 // `EVENT_CATALOG`; the allowlist stays as the migration-target shape
 // so future emit sites can be tracked here before promotion.
 const KNOWN_UNCATALOGED_EVENTS: &[&str] = &[];
+
+/// Qualified event ids that only appear inside test helper code and are not
+/// bridge protocol events. Keep this tiny and sorted; production emitters
+/// belong in `event-catalog.yaml`, not here.
+const TEST_ONLY_EVENTS: &[&str] = &["test.event"];
 
 fn workspace_local_bridge_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR is `apps/local-bridge` when this test is built
@@ -44,21 +50,48 @@ fn workspace_local_bridge_dir() -> PathBuf {
 
 fn collect_emitted_ids() -> HashSet<String> {
     let root = workspace_local_bridge_dir();
+    let source_root = root.join(SOURCE_ROOT);
     let mut ids = HashSet::new();
-    for rel in SOURCE_FILES {
-        let path = root.join(rel);
-        let content = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        extract_ids(&content, &mut ids);
-    }
+    collect_emitted_ids_from_dir(&source_root, &mut ids);
     ids
 }
 
-/// Extract every literal id from `emit_controller_event(.., "X", ..)`
-/// calls in the given source. Only literal string arguments are
-/// considered; dynamic ids (rare in practice) require a manual update
-/// to the allowlist.
+fn collect_emitted_ids_from_dir(dir: &std::path::Path, ids: &mut HashSet<String>) {
+    let entries = fs::read_dir(dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| panic!("failed to read dir entry: {err}"));
+        let path = entry.path();
+        let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        if file_name == "target" || file_name == "generated" {
+            continue;
+        }
+        if path.is_dir() {
+            collect_emitted_ids_from_dir(&path, ids);
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        extract_ids(&content, ids);
+    }
+}
+
+/// Extract every literal id from:
+///   * `emit_controller_event(.., "X", ..)` helper calls
+///   * direct `ServerEvent { event_type: "X".into(), .. }` literals
+///
+/// Only literal string arguments are considered; dynamic ids require a manual
+/// catalog entry or a narrow allowlist entry until static extraction can prove
+/// the exact emitted ids.
 fn extract_ids(source: &str, out: &mut HashSet<String>) {
+    extract_helper_call_ids(source, out);
+    extract_event_type_literal_ids(source, out);
+}
+
+fn extract_helper_call_ids(source: &str, out: &mut HashSet<String>) {
     let needle = "emit_controller_event";
     let mut cursor = 0;
     while let Some(rel) = source[cursor..].find(needle) {
@@ -91,14 +124,25 @@ fn extract_ids(source: &str, out: &mut HashSet<String>) {
             i += 1;
         }
         let Some(c) = comma_idx else { continue };
-        // After the comma, skip whitespace and look for an opening quote.
-        let mut j = c + 1;
+        if let Some((id, next)) = literal_after_comma(source, c) {
+            out.insert(id.to_string());
+            cursor = next;
+        }
+    }
+}
+
+fn extract_event_type_literal_ids(source: &str, out: &mut HashSet<String>) {
+    let needle = "event_type:";
+    let mut cursor = 0;
+    while let Some(rel) = source[cursor..].find(needle) {
+        let start = cursor + rel + needle.len();
+        cursor = start;
+        let bytes = source.as_bytes();
+        let mut j = start;
         while j < bytes.len() && bytes[j].is_ascii_whitespace() {
             j += 1;
         }
         if j >= bytes.len() || bytes[j] != b'"' {
-            // Non-literal id (e.g. a variable). Skip; the test cannot
-            // statically verify these.
             continue;
         }
         j += 1;
@@ -109,9 +153,31 @@ fn extract_ids(source: &str, out: &mut HashSet<String>) {
         if j >= bytes.len() {
             continue;
         }
-        let id = &source[lit_start..j];
-        out.insert(id.to_string());
+        out.insert(source[lit_start..j].to_string());
+        cursor = j + 1;
     }
+}
+
+fn literal_after_comma(source: &str, comma_idx: usize) -> Option<(&str, usize)> {
+    let bytes = source.as_bytes();
+    let mut j = comma_idx + 1;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j >= bytes.len() || bytes[j] != b'"' {
+        // Non-literal id (e.g. a variable). Skip; the test cannot
+        // statically verify these.
+        return None;
+    }
+    j += 1;
+    let lit_start = j;
+    while j < bytes.len() && bytes[j] != b'"' {
+        j += 1;
+    }
+    if j >= bytes.len() {
+        return None;
+    }
+    Some((&source[lit_start..j], j + 1))
 }
 
 #[test]
@@ -192,6 +258,7 @@ fn allowlist_is_sorted_and_unique() {
 fn every_emitted_id_is_known() {
     let catalog: HashSet<&str> = EVENT_CATALOG.iter().map(|e| e.id).collect();
     let allowlist: HashSet<&str> = KNOWN_UNCATALOGED_EVENTS.iter().copied().collect();
+    let test_only: HashSet<&str> = TEST_ONLY_EVENTS.iter().copied().collect();
     let emitted = collect_emitted_ids();
     // Only consider ids that look like `module.event`. Inner-event
     // strings like `"created"` or `"resume_failed"` are payload
@@ -210,7 +277,7 @@ fn every_emitted_id_is_known() {
     let mut unknown: Vec<&str> = qualified
         .iter()
         .copied()
-        .filter(|id| !catalog.contains(id) && !allowlist.contains(id))
+        .filter(|id| !catalog.contains(id) && !allowlist.contains(id) && !test_only.contains(id))
         .collect();
     unknown.sort();
     unknown.dedup();

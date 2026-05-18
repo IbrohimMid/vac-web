@@ -768,6 +768,187 @@ events:
     consumers:
       - PerfBadge
 
+
+  # ---- runtime/session stream parity ------------------------------------
+  - id: acp.debug_message
+    owner: bridge
+    status: implemented
+    producer: agent_runtime.acp.debug
+    consumers:
+      - domain.agentSession.handlers
+  - id: approval.pending
+    owner: bridge
+    status: implemented
+    producer: session.handle.approvals
+    consumers:
+      - domain.approvals.handlers
+      - WorkflowRail
+  - id: approval.resolved
+    owner: bridge
+    status: implemented
+    producer: session.handle.approvals
+    consumers:
+      - domain.approvals.handlers
+      - WorkflowRail
+  - id: notify.event
+    owner: bridge
+    status: implemented
+    producer: notify
+    consumers:
+      - domain.notify.handlers
+      - NotifyLane
+  - id: plan.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.plan
+    consumers:
+      - domain.agentSession.handlers
+  - id: runtime.job_log
+    owner: bridge
+    status: implemented
+    producer: session.handle.runtime_jobs
+    consumers:
+      - domain.runtime.handlers
+      - domain.toolActivity.handlers
+  - id: system.capabilities
+    owner: bridge
+    status: implemented
+    producer: translator.session_ready
+    consumers:
+      - domain.capabilities.handlers
+      - actions.registry
+  - id: system_pulse.updated
+    owner: bridge
+    status: implemented
+    producer: notify
+    consumers:
+      - capabilities.notifyAttention
+  - id: terminal.lifecycle
+    owner: bridge
+    status: implemented
+    producer: session.handle.terminal
+    consumers:
+      - capabilities.shellTerminal
+  - id: tool.diff.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.tool_activity
+    consumers:
+      - domain.toolActivity.handlers
+  - id: tool.terminal.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.tool_activity
+    consumers:
+      - domain.toolActivity.handlers
+  - id: transcript.completed
+    owner: bridge
+    status: implemented
+    producer: session.handle.transcript
+    consumers:
+      - domain.transcript.handlers
+  - id: transcript.delta
+    owner: bridge
+    status: implemented
+    producer: session.handle.transcript
+    consumers:
+      - domain.transcript.handlers
+      - domain.agentSession.handlers
+  - id: transcript.error
+    owner: bridge
+    status: implemented
+    producer: session.handle.transcript
+    consumers:
+      - domain.transcript.handlers
+  - id: transcript.thought_delta
+    owner: bridge
+    status: implemented
+    producer: session.handle.transcript
+    consumers:
+      - domain.transcript.handlers
+
+  # ---- session protocol/control stream ----------------------------------
+  - id: registry.added
+    owner: bridge
+    status: implemented
+    producer: translator.registry_add
+    consumers:
+      - capabilities.registryEvents
+      - RegistryPanel
+  - id: session.auth_failed
+    owner: bridge
+    status: implemented
+    producer: translator.session_auth
+    consumers:
+      - capabilities.sessionLifecycle
+      - NotifyLane
+  - id: session.auth_requested
+    owner: bridge
+    status: implemented
+    producer: translator.session_auth
+    consumers:
+      - capabilities.sessionLifecycle
+  - id: session.auth_updated
+    owner: bridge
+    status: implemented
+    producer: translator.session_auth
+    consumers:
+      - capabilities.sessionLifecycle
+  - id: session.available_commands.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.available_commands
+    consumers:
+      - domain.sessions.handlers
+      - CommandPalette
+  - id: session.config_options.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.config_options
+    consumers:
+      - domain.sessions.handlers
+      - ConfigPanel
+  - id: session.list_response
+    owner: bridge
+    status: implemented
+    producer: translator.session_list
+    consumers:
+      - SessionPicker
+      - domain.sessions.handlers
+  - id: session.mode.updated
+    owner: bridge
+    status: implemented
+    producer: session.handle.mode
+    consumers:
+      - domain.sessions.handlers
+  - id: session.ready
+    owner: bridge
+    status: implemented
+    producer: translator.session_ready
+    consumers:
+      - domain.sessions.handlers
+      - capabilities.sessionLifecycle
+
+  # ---- assessment lifecycle ---------------------------------------------
+  - id: assessment.completed
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.failed
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+  - id: assessment.started
+    owner: bridge
+    status: implemented
+    producer: translator.assessment
+    consumers:
+      - capabilities.assessmentIndex
+
   # ---- legacy / mock-only adapters --------------------------------------
   - id: changeset.updated
     owner: mock
