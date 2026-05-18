@@ -57,12 +57,15 @@ fn collect_emitted_ids() -> HashSet<String> {
 }
 
 fn collect_emitted_ids_from_dir(dir: &std::path::Path, ids: &mut HashSet<String>) {
-    let entries = fs::read_dir(dir)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()));
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()));
     for entry in entries {
         let entry = entry.unwrap_or_else(|err| panic!("failed to read dir entry: {err}"));
         let path = entry.path();
-        let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
         if file_name == "target" || file_name == "generated" {
             continue;
         }

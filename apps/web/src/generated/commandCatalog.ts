@@ -61,7 +61,6 @@ export type CommandId =
   | 'gate.override'
   | 'gate.revoke_override'
   | 'gate.signoff'
-  | 'gate.sync_mutation_audit'
   | 'handoff.approve'
   | 'handoff.cancel'
   | 'handoff.create'
@@ -180,7 +179,6 @@ export const COMMAND_CATALOG: ReadonlyArray<CommandEntry> = Object.freeze([
   Object.freeze({ id: 'gate.override', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.override', summary: "Persist an audit-logged gate override with expiry." }),
   Object.freeze({ id: 'gate.revoke_override', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.override', summary: "Revoke an active gate override." }),
   Object.freeze({ id: 'gate.signoff', status: 'implemented', scope: 'session', sideEffect: 'state', requiresProfileTool: 'gate.signoff', summary: "Record a gate sign-off and persist it." }),
-  Object.freeze({ id: 'gate.sync_mutation_audit', status: 'implemented', scope: 'session', sideEffect: 'state', summary: "Sync the MutationAuditClean gate state with the current blocking mutation count." }),
   Object.freeze({ id: 'handoff.approve', status: 'implemented', scope: 'session', sideEffect: 'state' }),
   Object.freeze({ id: 'handoff.cancel', status: 'not_wired', scope: 'session', sideEffect: 'state' }),
   Object.freeze({ id: 'handoff.create', status: 'implemented', scope: 'session', sideEffect: 'state' }),

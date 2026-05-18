@@ -311,6 +311,10 @@ fn ts_ref_to_name(r: &str) -> String {
 fn rs_for_schema(name: &str, schema: &Value) -> String {
     let mut out = String::new();
     out.push_str("use serde::{Deserialize, Serialize};\n\n");
+    if let Some(envelope) = try_rs_typed_envelope(name, schema) {
+        out.push_str(&envelope);
+        return out;
+    }
     if let Some(enum_vals) = schema.get("enum").and_then(|v| v.as_array()) {
         out.push_str(&rs_string_enum(name, enum_vals));
         return out;
@@ -337,6 +341,100 @@ fn rs_string_enum(name: &str, vals: &[Value]) -> String {
     }
     body.push_str("}\n");
     body
+}
+
+fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
+    let props = schema.get("properties")?.as_object()?;
+    let type_prop = props.get("type")?;
+    let variants = type_prop.get("enum")?.as_array()?;
+    if variants.is_empty() || !props.contains_key("payload") || !props.contains_key("v") {
+        return None;
+    }
+
+    let enum_name = format!("{name}Type");
+    let version_name = format!("{name}Version");
+    let mut out = String::new();
+    out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]\n");
+    out.push_str(&format!("pub enum {enum_name} {{\n"));
+    for value in variants {
+        let Some(id) = value.as_str() else { continue };
+        out.push_str(&format!(
+            "    #[serde(rename = \"{id}\")]\n    {},\n",
+            to_pascal_ident(id)
+        ));
+    }
+    out.push_str("}\n\n");
+
+    out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+    out.push_str(&format!("pub struct {version_name};\n\n"));
+    out.push_str(&format!("impl {version_name} {{\n"));
+    out.push_str("    pub const VALUE: i64 = 1;\n");
+    out.push_str("}\n\n");
+    out.push_str(&format!("impl Serialize for {version_name} {{\n"));
+    out.push_str("    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>\n");
+    out.push_str("    where\n");
+    out.push_str("        S: serde::Serializer,\n");
+    out.push_str("    {\n");
+    out.push_str("        serializer.serialize_i64(Self::VALUE)\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+    out.push_str(&format!(
+        "impl<'de> Deserialize<'de> for {version_name} {{\n"
+    ));
+    out.push_str("    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>\n");
+    out.push_str("    where\n");
+    out.push_str("        D: serde::Deserializer<'de>,\n");
+    out.push_str("    {\n");
+    out.push_str("        let value = i64::deserialize(deserializer)?;\n");
+    out.push_str("        if value == Self::VALUE {\n");
+    out.push_str("            Ok(Self)\n");
+    out.push_str("        } else {\n");
+    out.push_str("            Err(serde::de::Error::custom(format!(\n");
+    out.push_str("                \"unsupported protocol version {value}; expected {}\",\n");
+    out.push_str("                Self::VALUE\n");
+    out.push_str("            )))\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    let required: Vec<String> = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut entries: Vec<(&String, &Value)> = props.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    out.push_str("#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n");
+    out.push_str(&format!("pub struct {name} {{\n"));
+    for (key, value) in entries {
+        let is_required = required.iter().any(|r| r == key);
+        let field = rs_ident(key);
+        let renamed = field != *key;
+        let ty = match key.as_str() {
+            "type" => enum_name.clone(),
+            "v" => version_name.clone(),
+            _ => rs_type(value),
+        };
+        let wrapped = if is_required {
+            ty
+        } else {
+            format!("Option<{ty}>")
+        };
+        if !is_required {
+            out.push_str("    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n");
+        }
+        if renamed {
+            out.push_str(&format!("    #[serde(rename = \"{key}\")]\n"));
+        }
+        out.push_str(&format!("    pub {field}: {wrapped},\n"));
+    }
+    out.push_str("}\n");
+    Some(out)
 }
 
 fn rs_struct(name: &str, schema: &Value) -> String {
