@@ -125,7 +125,12 @@ pub fn build_session_gate_state(
 
 pub fn required_gate_ids_for_environment(environment: &str) -> Vec<&'static str> {
     match environment {
-        "staging" => vec!["DevComplete", "ReadyToDeploy", "ReadyForStaging", "MutationAuditClean"],
+        "staging" => vec![
+            "DevComplete",
+            "ReadyToDeploy",
+            "ReadyForStaging",
+            "MutationAuditClean",
+        ],
         _ => vec!["DevComplete", "ReadyToDeploy", "MutationAuditClean"],
     }
 }
@@ -426,6 +431,21 @@ fn ok_ack(cmd: &ClientCommand) -> (ServerAck, Vec<ServerEvent>) {
     )
 }
 
+fn require_gate_actor(
+    cmd: &ClientCommand,
+    principal: Option<&str>,
+    command: &'static str,
+) -> Result<String, (ServerAck, Vec<ServerEvent>)> {
+    match principal.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(actor) => Ok(actor.to_string()),
+        None => Err(error_ack(
+            cmd,
+            "gate.signer_required",
+            format!("{command} requires an authenticated principal"),
+        )),
+    }
+}
+
 fn gate_snapshot_event(session_id: String, snapshot: &GateSnapshot) -> ServerEvent {
     ServerEvent {
         seq: 0,
@@ -534,15 +554,9 @@ pub async fn handle_signoff(
     // (auth-required + no anonymous fallback) we reject the signoff
     // with a dedicated code so the cockpit can surface a reauth
     // affordance instead of silently degrading to anonymous.
-    let signer = match principal.as_ref() {
-        Some(p) if !p.trim().is_empty() => p.clone(),
-        _ => {
-            return error_ack(
-                cmd,
-                "gate.signer_required",
-                "gate.signoff requires an authenticated principal",
-            );
-        }
+    let signer = match require_gate_actor(cmd, principal.as_deref(), "gate.signoff") {
+        Ok(actor) => actor,
+        Err(ack) => return ack,
     };
     let snapshot = {
         let mut guard = match handle.gate_state.lock() {
@@ -601,6 +615,10 @@ pub async fn handle_override(
     if gate_id.is_empty() {
         return error_ack(cmd, "gate.not_found", "gate id is required");
     }
+    let actor = match require_gate_actor(cmd, principal.as_deref(), "gate.override") {
+        Ok(actor) => actor,
+        Err(ack) => return ack,
+    };
     let reason = cmd
         .payload
         .get("reason")
@@ -640,7 +658,6 @@ pub async fn handle_override(
         touch_gate(snapshot);
         snapshot.clone()
     };
-    let actor = principal.as_deref().unwrap_or("anonymous").to_string();
     log_tool_event(
         state,
         &cmd.session_id,
@@ -680,6 +697,10 @@ pub async fn handle_revoke_override(
     if gate_id.is_empty() {
         return error_ack(cmd, "gate.not_found", "gate id is required");
     }
+    let actor = match require_gate_actor(cmd, principal.as_deref(), "gate.revoke_override") {
+        Ok(actor) => actor,
+        Err(ack) => return ack,
+    };
     let snapshot = {
         let mut guard = match handle.gate_state.lock() {
             Ok(g) => g,
@@ -696,7 +717,6 @@ pub async fn handle_revoke_override(
         touch_gate(snapshot);
         snapshot.clone()
     };
-    let actor = principal.as_deref().unwrap_or("anonymous").to_string();
     log_tool_event(
         state,
         &cmd.session_id,
@@ -778,8 +798,9 @@ pub async fn handle_sync_mutation_audit(
             snap.state = "open".into();
             let s = if blocking_count == 1 { "" } else { "s" };
             snap.summary = format!("{blocking_count} blocking mutation{s} pending review");
-            snap.blockers =
-                vec![format!("Awaiting review of {blocking_count} blocking mutation{s}")];
+            snap.blockers = vec![format!(
+                "Awaiting review of {blocking_count} blocking mutation{s}"
+            )];
             snap.criteria = vec![GateCriterion {
                 id: "no_blocking_mutations".into(),
                 label: "No blocking mutations".into(),
@@ -809,6 +830,37 @@ pub async fn handle_sync_mutation_audit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_cmd(command: &str) -> ClientCommand {
+        ClientCommand {
+            id: format!("cmd-{command}"),
+            session_id: "sess-test".into(),
+            cmd_type: command.into(),
+            payload: json!({}),
+            v: 1,
+        }
+    }
+
+    #[test]
+    fn gate_override_requires_authenticated_principal() {
+        let cmd = test_cmd("gate.override");
+        let (ack, _) = require_gate_actor(&cmd, None, "gate.override").unwrap_err();
+        assert!(!ack.ok);
+        assert_eq!(ack.error.unwrap().code, "gate.signer_required");
+
+        let (ack, _) = require_gate_actor(&cmd, Some("   "), "gate.override").unwrap_err();
+        assert!(!ack.ok);
+        assert_eq!(ack.error.unwrap().code, "gate.signer_required");
+    }
+
+    #[test]
+    fn gate_revoke_override_uses_authenticated_principal() {
+        let cmd = test_cmd("gate.revoke_override");
+        assert_eq!(
+            require_gate_actor(&cmd, Some("device:abc"), "gate.revoke_override").unwrap(),
+            "device:abc"
+        );
+    }
 
     #[test]
     fn missing_gate_ids_treats_expired_override_as_not_ready() {
