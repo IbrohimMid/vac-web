@@ -133,6 +133,13 @@ fn collect_ts_refs(value: &Value, refs: &mut BTreeSet<String>) {
             collect_ts_refs(items, refs);
         }
     }
+    if matches!(value.get("type").and_then(|v| v.as_str()), Some("object")) {
+        if let Some(props) = value.get("properties").and_then(|v| v.as_object()) {
+            for child in props.values() {
+                collect_ts_refs(child, refs);
+            }
+        }
+    }
 }
 
 fn ts_ref_import_name(r: &str) -> Option<String> {
@@ -211,6 +218,18 @@ fn ts_string_literal_union(name: &str, vals: &[Value]) -> String {
 }
 
 fn ts_object(name: &str, schema: &Value) -> String {
+    let mut nested = Vec::new();
+    let root = ts_object_named(name, schema, &mut nested);
+    let mut out = String::new();
+    out.push_str(&root);
+    for item in nested {
+        out.push('\n');
+        out.push_str(&item);
+    }
+    out
+}
+
+fn ts_object_named(name: &str, schema: &Value, nested: &mut Vec<String>) -> String {
     let required: Vec<String> = schema
         .get("required")
         .and_then(|v| v.as_array())
@@ -228,7 +247,7 @@ fn ts_object(name: &str, schema: &Value) -> String {
         entries.sort_by(|a, b| a.0.cmp(b.0));
         for (k, v) in entries {
             let is_required = required.iter().any(|r| r == k);
-            let ty = ts_type(v);
+            let ty = ts_type_named(v, name, k, nested);
             let opt = if is_required { "" } else { "?" };
             body.push_str(&format!("  {k}{opt}: {ty};\n"));
         }
@@ -239,7 +258,7 @@ fn ts_object(name: &str, schema: &Value) -> String {
     body
 }
 
-fn ts_type(v: &Value) -> String {
+fn ts_type_named(v: &Value, parent: &str, field: &str, nested: &mut Vec<String>) -> String {
     if let Some(enm) = v.get("enum").and_then(|x| x.as_array()) {
         return enm
             .iter()
@@ -257,11 +276,29 @@ fn ts_type(v: &Value) -> String {
             "integer" | "number" => "number".into(),
             "boolean" => "boolean".into(),
             "array" => {
-                let items = v.get("items");
-                let inner = items.map(ts_type).unwrap_or_else(|| "unknown".into());
-                format!("{inner}[]")
+                let Some(items) = v.get("items") else {
+                    return "unknown[]".into();
+                };
+                if is_closed_object_schema(items) {
+                    let item_name = nested_type_name(parent, field, true);
+                    let item_src = ts_object_named(&item_name, items, nested);
+                    nested.push(item_src);
+                    format!("{item_name}[]")
+                } else {
+                    let inner = ts_type_named(items, parent, field, nested);
+                    format!("{inner}[]")
+                }
             }
-            "object" => "Record<string, unknown>".into(),
+            "object" => {
+                if is_closed_object_schema(v) {
+                    let child_name = nested_type_name(parent, field, false);
+                    let child_src = ts_object_named(&child_name, v, nested);
+                    nested.push(child_src);
+                    child_name
+                } else {
+                    "Record<string, unknown>".into()
+                }
+            }
             "null" => "null".into(),
             _ => "unknown".into(),
         },
@@ -281,6 +318,11 @@ fn ts_type(v: &Value) -> String {
         }
         _ => "unknown".into(),
     }
+}
+
+fn ts_type(v: &Value) -> String {
+    let mut nested = Vec::new();
+    ts_type_named(v, "Inline", "value", &mut nested)
 }
 
 fn ts_ref_to_name(r: &str) -> String {
@@ -438,6 +480,18 @@ fn try_rs_typed_envelope(name: &str, schema: &Value) -> Option<String> {
 }
 
 fn rs_struct(name: &str, schema: &Value) -> String {
+    let mut nested = Vec::new();
+    let root = rs_struct_named(name, schema, &mut nested);
+    let mut out = String::new();
+    out.push_str(&root);
+    for item in nested {
+        out.push('\n');
+        out.push_str(&item);
+    }
+    out
+}
+
+fn rs_struct_named(name: &str, schema: &Value, nested: &mut Vec<String>) -> String {
     let required: Vec<String> = schema
         .get("required")
         .and_then(|v| v.as_array())
@@ -456,7 +510,7 @@ fn rs_struct(name: &str, schema: &Value) -> String {
         entries.sort_by(|a, b| a.0.cmp(b.0));
         for (k, v) in entries {
             let is_required = required.iter().any(|r| r == k);
-            let ty = rs_type(v);
+            let ty = rs_type_named(v, name, k, nested);
             let field = rs_ident(k);
             let renamed = field != *k;
             let wrapped = if is_required {
@@ -477,9 +531,8 @@ fn rs_struct(name: &str, schema: &Value) -> String {
     body
 }
 
-fn rs_type(v: &Value) -> String {
+fn rs_type_named(v: &Value, parent: &str, field: &str, nested: &mut Vec<String>) -> String {
     if let Some(enm) = v.get("enum").and_then(|x| x.as_array()) {
-        // Inline string enums as String (simpler than generating per-field enums).
         if enm.iter().all(|x| x.is_string()) {
             return "String".into();
         }
@@ -494,18 +547,39 @@ fn rs_type(v: &Value) -> String {
             "number" => "f64".into(),
             "boolean" => "bool".into(),
             "array" => {
-                let items = v.get("items");
-                let inner = items
-                    .map(rs_type)
-                    .unwrap_or_else(|| "serde_json::Value".into());
-                format!("Vec<{inner}>")
+                let Some(items) = v.get("items") else {
+                    return "Vec<serde_json::Value>".into();
+                };
+                if is_closed_object_schema(items) {
+                    let item_name = nested_type_name(parent, field, true);
+                    let item_src = rs_struct_named(&item_name, items, nested);
+                    nested.push(item_src);
+                    format!("Vec<{item_name}>")
+                } else {
+                    let inner = rs_type_named(items, parent, field, nested);
+                    format!("Vec<{inner}>")
+                }
             }
-            "object" => "serde_json::Value".into(),
+            "object" => {
+                if is_closed_object_schema(v) {
+                    let child_name = nested_type_name(parent, field, false);
+                    let child_src = rs_struct_named(&child_name, v, nested);
+                    nested.push(child_src);
+                    child_name
+                } else {
+                    "serde_json::Value".into()
+                }
+            }
             "null" => "serde_json::Value".into(),
             _ => "serde_json::Value".into(),
         },
         _ => "serde_json::Value".into(),
     }
+}
+
+fn rs_type(v: &Value) -> String {
+    let mut nested = Vec::new();
+    rs_type_named(v, "Inline", "value", &mut nested)
 }
 
 fn rs_ref_to_type(r: &str) -> String {
@@ -531,6 +605,31 @@ fn rs_ref_to_type(r: &str) -> String {
         return format!("super::{}::{name}", to_snake(name));
     }
     "serde_json::Value".into()
+}
+
+fn is_closed_object_schema(v: &Value) -> bool {
+    matches!(v.get("type").and_then(|x| x.as_str()), Some("object"))
+        && v.get("properties").and_then(|x| x.as_object()).is_some()
+        && !matches!(v.get("additionalProperties"), Some(Value::Bool(true)))
+}
+
+fn nested_type_name(parent: &str, field: &str, is_array_item: bool) -> String {
+    let segment = if is_array_item {
+        singularize_field(field)
+    } else {
+        field.to_string()
+    };
+    format!("{parent}{}", to_pascal(&segment))
+}
+
+fn singularize_field(field: &str) -> String {
+    if let Some(prefix) = field.strip_suffix("ies") {
+        format!("{prefix}y")
+    } else if field.ends_with('s') && !field.ends_with("ss") {
+        field.trim_end_matches('s').to_string()
+    } else {
+        field.to_string()
+    }
 }
 
 // ---------- writers ----------
@@ -715,6 +814,22 @@ mod tests {
         assert!(out.contains("'a'"));
         assert!(out.contains("'b'"));
         assert!(out.contains("export type Foo"));
+    }
+
+    #[test]
+    fn nested_type_name_singularizes_arrays() {
+        assert_eq!(
+            nested_type_name("HandoffPacket", "tasks", true),
+            "HandoffPacketTask"
+        );
+        assert_eq!(
+            nested_type_name("HandoffPacketPin", "connector_snapshots", true),
+            "HandoffPacketPinConnectorSnapshot"
+        );
+        assert_eq!(
+            nested_type_name("HandoffPacket", "pin", false),
+            "HandoffPacketPin"
+        );
     }
 
     #[test]
