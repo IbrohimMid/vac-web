@@ -278,6 +278,40 @@ pub async fn dispatch_command(
         }
     }
 
+    // R08-F01 + R27-F02 + R27-F07 — session principal binding. Once
+    // `enforce_action` has cleared the catalog / profile gates, refuse to
+    // honor any command that names a session whose recorded owner does
+    // not match the authenticated caller. Unowned sessions (dev anonymous
+    // mode, legacy clients that don't mint a `device:*` principal) fall
+    // through unchanged.
+    if !cmd.session_id.is_empty() {
+        let owner = state.sessions.owner(&cmd.session_id);
+        if !crate::session::session_owner_authorized(owner.as_deref(), principal.as_deref()) {
+            state.audit.log(
+                &cmd.session_id,
+                "session",
+                AuditSeverity::Warn,
+                json!({
+                    "event": "owner_mismatch",
+                    "code": "session.forbidden",
+                    "command": cmd.cmd_type.clone(),
+                    "caller_principal": principal.clone().unwrap_or_default(),
+                }),
+            );
+            return (
+                ServerAck {
+                    ack_of: cmd.id.clone(),
+                    ok: false,
+                    error: Some(ErrorInfo {
+                        code: "session.forbidden".into(),
+                        message: "session is owned by a different principal".into(),
+                    }),
+                },
+                events,
+            );
+        }
+    }
+
     match cmd.cmd_type.as_str() {
         // Code Workspace bridge contracts: project browsing, coding context, preview,
         // validation, task lifecycle, and branch state. These are intentionally
@@ -628,6 +662,19 @@ pub async fn dispatch_command(
                     // use `profile.*` (no `agent.*`/`session.*` prefix in
                     // `schema/observability-events.yaml`).
                     let session_id_clone = handle.id.clone();
+                    // R08-F01 + R27-F02 + R27-F07 — bind the newly-created
+                    // session to the authenticated caller's principal so
+                    // subsequent commands, replays, and lazy-subscribes from
+                    // other devices are rejected with `session.forbidden`.
+                    // Anonymous / dev sessions deliberately skip this branch
+                    // so the single-user dev flow keeps working unchanged.
+                    if let Some(ref p) = principal {
+                        if p != "dev:anonymous" && !p.is_empty() {
+                            state
+                                .sessions
+                                .set_owner(session_id_clone.clone(), p.clone());
+                        }
+                    }
                     let agent_id_clone = handle.agent_id.clone();
                     let agent_kind_clone = handle.agent_kind.as_str().to_string();
                     let workflow_id_clone = handle.workflow_spec_id.clone();
@@ -1348,6 +1395,18 @@ pub async fn dispatch_command(
                     use crate::session::{ResumeNativeOutcome, ResumeValidationFailure};
                     match outcome {
                         ResumeNativeOutcome::Started { handle, warnings } => {
+                            // R08-F01 + R27-F02 + R27-F07 — bind the
+                            // resumed session to the caller's principal.
+                            // The persisted meta does not yet carry the
+                            // original creator's principal (followup), so
+                            // this is best-effort: the first authenticated
+                            // resumer becomes the owner and subsequent
+                            // cross-principal traffic is rejected.
+                            if let Some(ref p) = principal {
+                                if p != "dev:anonymous" && !p.is_empty() {
+                                    state.sessions.set_owner(handle.id.clone(), p.clone());
+                                }
+                            }
                             // Handle already emitted session.resume.initializing,
                             // vac.session_resumed_native, replayed fixture
                             // updates, and session.resumed via spawn_acp.

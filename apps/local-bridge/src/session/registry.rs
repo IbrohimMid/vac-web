@@ -235,6 +235,16 @@ impl std::error::Error for ExecutorSpawnError {}
 #[derive(Clone)]
 pub struct SessionRegistry {
     inner: Arc<DashMap<String, SessionHandleRef>>,
+    /// R08-F01 + R27-F02 + R27-F07 — per-session owner principal.
+    /// Populated by [`Self::set_owner`] from `translator::dispatch_command`
+    /// right after `session.create` succeeds, with the authenticated
+    /// principal resolved by `ws::handler::principal_for_device`. Anonymous
+    /// / dev sessions deliberately leave the slot empty so the existing
+    /// single-user dev flow is unchanged. Every WS dispatch / replay /
+    /// lazy-subscribe path consults
+    /// [`crate::session::session_owner_authorized`] against this map before
+    /// honoring a command that names the session.
+    session_owners: Arc<DashMap<String, String>>,
     /// Audit P3: wrapped in `RwLock` so `registry.reload` can
     /// atomically swap in a freshly-parsed `AgentRuntimeRegistry`
     /// without restarting the bridge. Reads clone the inner `Arc`
@@ -290,6 +300,7 @@ impl SessionRegistry {
     ) -> Self {
         let reg = Self {
             inner: Arc::new(DashMap::new()),
+            session_owners: Arc::new(DashMap::new()),
             agents: Arc::new(RwLock::new(agents)),
             audit: Arc::new(OnceLock::new()),
             profile_root,
@@ -784,6 +795,32 @@ impl SessionRegistry {
         self.get(session_id).map(|h| h.project_root.clone())
     }
 
+    /// R08-F01 + R27-F02 + R27-F07 — stamp `session_id` as owned by
+    /// `principal`. Called from `translator::dispatch_command` right after
+    /// `session.create` succeeds for an authenticated caller. Anonymous /
+    /// dev sessions deliberately skip this call so the existing
+    /// single-user dev flow keeps working unchanged.
+    pub fn set_owner(&self, session_id: impl Into<String>, principal: impl Into<String>) {
+        self.session_owners
+            .insert(session_id.into(), principal.into());
+    }
+
+    /// R08-F01 + R27-F02 + R27-F07 — look up the owner principal recorded
+    /// for a session. Returns `None` when the session is unowned (legacy /
+    /// dev anonymous flow).
+    pub fn owner(&self, session_id: &str) -> Option<String> {
+        self.session_owners
+            .get(session_id)
+            .map(|r| r.value().clone())
+    }
+
+    /// R08-F01 + R27-F02 + R27-F07 — drop the owner binding for a session.
+    /// Called from [`Self::remove`] and the reaper so stale owner rows do
+    /// not outlive their session handles.
+    pub fn clear_owner(&self, session_id: &str) {
+        self.session_owners.remove(session_id);
+    }
+
     pub fn count(&self) -> usize {
         self.inner.len()
     }
@@ -791,6 +828,7 @@ impl SessionRegistry {
     pub fn remove(&self, session_id: &str) -> Option<SessionHandleRef> {
         let out = self.inner.remove(session_id).map(|(_, v)| v);
         if out.is_some() {
+            self.session_owners.remove(session_id);
             info!(%session_id, remaining = self.inner.len(), "session removed");
         }
         out
@@ -804,6 +842,7 @@ impl SessionRegistry {
     /// user closed). Cheap: ticks every 2s, O(n) scan.
     fn spawn_reaper(&self) {
         let inner = Arc::clone(&self.inner);
+        let owners = Arc::clone(&self.session_owners);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(2));
             loop {
@@ -815,6 +854,7 @@ impl SessionRegistry {
                     .collect();
                 for sid in to_drop {
                     if inner.remove(&sid).is_some() {
+                        owners.remove(&sid);
                         info!(session = %sid, "reaper: removed terminal session");
                     }
                 }

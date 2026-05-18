@@ -183,7 +183,7 @@ async fn handle_incoming(
     // Try replay first (has distinct field pattern).
     if let Ok(r) = serde_json::from_str::<ReplayRequest>(&line) {
         if r.r#type == "replay.request" {
-            handle_replay(r, state, out_tx).await;
+            handle_replay(r, state, out_tx, principal).await;
             return;
         }
     }
@@ -211,9 +211,20 @@ async fn handle_incoming(
     // streaming events (transcript.delta etc.) reach it.
     let sid = &cmd.session_id;
     if !sid.is_empty() && !subscribed.contains(sid) && state.sessions.get(sid).is_some() {
-        subscribe_to_session(sid, state.clone(), out_tx.clone());
-        subscribed.insert(sid.clone());
-        debug!(%client_id, session_id = %sid, "auto-subscribed on first command");
+        // R08-F01 + R27-F02 + R27-F07 — refuse to attach a broadcast
+        // listener to a session whose owner does not match the
+        // authenticated caller so cross-device clients cannot observe
+        // streamed transcript / tool / gate events from other operators'
+        // sessions.
+        let owner = state.sessions.owner(sid);
+        let principal_str = principal.map(String::as_str);
+        if crate::session::session_owner_authorized(owner.as_deref(), principal_str) {
+            subscribe_to_session(sid, state.clone(), out_tx.clone());
+            subscribed.insert(sid.clone());
+            debug!(%client_id, session_id = %sid, "auto-subscribed on first command");
+        } else {
+            warn!(%client_id, session_id = %sid, "refused auto-subscribe: session owned by different principal");
+        }
     }
 
     debug!(%client_id, cmd_id = %cmd.id, cmd_type = %cmd.cmd_type, "dispatch");
@@ -284,6 +295,7 @@ async fn handle_replay(
     r: ReplayRequest,
     state: &AppStateHandle,
     out_tx: &tokio::sync::mpsc::Sender<String>,
+    principal: Option<&String>,
 ) {
     let Some(session) = state.sessions.get(&r.session_id) else {
         let _ = out_tx
@@ -298,6 +310,26 @@ async fn handle_replay(
             .await;
         return;
     };
+    // R08-F01 + R27-F02 + R27-F07 — replay must respect the session's
+    // owner principal. We reuse `session.not_found` as the wire code so a
+    // probing client cannot distinguish "no such session" from "session
+    // belongs to a different principal" (avoids the existence oracle while
+    // still failing closed).
+    let owner = state.sessions.owner(&r.session_id);
+    let principal_str = principal.map(String::as_str);
+    if !crate::session::session_owner_authorized(owner.as_deref(), principal_str) {
+        let _ = out_tx
+            .send(serde_ack(
+                "replay",
+                false,
+                Some(ErrorInfo {
+                    code: "session.not_found".into(),
+                    message: r.session_id.clone(),
+                }),
+            ))
+            .await;
+        return;
+    }
     let ring = session.ring.read().await;
     match ring.replay_after(r.last_event_id) {
         ReplayResult::Stream(evs) => {
