@@ -762,6 +762,7 @@ pub fn emit_gate_snapshot(handle: &SessionHandleRef, snapshot: GateSnapshot) {
 pub async fn handle_sync_mutation_audit(
     cmd: &ClientCommand,
     state: &AppStateHandle,
+    principal: Option<String>,
 ) -> (ServerAck, Vec<ServerEvent>) {
     let Some(handle) = state.sessions.get(&cmd.session_id) else {
         return error_ack(
@@ -769,6 +770,14 @@ pub async fn handle_sync_mutation_audit(
             "session.not_found",
             format!("session {} not found", cmd.session_id),
         );
+    };
+    // R27-F04 — require an authenticated principal before mutating the
+    // MutationAuditClean release blocker. Without this gate any WS client
+    // could send `{"blocking_count":0}` and silently clear a staging/prod
+    // release blocker. Mirrors gate.signoff / gate.override.
+    let actor = match require_gate_actor(cmd, principal.as_deref(), "gate.sync_mutation_audit") {
+        Ok(actor) => actor,
+        Err(ack) => return ack,
     };
     let blocking_count = cmd
         .payload
@@ -820,6 +829,7 @@ pub async fn handle_sync_mutation_audit(
             "blocking_count": blocking_count,
             "new_state": snapshot.state,
             "decision": "allow",
+            "actor": actor,
         }),
     );
     let event = gate_snapshot_event(handle.id.clone(), &snapshot);
@@ -922,6 +932,28 @@ mod tests {
         touch_gate(&mut snap);
         // sign-off logic must not overwrite externally-controlled state
         assert_eq!(snap.state, "pass");
+    }
+
+    #[test]
+    fn sync_mutation_audit_requires_authenticated_principal() {
+        let cmd = test_cmd("gate.sync_mutation_audit");
+        let (ack, _) = require_gate_actor(&cmd, None, "gate.sync_mutation_audit").unwrap_err();
+        assert!(!ack.ok);
+        assert_eq!(ack.error.unwrap().code, "gate.signer_required");
+
+        let (ack, _) =
+            require_gate_actor(&cmd, Some("   "), "gate.sync_mutation_audit").unwrap_err();
+        assert!(!ack.ok);
+        assert_eq!(ack.error.unwrap().code, "gate.signer_required");
+    }
+
+    #[test]
+    fn sync_mutation_audit_accepts_authenticated_principal() {
+        let cmd = test_cmd("gate.sync_mutation_audit");
+        assert_eq!(
+            require_gate_actor(&cmd, Some("device:cockpit"), "gate.sync_mutation_audit").unwrap(),
+            "device:cockpit"
+        );
     }
 
     #[test]
