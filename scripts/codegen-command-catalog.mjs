@@ -35,6 +35,7 @@ const VALID_STATUSES = new Set([
 ]);
 const VALID_SCOPES = new Set(['sessionless', 'session', 'either']);
 const VALID_SIDE_EFFECTS = new Set(['none', 'read_only', 'state', 'external']);
+const VALID_TOOL_ENFORCEMENT = new Set(['tool', 'protocol_only', 'payload_action_id', 'payload_action']);
 
 function loadManifest() {
   const raw = fs.readFileSync(MANIFEST, 'utf8');
@@ -59,6 +60,9 @@ function loadManifest() {
     }
     if (!cmd.side_effect || !VALID_SIDE_EFFECTS.has(cmd.side_effect)) {
       throw new Error(`command ${cmd.id} has invalid side_effect: ${cmd.side_effect}`);
+    }
+    if (cmd.tool_enforcement && !VALID_TOOL_ENFORCEMENT.has(cmd.tool_enforcement)) {
+      throw new Error(`command ${cmd.id} has invalid tool_enforcement: ${cmd.tool_enforcement}`);
     }
   }
   // Sort deterministically for stable output.
@@ -131,12 +135,34 @@ function renderRust(doc) {
   lines.push('    }');
   lines.push('}');
   lines.push('');
+  lines.push('/// Profile-layer enforcement mode (R08-F02 default-deny).');
+  lines.push('#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]');
+  lines.push('pub enum ToolEnforcement {');
+  lines.push('    Tool,');
+  lines.push('    ProtocolOnly,');
+  lines.push('    PayloadActionId,');
+  lines.push('    PayloadAction,');
+  lines.push('}');
+  lines.push('');
+  lines.push('impl ToolEnforcement {');
+  lines.push('    pub fn as_str(self) -> &\'static str {');
+  lines.push('        match self {');
+  lines.push('            Self::Tool => "tool",');
+  lines.push('            Self::ProtocolOnly => "protocol_only",');
+  lines.push('            Self::PayloadActionId => "payload_action_id",');
+  lines.push('            Self::PayloadAction => "payload_action",');
+  lines.push('        }');
+  lines.push('    }');
+  lines.push('}');
+  lines.push('');
   lines.push('#[derive(Debug, Clone, Copy)]');
   lines.push('pub struct CommandEntry {');
   lines.push('    pub id: &\'static str,');
   lines.push('    pub status: CommandStatus,');
   lines.push('    pub scope: CommandScope,');
   lines.push('    pub side_effect: CommandSideEffect,');
+  lines.push('    pub requires_profile_tool: Option<&\'static str>,');
+  lines.push('    pub tool_enforcement: Option<ToolEnforcement>,');
   lines.push('}');
   lines.push('');
   const statusToVariant = (s) =>
@@ -152,12 +178,16 @@ function renderRust(doc) {
     ({ sessionless: 'Sessionless', session: 'Session', either: 'Either' })[s];
   const sideEffectToVariant = (s) =>
     ({ none: 'None', read_only: 'ReadOnly', state: 'State', external: 'External' })[s];
+  const toolEnforcementToVariant = (s) =>
+    ({ tool: 'Tool', protocol_only: 'ProtocolOnly', payload_action_id: 'PayloadActionId', payload_action: 'PayloadAction' })[s];
 
   lines.push('#[rustfmt::skip]');
   lines.push(`pub const COMMAND_CATALOG: &[CommandEntry] = &[`);
   for (const c of doc.commands) {
+    const rpt = c.requires_profile_tool ? `Some("${c.requires_profile_tool}")` : 'None';
+    const te = c.tool_enforcement ? `Some(ToolEnforcement::${toolEnforcementToVariant(c.tool_enforcement)})` : 'None';
     lines.push(
-      `    CommandEntry { id: "${c.id}", status: CommandStatus::${statusToVariant(c.status)}, scope: CommandScope::${scopeToVariant(c.scope)}, side_effect: CommandSideEffect::${sideEffectToVariant(c.side_effect)} },`,
+      `    CommandEntry { id: "${c.id}", status: CommandStatus::${statusToVariant(c.status)}, scope: CommandScope::${scopeToVariant(c.scope)}, side_effect: CommandSideEffect::${sideEffectToVariant(c.side_effect)}, requires_profile_tool: ${rpt}, tool_enforcement: ${te} },`,
     );
   }
   lines.push('];');
@@ -222,6 +252,21 @@ function renderRust(doc) {
   lines.push('    NOT_WIRED_COMMANDS.contains(&cmd)');
   lines.push('}');
   lines.push('');
+  lines.push('pub fn requires_profile_tool(cmd: &str) -> Option<&\'static str> {');
+  lines.push('    lookup(cmd).and_then(|e| e.requires_profile_tool)');
+  lines.push('}');
+  lines.push('');
+  lines.push('pub fn tool_enforcement_of(cmd: &str) -> Option<ToolEnforcement> {');
+  lines.push('    let entry = lookup(cmd)?;');
+  lines.push('    if let Some(te) = entry.tool_enforcement {');
+  lines.push('        return Some(te);');
+  lines.push('    }');
+  lines.push('    if entry.requires_profile_tool.is_some() {');
+  lines.push('        return Some(ToolEnforcement::Tool);');
+  lines.push('    }');
+  lines.push('    None');
+  lines.push('}');
+  lines.push('');
 
   return lines.join('\n');
 }
@@ -237,6 +282,7 @@ function renderTs(doc) {
   );
   lines.push("export type CommandScope = 'sessionless' | 'session' | 'either';");
   lines.push("export type CommandSideEffect = 'none' | 'read_only' | 'state' | 'external';");
+  lines.push("export type ToolEnforcement = 'tool' | 'protocol_only' | 'payload_action_id' | 'payload_action';");
   lines.push('');
   lines.push('export interface CommandEntry {');
   lines.push('  readonly id: CommandId;');
@@ -244,6 +290,7 @@ function renderTs(doc) {
   lines.push('  readonly scope: CommandScope;');
   lines.push('  readonly sideEffect: CommandSideEffect;');
   lines.push('  readonly requiresProfileTool?: string;');
+  lines.push('  readonly toolEnforcement?: ToolEnforcement;');
   lines.push('  readonly runtime?: string;');
   lines.push('  readonly summary?: string;');
   lines.push('  readonly ui?: { readonly gate?: string; readonly reason?: string };');
@@ -266,6 +313,7 @@ function renderTs(doc) {
       `sideEffect: '${c.side_effect}'`,
     ];
     if (c.requires_profile_tool) parts.push(`requiresProfileTool: '${c.requires_profile_tool}'`);
+    if (c.tool_enforcement) parts.push(`toolEnforcement: '${c.tool_enforcement}'`);
     if (c.runtime) parts.push(`runtime: '${c.runtime}'`);
     if (c.summary) parts.push(`summary: ${JSON.stringify(c.summary)}`);
     if (c.ui) {

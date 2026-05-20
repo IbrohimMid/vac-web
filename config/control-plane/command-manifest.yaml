@@ -19,6 +19,15 @@
 #   state      — mutates bridge / session / agent state; default for implemented & not_wired
 #   external   — produces effects outside the bridge process (deploys, dispatches, connector handshakes)
 #
+# tool_enforcement (R08-F02 default-deny):
+#   tool              — (implicit default when requires_profile_tool is set) enforce that exact tool name against the session profile
+#   protocol_only     — bridge-internal protocol flow; no profile tool check
+#   payload_action_id — resolve target tool from payload.actionId (default-deny if missing)
+#   payload_action    — resolve target tool from payload.action (default-deny if missing)
+# Every Implemented Session/Either command MUST declare requires_profile_tool
+# OR an explicit tool_enforcement other than `tool`. Commands lacking both are
+# denied at the profile layer with `profile.tool_mapping_missing`.
+#
 # This file is THE source of truth for the command implementation
 # manifest. Generated bindings live under:
 #   - apps/local-bridge/src/generated/command_catalog.rs
@@ -78,11 +87,13 @@ commands:
     summary: Persistence-backed rename is not wired; SessionsTab is gated.
   - id: session.close
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Terminate the active session and release ACP resources.
   - id: session.authenticate
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: acp
@@ -99,12 +110,14 @@ commands:
     summary: Forget a persisted session row.
   - id: session.mode.set
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: acp
     summary: ACP-only — switch active session mode/model.
   - id: session.config_option.set
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: acp
@@ -113,18 +126,21 @@ commands:
   # Message ---------------------------------------------------------------
   - id: message.submit
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Submit a user message to the active agent (ACP/native).
   - id: message.cancel_stream
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Cancel the in-flight assistant response.
   - id: message.retry
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
@@ -133,11 +149,13 @@ commands:
   # Approval --------------------------------------------------------------
   - id: approval.approve
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Approve a pending approval; ACP intercepted and resolved without forwarding.
   - id: approval.reject
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Reject a pending approval.
@@ -163,6 +181,7 @@ commands:
     summary: UI-only tab selection; should not cross WebSocket.
   - id: workbench.invoke
     status: not_wired
+    tool_enforcement: payload_action
     side_effect: state
     scope: session
     summary: Generic workbench invoke is not implemented as a bridge executor.
@@ -231,11 +250,13 @@ commands:
     summary: Approve a pending bridge mutation; the bridge applies on disk and emits the audited lifecycle event.
   - id: bridge.mutation.reject
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Reject a pending bridge mutation; the bridge discards the intent without touching disk.
   - id: bridge.mutation.refine_request
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
@@ -326,6 +347,7 @@ commands:
     summary: Mention search is held until local indexes are wired.
   - id: palette.invoke_action
     status: not_wired
+    tool_enforcement: payload_action_id
     side_effect: state
     scope: session
     summary: Generic palette invoke must map to a concrete command before execution.
@@ -349,80 +371,94 @@ commands:
     summary: Return UTF-8 text file contents with binary and size guards.
   - id: coding.context.ask_about_file
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Forward file context to the active agent as a structured prompt.
   - id: coding.context.ask_about_selection
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Forward selected lines to the active agent as a structured prompt.
   - id: coding.context.request_edit
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Ask the active agent to edit a file using current workspace context.
   - id: coding.context.request_tests
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Ask the active agent to generate or update tests for a file.
   - id: workspace.preview.open
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Record a local preview URL and emit workspace.preview.updated.
   - id: workspace.preview.refresh
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Refresh the current preview state.
   - id: workspace.preview.stop
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Mark the preview as stopped.
   - id: workspace.preview.send_context
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Forward explicit preview context to the active agent.
   - id: workspace.preview.run_e2e
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Record an E2E validation request for the current preview.
   - id: validation.run.request
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Record a validation run request and forward validation intent to the active agent.
   - id: validation.failure.send_context
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Send a selected validation failure context to the active agent.
   - id: task.execution.continue
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Continue the active coding task through the agent.
   - id: task.plan.request_changes
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     runtime: agent_forwarded
     summary: Ask the agent to revise the active task plan.
   - id: workspace.branch.request
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
     summary: Return the active git branch for the session project root.
@@ -430,52 +466,64 @@ commands:
   # Assessment ------------------------------------------------------------
   - id: assessment.run
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: assessment.sweep.run
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: assessment.sweep.cancel
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: assessment.list_runs
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
   - id: assessment.fetch_report
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
   - id: assessment.fetch_evidence_preview
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
   - id: assessment.cancel
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: assessment.replay
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: assessment.diff
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
   - id: assessment.index.status
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
   - id: assessment.index.rebuild
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
 
   # Handoff ---------------------------------------------------------------
   - id: handoff.create
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: handoff.fetch
@@ -484,10 +532,12 @@ commands:
     scope: session
   - id: handoff.approve
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: handoff.reject
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
   - id: handoff.dispatch_local
@@ -513,12 +563,14 @@ commands:
     scope: session
   - id: handoff.status
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: session
 
   # Gates -----------------------------------------------------------------
   - id: gate.evaluate
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: state
     scope: session
     summary: Emit the current gate snapshot for a session.
@@ -540,6 +592,12 @@ commands:
     scope: session
     requires_profile_tool: gate.override
     summary: Revoke an active gate override.
+  - id: gate.sync_mutation_audit
+    status: implemented
+    side_effect: state
+    scope: session
+    tool_enforcement: protocol_only
+    summary: Replay outstanding bridge.mutation lifecycle events for the active session.
 
   # Connectors ------------------------------------------------------------
   - id: connector.list
@@ -572,6 +630,7 @@ commands:
   # Release ---------------------------------------------------------------
   - id: release.list_targets
     status: implemented
+    tool_enforcement: protocol_only
     side_effect: read_only
     scope: either
     summary: Return the current deploy targets for a session or workspace.
@@ -680,21 +739,25 @@ commands:
     summary: List declared extensions with their enforced trust tier.
   - id: extensions.update_trust
     status: implemented
+    requires_profile_tool: extensions.update_trust
     side_effect: state
     scope: session
     summary: Mutate the trust tier of a declared extension and persist to disk. Session-bound; profile-layer enforces tool 'extensions.update_trust' (Slice #4).
   - id: extensions.request_promotion
     status: implemented
+    requires_profile_tool: extensions.request_promotion
     side_effect: state
     scope: session
     summary: Slice #6 — request a promotion from `revoked` to `allowed_*`. Persists a pending ApprovalRequest; profile-layer enforces tool `extensions.request_promotion`.
   - id: extensions.approve_promotion
     status: implemented
+    requires_profile_tool: extensions.approve_promotion
     side_effect: state
     scope: session
     summary: Slice #6 — approve (or deny) a pending promotion. Approver session must have a different profile_id than the requester. On approve, the trust transition is applied and persisted.
   - id: extensions.list_approvals
     status: implemented
+    requires_profile_tool: extensions.list_approvals
     side_effect: read_only
     scope: session
     summary: Slice #6 — list pending + recently-decided promotion approval requests.

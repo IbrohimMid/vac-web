@@ -4,51 +4,19 @@
 //! catalog (`crate::generated::command_catalog`), which itself derives from
 //! `config/control-plane/command-manifest.yaml`. New commands must be added
 //! to the manifest and codegen re-run; the catalog is the source of truth.
+//!
+//! R08-F02 default-deny: every Implemented Session command MUST declare
+//! `requires_profile_tool` (Tool mode) or an explicit `tool_enforcement`
+//! variant (`protocol_only`, `payload_action_id`, `payload_action`) in the
+//! manifest. Commands lacking both are denied with
+//! `profile.tool_mapping_missing` so a missing mapping never becomes an
+//! implicit allow.
 
-use crate::generated::command_catalog::{self, CommandStatus};
+use crate::generated::command_catalog::{self, CommandStatus, ToolEnforcement};
 use crate::server::AppStateHandle;
 use crate::ws::envelope::ClientCommand;
 use profile_core::{enforce::enforce_tool, profile::CapabilityProfile, Decision};
 use std::sync::OnceLock;
-
-/// Map command type → required tool capability.
-///
-/// Only commands that explicitly name a target tool/action at the wire boundary
-/// are enforced here:
-///
-/// - `palette.invoke_action { actionId }` — user invokes a named action.
-/// - `workbench.invoke { action }` — workbench-scoped action.
-/// - `shell.start { profile }` — spawns a shell under `profile`.
-/// - `handoff.dispatch_*` — explicit mutation escalation.
-/// - `gate.signoff` / `gate.override` — governance escalation.
-/// - `release.deploy` / `release.publish` / `release.generate_notes` — release-plane mutations.
-///
-/// Protocol flows like `message.submit`, `approval.approve`, `assessment.run`,
-/// `session.*` are **not** tool invocations at this boundary. Engine Layer 2
-/// enforces the concrete tool calls the agent makes downstream.
-fn required_tool_for(cmd: &str, payload: &serde_json::Value) -> Option<String> {
-    match cmd {
-        "palette.invoke_action" => payload
-            .get("actionId")
-            .and_then(|v| v.as_str())
-            .map(String::from),
-        "workbench.invoke" => payload
-            .get("action")
-            .and_then(|v| v.as_str())
-            .map(String::from),
-        "extensions.update_trust" => Some("extensions.update_trust".into()),
-        "extensions.request_promotion" => Some("extensions.request_promotion".into()),
-        "extensions.approve_promotion" => Some("extensions.approve_promotion".into()),
-        "extensions.list_approvals" => Some("extensions.list_approvals".into()),
-        "handoff.dispatch_local" | "handoff.dispatch_web_cli" => Some("handoff.dispatch".into()),
-        "gate.signoff" => Some("gate.signoff".into()),
-        "gate.override" | "gate.revoke_override" => Some("gate.override".into()),
-        "release.deploy" => Some("deploy.*".into()),
-        "release.publish" => Some("publish.*".into()),
-        "release.generate_notes" => Some("release_notes.write".into()),
-        _ => None,
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnforceOutcome {
@@ -66,6 +34,65 @@ pub enum EnforceOutcome {
         command: String,
         reason: String,
     },
+}
+
+/// Resolve the profile tool name to enforce for `cmd`, based on the
+/// manifest-declared `tool_enforcement` and `requires_profile_tool` on the
+/// catalog entry. Returns:
+///
+/// - `Ok(Some(tool))` — enforce this tool against the session's profile.
+/// - `Ok(None)` — protocol-only flow; bypass profile enforcement.
+/// - `Err(outcome)` — denied due to missing mapping or missing payload field.
+fn resolve_tool(cmd: &ClientCommand) -> Result<Option<String>, EnforceOutcome> {
+    let entry = match command_catalog::lookup(cmd.cmd_type.as_str()) {
+        Some(e) => e,
+        None => return Err(EnforceOutcome::UnknownCommand),
+    };
+    let mode = command_catalog::tool_enforcement_of(cmd.cmd_type.as_str());
+    match mode {
+        Some(ToolEnforcement::ProtocolOnly) => Ok(None),
+        Some(ToolEnforcement::Tool) => match entry.requires_profile_tool {
+            Some(t) => Ok(Some(t.to_string())),
+            None => Err(EnforceOutcome::Denied {
+                code: "profile.tool_mapping_missing",
+                reason: format!(
+                    "command '{}' declares tool_enforcement=tool but no requires_profile_tool",
+                    cmd.cmd_type
+                ),
+            }),
+        },
+        Some(ToolEnforcement::PayloadActionId) => {
+            match cmd.payload.get("actionId").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => Ok(Some(s.to_string())),
+                _ => Err(EnforceOutcome::Denied {
+                    code: "profile.tool_payload_missing",
+                    reason: format!(
+                        "command '{}' requires payload.actionId for profile enforcement",
+                        cmd.cmd_type
+                    ),
+                }),
+            }
+        }
+        Some(ToolEnforcement::PayloadAction) => {
+            match cmd.payload.get("action").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => Ok(Some(s.to_string())),
+                _ => Err(EnforceOutcome::Denied {
+                    code: "profile.tool_payload_missing",
+                    reason: format!(
+                        "command '{}' requires payload.action for profile enforcement",
+                        cmd.cmd_type
+                    ),
+                }),
+            }
+        }
+        None => Err(EnforceOutcome::Denied {
+            code: "profile.tool_mapping_missing",
+            reason: format!(
+                "command '{}' has no profile tool mapping in manifest (R08-F02 default-deny)",
+                cmd.cmd_type
+            ),
+        }),
+    }
 }
 
 pub fn enforce_action(cmd: &ClientCommand, state: &AppStateHandle) -> EnforceOutcome {
@@ -104,9 +131,10 @@ pub fn enforce_action(cmd: &ClientCommand, state: &AppStateHandle) -> EnforceOut
         return EnforceOutcome::Allowed;
     }
 
-    let Some(tool) = required_tool_for(&cmd.cmd_type, &cmd.payload) else {
-        // Known protocol command without tool mapping: allow.
-        return EnforceOutcome::Allowed;
+    let tool = match resolve_tool(cmd) {
+        Ok(None) => return EnforceOutcome::Allowed,
+        Ok(Some(t)) => t,
+        Err(outcome) => return outcome,
     };
 
     let Some(handle) = state.sessions.get(&cmd.session_id) else {
@@ -198,6 +226,34 @@ mod tests {
         assert_eq!(
             command_catalog::status_of("shell.start"),
             Some(CommandStatus::NotWired)
+        );
+    }
+
+    /// R08-F02 default-deny invariant: every Implemented Session command in
+    /// the catalog must declare either `requires_profile_tool` (Tool mode)
+    /// or an explicit non-Tool `tool_enforcement` variant in the manifest.
+    /// The runtime denies anything else with `profile.tool_mapping_missing`,
+    /// so this test guards against a forgotten manifest entry slipping past
+    /// review and reverting the layer to an implicit-allow posture.
+    #[test]
+    fn every_implemented_session_command_has_tool_enforcement() {
+        use command_catalog::CommandScope;
+        let mut missing: Vec<&'static str> = vec![];
+        for entry in command_catalog::COMMAND_CATALOG {
+            if !matches!(entry.status, CommandStatus::Implemented) {
+                continue;
+            }
+            if !matches!(entry.scope, CommandScope::Session) {
+                continue;
+            }
+            if command_catalog::tool_enforcement_of(entry.id).is_none() {
+                missing.push(entry.id);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "every Implemented Session command must declare requires_profile_tool or tool_enforcement (R08-F02 default-deny). Missing: {:?}",
+            missing
         );
     }
 }
