@@ -138,59 +138,67 @@ impl PersistenceSink {
             );
             self.signal_degraded("append_failed", e);
         }
-        // Phase N1 — best-effort double-write to the SQLite cache index. The
-        // index write happens regardless of whether the JSONL append succeeded
-        // (a torn JSONL row should still surface in the cockpit), but a write
-        // failure here is *strictly non-fatal*: we log + record on the shared
-        // health handle under `"index_write_failed"` and never propagate.
-        if let Some(index) = self.assessment_index.as_ref() {
-            if crate::storage::is_mirrored(&pe.event_type) {
-                let mut index_event = pe.clone();
-                if let Value::Object(map) = &mut index_event.payload {
-                    // Some live assessment events intentionally omit the
-                    // session id because the WS envelope already carries it.
-                    // The persisted JSONL path is keyed by `vac_session_id`,
-                    // but the SQLite assessment index needs the value inside
-                    // each mirrored row for indexed list/fetch queries. Stamp
-                    // it only when the event payload does not already provide
-                    // any known session-id spelling.
-                    let has_session_id = map.contains_key("vac_session_id")
-                        || map.contains_key("session_id")
-                        || map.contains_key("sessionId");
-                    if !has_session_id {
-                        map.insert(
-                            "vac_session_id".into(),
-                            Value::String(self.vac_session_id.clone()),
-                        );
+        // S03-F01 — JSONL is the canonical source of truth; the SQLite
+        // assessment index is a derived acceleration. We MUST NOT mirror a
+        // row into the index when the JSONL append failed, otherwise the
+        // index can advertise assessment runs that canonical replay (which
+        // reads JSONL) drops, and reports appear to "reappear and disappear"
+        // across restart/rebuild.
+        //
+        // The index write itself remains strictly non-fatal: a failure here
+        // is logged + recorded on the shared health handle under the
+        // `"index_write_failed"` reason and never propagates back as a
+        // JSONL append failure.
+        if appended.is_ok() {
+            if let Some(index) = self.assessment_index.as_ref() {
+                if crate::storage::is_mirrored(&pe.event_type) {
+                    let mut index_event = pe.clone();
+                    if let Value::Object(map) = &mut index_event.payload {
+                        // Some live assessment events intentionally omit the
+                        // session id because the WS envelope already carries it.
+                        // The persisted JSONL path is keyed by `vac_session_id`,
+                        // but the SQLite assessment index needs the value inside
+                        // each mirrored row for indexed list/fetch queries. Stamp
+                        // it only when the event payload does not already provide
+                        // any known session-id spelling.
+                        let has_session_id = map.contains_key("vac_session_id")
+                            || map.contains_key("session_id")
+                            || map.contains_key("sessionId");
+                        if !has_session_id {
+                            map.insert(
+                                "vac_session_id".into(),
+                                Value::String(self.vac_session_id.clone()),
+                            );
+                        }
                     }
-                }
-                match record_assessment_event(index.as_ref(), &index_event) {
-                    Ok(WriteOutcome::Mirrored) | Ok(WriteOutcome::NotMirrored) => {}
-                    Ok(WriteOutcome::Malformed) => {
-                        tracing::debug!(
-                            session = %self.vac_session_id,
-                            event_type = %pe.event_type,
-                            "assessment_index mirror skipped (malformed payload)"
-                        );
-                    }
-                    Err(err) => {
-                        let detail = err.to_string();
-                        tracing::warn!(
-                            session = %self.vac_session_id,
-                            event_type = %pe.event_type,
-                            error = %detail,
-                            "assessment_index mirror failed; JSONL append unaffected"
-                        );
-                        // Surface via the existing PersistenceHealth ring —
-                        // intentionally NOT broadcast as a ServerEvent: the
-                        // existing `session.persistence_degraded` channel
-                        // already covers index/append failures and adding a
-                        // second event type would be noisy on a flapping disk.
-                        self.health.record_failure(
-                            "index_write_failed",
-                            detail,
-                            Some(&self.vac_session_id),
-                        );
+                    match record_assessment_event(index.as_ref(), &index_event) {
+                        Ok(WriteOutcome::Mirrored) | Ok(WriteOutcome::NotMirrored) => {}
+                        Ok(WriteOutcome::Malformed) => {
+                            tracing::debug!(
+                                session = %self.vac_session_id,
+                                event_type = %pe.event_type,
+                                "assessment_index mirror skipped (malformed payload)"
+                            );
+                        }
+                        Err(err) => {
+                            let detail = err.to_string();
+                            tracing::warn!(
+                                session = %self.vac_session_id,
+                                event_type = %pe.event_type,
+                                error = %detail,
+                                "assessment_index mirror failed; JSONL append unaffected"
+                            );
+                            // Surface via the existing PersistenceHealth ring —
+                            // intentionally NOT broadcast as a ServerEvent: the
+                            // existing `session.persistence_degraded` channel
+                            // already covers index/append failures and adding a
+                            // second event type would be noisy on a flapping disk.
+                            self.health.record_failure(
+                                "index_write_failed",
+                                detail,
+                                Some(&self.vac_session_id),
+                            );
+                        }
                     }
                 }
             }
@@ -397,6 +405,108 @@ mod tests {
             .and_then(|v| v.as_str())
             .map(|s| !s.is_empty())
             .unwrap_or(false));
+    }
+
+    #[test]
+    fn append_failure_skips_assessment_index_mirror() {
+        // S03-F01 regression guard: when the JSONL append fails, the SQLite
+        // assessment index MUST NOT receive a mirrored row. Otherwise the
+        // index advertises runs that canonical JSONL replay drops, and
+        // assessment reports appear to reappear/disappear across restart.
+        let store = Arc::new(ToggleStore::default());
+        store.set_append_fails(true);
+        let index = Arc::new(
+            crate::storage::AssessmentIndex::open_in_memory().expect("open in-memory index"),
+        );
+        let health = PersistenceHealth::new();
+        let sink = PersistenceSink::with_health(
+            Arc::clone(&store) as Arc<dyn SessionPersistence>,
+            "sess_alpha".into(),
+            RedactionMode::Standard,
+            health.clone(),
+            None,
+        )
+        .with_assessment_index(Some(Arc::clone(&index)));
+
+        let event = ServerEvent {
+            seq: 0,
+            session_id: "sess_alpha".into(),
+            event_type: "assessment.started".into(),
+            payload: serde_json::json!({
+                "run_id": "run-canonical-001",
+                "vac_session_id": "sess_alpha",
+                "swarm": "rtd",
+                "started_at": "2026-04-30T20:33:00Z",
+            }),
+            v: 1,
+            ts: chrono::Utc::now().to_rfc3339(),
+        };
+        sink.record(&event);
+
+        // JSONL append failed → index must stay empty (no divergent row).
+        let row = index.get_run("run-canonical-001").expect("index query");
+        assert!(
+            row.is_none(),
+            "index must not advertise runs that the JSONL log dropped"
+        );
+        // The append failure must still be surfaced on PersistenceHealth.
+        assert!(
+            health.is_degraded(),
+            "append failure must still flip the degraded flag"
+        );
+        let recent = health.recent_failures();
+        assert!(
+            recent.iter().any(|f| f.reason == "append_failed"),
+            "expected an append_failed entry in recent failures, got {:?}",
+            recent.iter().map(|f| &f.reason).collect::<Vec<_>>()
+        );
+        assert!(
+            !recent.iter().any(|f| f.reason == "index_write_failed"),
+            "the index mirror was correctly skipped, so it must not record an index_write_failed entry"
+        );
+    }
+
+    #[test]
+    fn append_success_with_index_writes_mirrored_row() {
+        // S03-F01 happy-path companion: when JSONL append succeeds, an
+        // assessment.* event MUST land in the index too.
+        let store = Arc::new(ToggleStore::default()); // fail_append = false
+        let index = Arc::new(
+            crate::storage::AssessmentIndex::open_in_memory().expect("open in-memory index"),
+        );
+        let health = PersistenceHealth::new();
+        let sink = PersistenceSink::with_health(
+            Arc::clone(&store) as Arc<dyn SessionPersistence>,
+            "sess_alpha".into(),
+            RedactionMode::Standard,
+            health.clone(),
+            None,
+        )
+        .with_assessment_index(Some(Arc::clone(&index)));
+
+        sink.record(&ServerEvent {
+            seq: 0,
+            session_id: "sess_alpha".into(),
+            event_type: "assessment.started".into(),
+            payload: serde_json::json!({
+                "run_id": "run-canonical-002",
+                "vac_session_id": "sess_alpha",
+                "swarm": "rtd",
+                "started_at": "2026-04-30T20:33:00Z",
+            }),
+            v: 1,
+            ts: chrono::Utc::now().to_rfc3339(),
+        });
+
+        let row = index
+            .get_run("run-canonical-002")
+            .expect("index query")
+            .expect("row present after a successful JSONL append");
+        assert_eq!(row.run_id, "run-canonical-002");
+        assert!(
+            !health.is_degraded(),
+            "healthy double-write must stay clean"
+        );
     }
 
     #[test]
