@@ -19,6 +19,7 @@ use super::model::{
     PersistedServerEvent, PersistedSessionMeta, PersistedSessionStatus, SessionHistoryFilter,
 };
 use super::SessionPersistence;
+use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -26,12 +27,14 @@ use std::sync::Mutex;
 
 const META_FILENAME: &str = "meta.json";
 const EVENTS_FILENAME: &str = "events.jsonl";
+const LOCK_FILENAME: &str = ".write.lock";
 
 /// File-backed [`SessionPersistence`].
 pub struct FilePersistence {
     root: PathBuf,
-    /// Coarse mutex serialises mutating operations so concurrent
-    /// callers can't interleave a JSONL line. Reads are lock-free.
+    /// Coarse in-process mutex keeps threads from this bridge instance from
+    /// contending on the OS advisory lock and interleaving a JSONL line.
+    /// Cross-process exclusion is handled by `LOCK_FILENAME` via fs2.
     write_lock: Mutex<()>,
 }
 
@@ -40,6 +43,16 @@ impl FilePersistence {
     pub fn open(root: impl Into<PathBuf>) -> PersistenceResult<Self> {
         let root = root.into();
         fs::create_dir_all(&root)?;
+        let lock_path = root.join(LOCK_FILENAME);
+        let lock_created = !lock_path.exists();
+        OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        if lock_created {
+            sync_directory(&root)?;
+        }
         Ok(Self {
             root,
             write_lock: Mutex::new(()),
@@ -88,6 +101,68 @@ impl FilePersistence {
         fs::create_dir_all(&dir)?;
         Ok(dir)
     }
+
+    /// Run a mutation while holding both the in-process mutex and an OS
+    /// advisory file lock rooted in the persistence directory.
+    ///
+    /// S03-F04: the old `Mutex<()>` only protected one bridge process. Two
+    /// bridge instances pointed at the same sessions dir could still race on
+    /// `meta.json` and `events.jsonl`. This lock serializes mutating file-store
+    /// operations across cooperating processes as well.
+    fn with_write_lock<T>(
+        &self,
+        op: impl FnOnce() -> PersistenceResult<T>,
+    ) -> PersistenceResult<T> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .expect("persistence write_lock poisoned");
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(self.root.join(LOCK_FILENAME))?;
+        lock_file.lock_exclusive()?;
+        let result = op();
+        let unlock_result = lock_file.unlock();
+        match (result, unlock_result) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(err), _) => Err(err),
+            (Ok(_), Err(err)) => Err(err.into()),
+        }
+    }
+
+    fn save_meta_locked(&self, meta: &PersistedSessionMeta) -> PersistenceResult<()> {
+        let dir = self.ensure_session_dir(&meta.vac_session_id)?;
+        let path = dir.join(META_FILENAME);
+        let tmp = dir.join(format!("{META_FILENAME}.tmp.{}", ulid::Ulid::new()));
+        let bytes = serde_json::to_vec_pretty(meta)?;
+        {
+            let mut file = File::create(&tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp, &path)?;
+        sync_directory(&dir)?;
+        Ok(())
+    }
+
+    fn load_meta_inner(
+        &self,
+        vac_session_id: &str,
+    ) -> PersistenceResult<Option<PersistedSessionMeta>> {
+        let path = self.session_dir(vac_session_id)?.join(META_FILENAME);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path)?;
+        let meta: PersistedSessionMeta =
+            serde_json::from_slice(&bytes).map_err(|e| PersistenceError::CorruptMeta {
+                path: path.display().to_string(),
+                reason: e.to_string(),
+            })?;
+        Ok(Some(meta))
+    }
 }
 
 /// Best-effort directory fsync after creating/replacing entries.
@@ -117,36 +192,11 @@ fn is_safe_session_id(id: &str) -> bool {
 
 impl SessionPersistence for FilePersistence {
     fn save_meta(&self, meta: &PersistedSessionMeta) -> PersistenceResult<()> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .expect("persistence write_lock poisoned");
-        let dir = self.ensure_session_dir(&meta.vac_session_id)?;
-        let path = dir.join(META_FILENAME);
-        let tmp = dir.join(format!("{META_FILENAME}.tmp"));
-        let bytes = serde_json::to_vec_pretty(meta)?;
-        {
-            let mut file = File::create(&tmp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-        }
-        fs::rename(&tmp, &path)?;
-        sync_directory(&dir)?;
-        Ok(())
+        self.with_write_lock(|| self.save_meta_locked(meta))
     }
 
     fn load_meta(&self, vac_session_id: &str) -> PersistenceResult<Option<PersistedSessionMeta>> {
-        let path = self.session_dir(vac_session_id)?.join(META_FILENAME);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let bytes = fs::read(&path)?;
-        let meta: PersistedSessionMeta =
-            serde_json::from_slice(&bytes).map_err(|e| PersistenceError::CorruptMeta {
-                path: path.display().to_string(),
-                reason: e.to_string(),
-            })?;
-        Ok(Some(meta))
+        self.load_meta_inner(vac_session_id)
     }
 
     fn list(&self, filter: &SessionHistoryFilter) -> PersistenceResult<Vec<PersistedSessionMeta>> {
@@ -198,23 +248,21 @@ impl SessionPersistence for FilePersistence {
         vac_session_id: &str,
         event: &PersistedServerEvent,
     ) -> PersistenceResult<()> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .expect("persistence write_lock poisoned");
-        let dir = self.ensure_session_dir(vac_session_id)?;
-        let path = dir.join(EVENTS_FILENAME);
-        let created = !path.exists();
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let mut writer = BufWriter::new(file);
-        serde_json::to_writer(&mut writer, event)?;
-        writer.write_all(b"\n")?;
-        writer.flush()?;
-        writer.get_ref().sync_all()?;
-        if created {
-            sync_directory(&dir)?;
-        }
-        Ok(())
+        self.with_write_lock(|| {
+            let dir = self.ensure_session_dir(vac_session_id)?;
+            let path = dir.join(EVENTS_FILENAME);
+            let created = !path.exists();
+            let file = OpenOptions::new().create(true).append(true).open(&path)?;
+            let mut writer = BufWriter::new(file);
+            serde_json::to_writer(&mut writer, event)?;
+            writer.write_all(b"\n")?;
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+            if created {
+                sync_directory(&dir)?;
+            }
+            Ok(())
+        })
     }
 
     fn load_events(
@@ -253,25 +301,25 @@ impl SessionPersistence for FilePersistence {
         vac_session_id: &str,
         status: PersistedSessionStatus,
     ) -> PersistenceResult<()> {
-        let mut meta = self
-            .load_meta(vac_session_id)?
-            .ok_or_else(|| PersistenceError::NotFound(vac_session_id.to_string()))?;
-        meta.status = status;
-        meta.updated_at = chrono::Utc::now();
-        self.save_meta(&meta)
+        self.with_write_lock(|| {
+            let mut meta = self
+                .load_meta_inner(vac_session_id)?
+                .ok_or_else(|| PersistenceError::NotFound(vac_session_id.to_string()))?;
+            meta.status = status;
+            meta.updated_at = chrono::Utc::now();
+            self.save_meta_locked(&meta)
+        })
     }
 
     fn forget(&self, vac_session_id: &str) -> PersistenceResult<()> {
-        let _guard = self
-            .write_lock
-            .lock()
-            .expect("persistence write_lock poisoned");
-        let dir = self.session_dir(vac_session_id)?;
-        if !dir.exists() {
-            return Ok(());
-        }
-        fs::remove_dir_all(&dir)?;
-        Ok(())
+        self.with_write_lock(|| {
+            let dir = self.session_dir(vac_session_id)?;
+            if !dir.exists() {
+                return Ok(());
+            }
+            fs::remove_dir_all(&dir)?;
+            Ok(())
+        })
     }
 }
 
@@ -337,6 +385,41 @@ mod tests {
             ts: Utc::now(),
             redaction: RedactionLabel::Safe,
         }
+    }
+
+    #[test]
+    fn open_creates_root_advisory_lock_file() {
+        let tmp = TempDir::new().unwrap();
+        let store = FilePersistence::open(tmp.path()).unwrap();
+        assert!(store.root().join(LOCK_FILENAME).is_file());
+    }
+
+    #[test]
+    fn save_meta_uses_unique_temp_names_without_fixed_tmp_leftover() {
+        let tmp = TempDir::new().unwrap();
+        let store = FilePersistence::open(tmp.path()).unwrap();
+        store.save_meta(&meta("sess_tmp_unique", "/p")).unwrap();
+        store.save_meta(&meta("sess_tmp_unique", "/p")).unwrap();
+        let session_dir = tmp.path().join("sess_tmp_unique");
+        assert!(session_dir.join(META_FILENAME).is_file());
+        assert!(
+            !session_dir.join(format!("{META_FILENAME}.tmp")).exists(),
+            "fixed tmp path must not be used because it races across processes"
+        );
+        let leftovers = fs::read_dir(&session_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("meta.json.tmp.")
+            })
+            .count();
+        assert_eq!(
+            leftovers, 0,
+            "successful saves must not leave temp files behind"
+        );
     }
 
     #[test]
