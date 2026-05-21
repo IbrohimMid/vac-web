@@ -3,17 +3,22 @@
 
 use dashmap::DashMap;
 use profile_core::enforce::{enforce_shell, Decision};
-use profile_core::profile::CapabilityProfile;
+use profile_core::profile::{CapabilityProfile, ShellAllowEntry};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
 
-const MAX_OUTPUT_READ_BYTES: usize = 64 * 1024;
+#[cfg(not(test))]
+const TERMINAL_GC_GRACE_MS: u64 = 60_000;
+#[cfg(test)]
+const TERMINAL_GC_GRACE_MS: u64 = 500;
+const TERMINAL_TIMEOUT_EXIT_CODE: i32 = 124;
+const TERMINAL_KILLED_EXIT_CODE: i32 = 137;
 
 /// Per-terminal state shared between the wait/kill task and the
 /// `terminal/output` / `terminal/wait_for_exit` / `terminal/kill`
@@ -40,6 +45,7 @@ pub struct TerminalHandle {
     /// surface command/args without re-resolving them from params.
     pub command: String,
     pub args: Vec<String>,
+    output_truncated: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<i32>>>,
     exit_notify: Arc<tokio::sync::Notify>,
     /// Set to `true` once the owner-task has observed a kill signal.
@@ -74,6 +80,56 @@ pub enum TerminalError {
     AlreadyExited,
     Timeout,
     MethodNotFound(String),
+}
+
+fn shell_allow_entry<'a>(
+    profile: &'a CapabilityProfile,
+    command: &str,
+) -> Result<&'a ShellAllowEntry, TerminalError> {
+    profile
+        .shell_allowlist
+        .iter()
+        .find(|entry| entry.bin == command)
+        .ok_or_else(|| TerminalError::ProfileDenied {
+            reason: format!("shell bin '{command}' not in allowlist"),
+            code: "profile.shell_bin_not_allowed".into(),
+        })
+}
+
+fn append_capped_output(
+    buf: &mut Vec<u8>,
+    total_output_bytes: &AtomicUsize,
+    output_cap_bytes: usize,
+    truncated: &AtomicBool,
+    chunk: &[u8],
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    if output_cap_bytes == 0 {
+        truncated.store(true, Ordering::SeqCst);
+        return;
+    }
+
+    loop {
+        let used = total_output_bytes.load(Ordering::SeqCst);
+        if used >= output_cap_bytes {
+            truncated.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        let accepted = chunk.len().min(output_cap_bytes - used);
+        if total_output_bytes
+            .compare_exchange(used, used + accepted, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            buf.extend_from_slice(&chunk[..accepted]);
+            if accepted < chunk.len() {
+                truncated.store(true, Ordering::SeqCst);
+            }
+            return;
+        }
+    }
 }
 
 impl std::fmt::Display for TerminalError {
@@ -161,6 +217,9 @@ pub async fn handle_terminal_create(
             });
         }
     }
+    let shell_limits = shell_allow_entry(&ctx.profile, command)?;
+    let timeout_ms = shell_limits.timeout_ms;
+    let output_cap_bytes = shell_limits.output_cap_bytes;
 
     let mut cmd = Command::new(command);
     cmd.args(&args)
@@ -180,11 +239,16 @@ pub async fn handle_terminal_create(
     let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let exit_notify = Arc::new(tokio::sync::Notify::new());
     let killed = Arc::new(AtomicBool::new(false));
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let output_truncated = Arc::new(AtomicBool::new(false));
+    let total_output_bytes = Arc::new(AtomicUsize::new(0));
 
     // Audit P2 fix (stream separation): stdout and stderr are read
     // into independent buffers so the cockpit can distinguish error
     // output from normal output (Zed-class terminals colorize stderr).
     let stdout_clone = Arc::clone(&stdout_buf);
+    let stdout_total = Arc::clone(&total_output_bytes);
+    let stdout_truncated = Arc::clone(&output_truncated);
     if let Some(mut out) = stdout {
         tokio::spawn(async move {
             let mut tmp = [0u8; 4096];
@@ -193,10 +257,13 @@ pub async fn handle_terminal_create(
                     Ok(0) => break,
                     Ok(n) => {
                         let mut buf = stdout_clone.lock().await;
-                        let remaining = MAX_OUTPUT_READ_BYTES.saturating_sub(buf.len());
-                        if remaining > 0 {
-                            buf.extend_from_slice(&tmp[..n.min(remaining)]);
-                        }
+                        append_capped_output(
+                            &mut buf,
+                            &stdout_total,
+                            output_cap_bytes,
+                            &stdout_truncated,
+                            &tmp[..n],
+                        );
                     }
                     Err(_) => break,
                 }
@@ -205,6 +272,8 @@ pub async fn handle_terminal_create(
     }
 
     let stderr_clone = Arc::clone(&stderr_buf);
+    let stderr_total = Arc::clone(&total_output_bytes);
+    let stderr_truncated = Arc::clone(&output_truncated);
     if let Some(mut err) = stderr {
         tokio::spawn(async move {
             let mut tmp = [0u8; 4096];
@@ -213,10 +282,13 @@ pub async fn handle_terminal_create(
                     Ok(0) => break,
                     Ok(n) => {
                         let mut buf = stderr_clone.lock().await;
-                        let remaining = MAX_OUTPUT_READ_BYTES.saturating_sub(buf.len());
-                        if remaining > 0 {
-                            buf.extend_from_slice(&tmp[..n.min(remaining)]);
-                        }
+                        append_capped_output(
+                            &mut buf,
+                            &stderr_total,
+                            output_cap_bytes,
+                            &stderr_truncated,
+                            &tmp[..n],
+                        );
                     }
                     Err(_) => break,
                 }
@@ -228,6 +300,11 @@ pub async fn handle_terminal_create(
     let exit_code_clone = Arc::clone(&exit_code);
     let exit_notify_clone = Arc::clone(&exit_notify);
     let killed_clone = Arc::clone(&killed);
+    let timed_out_clone = Arc::clone(&timed_out);
+
+    let terminal_id = ulid::Ulid::new().to_string();
+    let terminal_id_for_gc = terminal_id.clone();
+    let terminals_for_gc = Arc::clone(&ctx.terminals);
 
     // Single owner-task: holds the `Child`, polls `wait()`, and handles
     // kill signals via `tokio::select!`. Dropping the half-completed
@@ -235,6 +312,9 @@ pub async fn handle_terminal_create(
     // state lives on `Child` itself, so we just re-await on the next
     // loop iteration after `start_kill()`.
     tokio::spawn(async move {
+        let timeout = tokio::time::sleep(std::time::Duration::from_millis(timeout_ms));
+        tokio::pin!(timeout);
+        let mut timeout_fired = false;
         loop {
             tokio::select! {
                 res = child.wait() => {
@@ -244,10 +324,14 @@ pub async fn handle_terminal_create(
                             let code = match raw {
                                 Some(c) => c,
                                 None => {
-                                    // Killed by signal — surface 137
-                                    // (SIGKILL convention) when we
-                                    // requested it, otherwise -1.
-                                    if killed_clone.load(Ordering::SeqCst) { 137 } else { -1 }
+                                    // Killed by bridge-owned timeout or explicit kill.
+                                    if timed_out_clone.load(Ordering::SeqCst) {
+                                        TERMINAL_TIMEOUT_EXIT_CODE
+                                    } else if killed_clone.load(Ordering::SeqCst) {
+                                        TERMINAL_KILLED_EXIT_CODE
+                                    } else {
+                                        -1
+                                    }
                                 }
                             };
                             *exit_code_clone.lock().await = Some(code);
@@ -269,11 +353,20 @@ pub async fn handle_terminal_create(
                     // which should return promptly now that SIGKILL
                     // has been delivered.
                 }
+                _ = &mut timeout, if !timeout_fired => {
+                    timeout_fired = true;
+                    timed_out_clone.store(true, Ordering::SeqCst);
+                    killed_clone.store(true, Ordering::SeqCst);
+                    if let Err(e) = child.start_kill() {
+                        warn!(error=%e, "terminal timeout start_kill failed");
+                    }
+                }
             }
         }
-    });
 
-    let terminal_id = ulid::Ulid::new().to_string();
+        tokio::time::sleep(std::time::Duration::from_millis(TERMINAL_GC_GRACE_MS)).await;
+        terminals_for_gc.remove(&terminal_id_for_gc);
+    });
 
     let handle = Arc::new(TerminalHandle {
         kill_tx,
@@ -281,6 +374,7 @@ pub async fn handle_terminal_create(
         stderr_buf,
         command: command.to_string(),
         args: args.iter().map(|s| s.to_string()).collect(),
+        output_truncated,
         exit_code,
         exit_notify,
         killed,
@@ -346,6 +440,7 @@ pub async fn handle_terminal_output(
         "output": output,
         "stdout": stdout,
         "stderr": stderr,
+        "truncated": handle.output_truncated.load(Ordering::SeqCst),
     }))
 }
 
@@ -519,14 +614,18 @@ mod tests {
     }
 
     fn allow(bin: &str) -> ShellAllowEntry {
+        allow_with_limits(bin, 60_000, 2_097_152)
+    }
+
+    fn allow_with_limits(bin: &str, timeout_ms: u64, output_cap_bytes: usize) -> ShellAllowEntry {
         ShellAllowEntry {
             bin: bin.into(),
             args_pattern: None,
             max_args: 10,
             cwd_scope: None,
-            timeout_ms: 60_000,
+            timeout_ms,
             env_allowlist: vec![],
-            output_cap_bytes: 2_097_152,
+            output_cap_bytes,
         }
     }
 
@@ -684,5 +783,90 @@ mod tests {
             exit_code, 0,
             "killed sleep should not exit cleanly, got exit_code={exit_code}"
         );
+    }
+
+    #[tokio::test]
+    async fn create_enforces_profile_timeout_and_stops_process() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(dir.path(), vec![allow_with_limits("sleep", 100, 2_097_152)]);
+        let create_params = json!({ "command": "sleep", "args": ["30"] });
+        let created = handle_terminal_create(&ctx, &create_params).await.unwrap();
+        let tid = created["terminalId"].as_str().unwrap().to_string();
+
+        let wait_params = json!({ "terminalId": tid, "timeoutMs": 5_000 });
+        let started = std::time::Instant::now();
+        let wait_result = handle_terminal_wait_for_exit(&ctx, &wait_params)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "profile timeout should stop promptly; elapsed={elapsed:?}"
+        );
+        assert_eq!(wait_result["exitCode"].as_i64().unwrap(), 124);
+    }
+
+    #[tokio::test]
+    async fn output_uses_profile_output_cap_and_reports_truncation() {
+        if std::process::Command::new("bash")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("bash not on PATH; skipping output cap test");
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(dir.path(), vec![allow_with_limits("bash", 60_000, 12)]);
+        let script_path = dir.path().join("large-output.sh");
+        std::fs::write(
+            &script_path,
+            "#!/usr/bin/env bash\nprintf 1234567890\nprintf abcdefghij\n",
+        )
+        .unwrap();
+        let create_params = json!({
+            "command": "bash",
+            "args": [script_path.to_str().unwrap()],
+        });
+        let created = handle_terminal_create(&ctx, &create_params).await.unwrap();
+        let tid = created["terminalId"].as_str().unwrap().to_string();
+
+        let wait_params = json!({ "terminalId": tid, "timeoutMs": 3_000 });
+        let _ = handle_terminal_wait_for_exit(&ctx, &wait_params)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let output_params = json!({ "terminalId": tid });
+        let result = handle_terminal_output(&ctx, &output_params).await.unwrap();
+        let output = result["output"].as_str().unwrap();
+        assert!(
+            output.len() <= 12,
+            "output should respect profile output cap; got len={} output={output:?}",
+            output.len()
+        );
+        assert_eq!(result["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn exited_terminal_is_garbage_collected_after_grace_period() {
+        let dir = TempDir::new().unwrap();
+        let ctx = test_ctx(dir.path(), vec![allow("echo")]);
+        let params = json!({ "command": "echo", "args": ["hi"] });
+        let result = handle_terminal_create(&ctx, &params).await.unwrap();
+        let tid = result["terminalId"].as_str().unwrap().to_string();
+
+        let wait_params = json!({ "terminalId": tid, "timeoutMs": 3_000 });
+        let _ = handle_terminal_wait_for_exit(&ctx, &wait_params)
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(TERMINAL_GC_GRACE_MS + 200)).await;
+
+        let output_params = json!({ "terminalId": tid });
+        let err = handle_terminal_output(&ctx, &output_params)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TerminalError::NotFound(_)));
     }
 }
