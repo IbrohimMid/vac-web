@@ -35,6 +35,10 @@ export interface WorkflowRun {
   status: WorkflowRunStatus;
 }
 
+function isCurrentRun(run: WorkflowRun | undefined, event: { run_id: string }): run is WorkflowRun {
+  return !!run && run.run_id === event.run_id;
+}
+
 interface WorkflowSlice {
   runs: Map<string, WorkflowRun>; // key: session_id
 
@@ -108,7 +112,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowStepStarted(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, {
         ...run,
@@ -129,7 +133,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowStepUpdated(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, {
         ...run,
@@ -142,7 +146,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowStepCompleted(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, {
         ...run,
@@ -157,7 +161,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowStepFailed(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, {
         ...run,
@@ -172,7 +176,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowArtifactCreated(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, {
         ...run,
@@ -200,7 +204,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowCompleted(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, { ...run, status: 'completed' });
       return { runs };
@@ -210,7 +214,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
   applyWorkflowFailed(p) {
     set((s) => {
       const run = s.runs.get(p.session_id);
-      if (!run) return {};
+      if (!isCurrentRun(run, p)) return {};
       const runs = new Map(s.runs);
       runs.set(p.session_id, { ...run, status: 'failed' });
       return { runs };

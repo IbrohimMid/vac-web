@@ -46,11 +46,16 @@ describe('workflow store', () => {
   it('applyWorkflowStepCompleted marks step completed', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
     useWorkflow.getState().applyWorkflowStepStarted({
-      session_id: 'sess1', run_id: 'run_01', step_id: 'step_1',
-      activity_kind: 'prompt_agent', label: 'Prompt agent',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'step_1',
+      activity_kind: 'prompt_agent',
+      label: 'Prompt agent',
     });
     useWorkflow.getState().applyWorkflowStepCompleted({
-      session_id: 'sess1', run_id: 'run_01', step_id: 'step_1',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'step_1',
     });
     const run = selectSessionWorkflowRun('sess1')!;
     expect(run.steps[0]?.status).toBe('completed');
@@ -59,11 +64,17 @@ describe('workflow store', () => {
   it('applyWorkflowStepFailed marks step failed', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
     useWorkflow.getState().applyWorkflowStepStarted({
-      session_id: 'sess1', run_id: 'run_01', step_id: 'step_1',
-      activity_kind: 'await_approval', label: 'Await approval',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'step_1',
+      activity_kind: 'await_approval',
+      label: 'Await approval',
     });
     useWorkflow.getState().applyWorkflowStepFailed({
-      session_id: 'sess1', run_id: 'run_01', step_id: 'step_1', reason: 'rejected',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'step_1',
+      reason: 'rejected',
     });
     const run = selectSessionWorkflowRun('sess1')!;
     expect(run.steps[0]?.status).toBe('failed');
@@ -72,9 +83,12 @@ describe('workflow store', () => {
   it('applyWorkflowArtifactCreated adds artifact', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
     useWorkflow.getState().applyWorkflowArtifactCreated({
-      session_id: 'sess1', run_id: 'run_01',
-      artifact_id: 'art_01', kind: 'review_diff',
-      step_id: 'step_2', tool_call_id: 'tc1',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      artifact_id: 'art_01',
+      kind: 'review_diff',
+      step_id: 'step_2',
+      tool_call_id: 'tc1',
       ts: '2026-01-01T00:00:00Z',
     });
     const run = selectSessionWorkflowRun('sess1')!;
@@ -85,9 +99,12 @@ describe('workflow store', () => {
   it('applyWorkflowArtifactCreated preserves source_event_type', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
     useWorkflow.getState().applyWorkflowArtifactCreated({
-      session_id: 'sess1', run_id: 'run_01',
-      artifact_id: 'art_02', kind: 'review_diff',
-      step_id: 'step_2', tool_call_id: 'tc2',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      artifact_id: 'art_02',
+      kind: 'review_diff',
+      step_id: 'step_2',
+      tool_call_id: 'tc2',
       ts: '2026-01-01T00:00:00Z',
       source_event_type: 'review.changeset_updated',
     });
@@ -104,7 +121,9 @@ describe('workflow store', () => {
 
   it('applyWorkflowFailed sets status failed', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
-    useWorkflow.getState().applyWorkflowFailed({ session_id: 'sess1', run_id: 'run_01', reason: 'crash' });
+    useWorkflow
+      .getState()
+      .applyWorkflowFailed({ session_id: 'sess1', run_id: 'run_01', reason: 'crash' });
     const run = selectSessionWorkflowRun('sess1')!;
     expect(run.status).toBe('failed');
   });
@@ -118,14 +137,64 @@ describe('workflow store', () => {
   it('step updated does not change step status', () => {
     useWorkflow.getState().applyWorkflowStarted(BASE);
     useWorkflow.getState().applyWorkflowStepStarted({
-      session_id: 'sess1', run_id: 'run_01', step_id: 'step_1',
-      activity_kind: 'observe_tool_activity', label: 'Observe',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'step_1',
+      activity_kind: 'observe_tool_activity',
+      label: 'Observe',
     });
     useWorkflow.getState().applyWorkflowStepUpdated({
-      session_id: 'sess1', run_id: 'run_01', step_id: 'step_1',
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'step_1',
     });
     const run = selectSessionWorkflowRun('sess1')!;
     expect(run.steps[0]?.status).toBe('started');
+  });
+
+  it('ignores late events from a previous run_id for the same session', () => {
+    useWorkflow.getState().applyWorkflowStarted(BASE);
+    useWorkflow.getState().applyWorkflowStepStarted({
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'old_step',
+      activity_kind: 'prompt_agent',
+      label: 'Old step',
+    });
+    useWorkflow.getState().applyWorkflowStarted({
+      session_id: 'sess1',
+      run_id: 'run_02',
+      spec_id: 'build.basic',
+      spec_name: 'Basic Build',
+    });
+
+    useWorkflow.getState().applyWorkflowStepStarted({
+      session_id: 'sess1',
+      run_id: 'run_01',
+      step_id: 'late_step',
+      activity_kind: 'prompt_agent',
+      label: 'Late old step',
+    });
+    useWorkflow.getState().applyWorkflowArtifactCreated({
+      session_id: 'sess1',
+      run_id: 'run_01',
+      artifact_id: 'late_artifact',
+      kind: 'review_diff',
+      step_id: 'late_step',
+      tool_call_id: 'tc_late',
+      ts: '2026-01-01T00:00:00Z',
+    });
+    useWorkflow.getState().applyWorkflowFailed({
+      session_id: 'sess1',
+      run_id: 'run_01',
+      reason: 'late failure',
+    });
+
+    const run = selectSessionWorkflowRun('sess1')!;
+    expect(run.run_id).toBe('run_02');
+    expect(run.status).toBe('running');
+    expect(run.steps).toHaveLength(0);
+    expect(run.artifacts).toHaveLength(0);
   });
 
   it('selectSessionWorkflowRun returns null for unknown session', () => {
