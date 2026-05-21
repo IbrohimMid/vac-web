@@ -369,16 +369,32 @@ impl AcpClient {
 
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
-        self.write_line(bytes)?;
+        if let Err(err) = self.write_line(bytes) {
+            self.pending.lock().await.remove(&id);
+            return Err(err).with_context(|| format!("sending ACP {method} request"));
+        }
 
         let result_value = match timeout {
-            Some(t) => tokio::time::timeout(t, rx)
-                .await
-                .map_err(|_| anyhow!("acp {method} timed out after {t:?}"))?
-                .map_err(|_| anyhow!("acp {method}: response channel dropped"))??,
-            None => rx
-                .await
-                .map_err(|_| anyhow!("acp {method}: response channel dropped"))??,
+            Some(t) => match tokio::time::timeout(t, rx).await {
+                Ok(response) => match response {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        self.pending.lock().await.remove(&id);
+                        return Err(anyhow!("acp {method}: response channel dropped"));
+                    }
+                },
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    return Err(anyhow!("acp {method} timed out after {t:?}"));
+                }
+            },
+            None => match rx.await {
+                Ok(result) => result?,
+                Err(_) => {
+                    self.pending.lock().await.remove(&id);
+                    return Err(anyhow!("acp {method}: response channel dropped"));
+                }
+            },
         };
 
         serde_json::from_value::<R>(result_value)
@@ -815,6 +831,26 @@ mod tests {
         assert_eq!(classify_jsonrpc_error(&e), "agent.internal");
     }
 
+    fn test_client_with_stdin(
+        stdin_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    ) -> (AcpClient, Pending) {
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (updates_tx, _) = broadcast::channel::<SessionNotification>(8);
+        let (_perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel::<PermissionRequest>();
+        let (_fs_tx, fs_rx) = tokio::sync::mpsc::unbounded_channel::<FsRequest>();
+        let (_term_tx, term_rx) = tokio::sync::mpsc::unbounded_channel::<TerminalRequest>();
+        let client = AcpClient {
+            next_id: Arc::new(Mutex::new(1)),
+            pending: Arc::clone(&pending),
+            stdin_tx,
+            updates: updates_tx,
+            permission_rx: Mutex::new(Some(perm_rx)),
+            fs_rx: Mutex::new(Some(fs_rx)),
+            terminal_rx: Mutex::new(Some(term_rx)),
+        };
+        (client, pending)
+    }
+
     fn test_channels() -> (
         DispatchChannels,
         tokio::sync::mpsc::UnboundedReceiver<PermissionRequest>,
@@ -834,6 +870,52 @@ mod tests {
             fs_rx,
             term_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn rpc_write_failure_removes_pending_request() {
+        let (stdin_tx, stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        drop(stdin_rx);
+        let (client, pending) = test_client_with_stdin(stdin_tx);
+
+        let result = client
+            .rpc::<_, Value>(
+                "initialize",
+                json!({}),
+                Some(std::time::Duration::from_millis(10)),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(
+            pending.lock().await.is_empty(),
+            "failed writes must not leave orphaned pending RPC entries"
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_timeout_removes_pending_request() {
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (client, pending) = test_client_with_stdin(stdin_tx);
+
+        let result = client
+            .rpc::<_, Value>(
+                "initialize",
+                json!({}),
+                Some(std::time::Duration::from_millis(10)),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let sent = stdin_rx
+            .try_recv()
+            .expect("request should be sent before timing out");
+        let frame: Value = serde_json::from_slice(sent.trim_ascii_end()).unwrap();
+        assert_eq!(frame["id"], json!(1));
+        assert!(
+            pending.lock().await.is_empty(),
+            "timed out RPCs must be removed from the pending table"
+        );
     }
 
     #[tokio::test]
