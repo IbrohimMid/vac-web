@@ -90,6 +90,19 @@ impl FilePersistence {
     }
 }
 
+/// Best-effort directory fsync after creating/replacing entries.
+///
+/// S03-F03: flushing the file is not enough for crash durability. After a
+/// `rename` or first creation of `events.jsonl`, the directory entry itself
+/// must be synced so power loss cannot acknowledge data whose name was never
+/// committed to disk. Some platforms/filesystems do not support syncing a
+/// directory handle; in that case surface the IO error instead of pretending
+/// the durable write succeeded.
+fn sync_directory(path: &Path) -> PersistenceResult<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
 /// Reject path-traversal-shaped ids and anything that wouldn't make a
 /// safe directory name. The bridge generates `sess_<ulid>` so the
 /// realistic input is always a clean ASCII alnum/underscore/hyphen
@@ -112,8 +125,13 @@ impl SessionPersistence for FilePersistence {
         let path = dir.join(META_FILENAME);
         let tmp = dir.join(format!("{META_FILENAME}.tmp"));
         let bytes = serde_json::to_vec_pretty(meta)?;
-        fs::write(&tmp, &bytes)?;
+        {
+            let mut file = File::create(&tmp)?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+        }
         fs::rename(&tmp, &path)?;
+        sync_directory(&dir)?;
         Ok(())
     }
 
@@ -186,10 +204,16 @@ impl SessionPersistence for FilePersistence {
             .expect("persistence write_lock poisoned");
         let dir = self.ensure_session_dir(vac_session_id)?;
         let path = dir.join(EVENTS_FILENAME);
-        let mut writer = BufWriter::new(OpenOptions::new().create(true).append(true).open(&path)?);
+        let created = !path.exists();
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut writer = BufWriter::new(file);
         serde_json::to_writer(&mut writer, event)?;
         writer.write_all(b"\n")?;
         writer.flush()?;
+        writer.get_ref().sync_all()?;
+        if created {
+            sync_directory(&dir)?;
+        }
         Ok(())
     }
 
@@ -361,6 +385,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(limited.len(), 2);
+    }
+
+    #[test]
+    fn sync_directory_accepts_existing_temp_dir() {
+        let tmp = TempDir::new().unwrap();
+        sync_directory(tmp.path()).unwrap();
     }
 
     #[test]
