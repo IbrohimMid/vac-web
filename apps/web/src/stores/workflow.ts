@@ -53,17 +53,9 @@ interface WorkflowSlice {
     label: string;
   }): void;
 
-  applyWorkflowStepUpdated(p: {
-    session_id: string;
-    run_id: string;
-    step_id: string;
-  }): void;
+  applyWorkflowStepUpdated(p: { session_id: string; run_id: string; step_id: string }): void;
 
-  applyWorkflowStepCompleted(p: {
-    session_id: string;
-    run_id: string;
-    step_id: string;
-  }): void;
+  applyWorkflowStepCompleted(p: { session_id: string; run_id: string; step_id: string }): void;
 
   applyWorkflowStepFailed(p: {
     session_id: string;
@@ -91,6 +83,7 @@ interface WorkflowSlice {
   applyWorkflowFailed(p: { session_id: string; run_id: string; reason: string }): void;
 
   clearSession(sessionId: string): void;
+  resetAll(): void;
 }
 
 export const useWorkflow = create<WorkflowSlice>((set) => ({
@@ -140,9 +133,7 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
       const runs = new Map(s.runs);
       runs.set(p.session_id, {
         ...run,
-        steps: run.steps.map((st) =>
-          st.step_id === p.step_id ? { ...st } : st,
-        ),
+        steps: run.steps.map((st) => (st.step_id === p.step_id ? { ...st } : st)),
       });
       return { runs };
     });
@@ -195,7 +186,9 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
             ts: p.ts,
             ...(p.source_event_type !== undefined && { source_event_type: p.source_event_type }),
             ...(p.review_diff_count !== undefined && { review_diff_count: p.review_diff_count }),
-            ...(p.runtime_command_preview !== undefined && { runtime_command_preview: p.runtime_command_preview }),
+            ...(p.runtime_command_preview !== undefined && {
+              runtime_command_preview: p.runtime_command_preview,
+            }),
             ...(p.approval_id !== undefined && { approval_id: p.approval_id }),
           },
         ],
@@ -230,6 +223,10 @@ export const useWorkflow = create<WorkflowSlice>((set) => ({
       runs.delete(sessionId);
       return { runs };
     });
+  },
+
+  resetAll() {
+    set({ runs: new Map() });
   },
 }));
 

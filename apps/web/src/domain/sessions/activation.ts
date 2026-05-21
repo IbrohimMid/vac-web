@@ -18,6 +18,11 @@ import { useAgentSession } from '../../stores/agentSession';
 import { useToolActivity } from '../../stores/toolActivity';
 import { useTranscript } from '../../stores/transcript';
 import { useOverlays } from '../../stores/overlays';
+import { usePreview } from '../../stores/preview';
+import { useProject } from '../../stores/project';
+import { useTasks } from '../../stores/tasks';
+import { useValidation } from '../../stores/validation';
+import { useWorkflow } from '../../stores/workflow';
 
 interface SessionReadyLike {
   session_id?: unknown;
@@ -48,14 +53,20 @@ export interface SessionActivationFallback {
 }
 
 function asRecord(raw: unknown): Record<string, unknown> {
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  return raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
 }
 
 function asString(raw: unknown): string | null {
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
-function stringField(src: SessionReadyLike, snake: keyof SessionReadyLike, camel: keyof SessionReadyLike): string | null {
+function stringField(
+  src: SessionReadyLike,
+  snake: keyof SessionReadyLike,
+  camel: keyof SessionReadyLike,
+): string | null {
   return asString(src[snake]) ?? asString(src[camel]);
 }
 
@@ -75,6 +86,11 @@ function clearSessionBoundStores(): void {
   useToolActivity.getState().clear();
   useTranscript.getState().clear();
   useContinuous.getState().clear();
+  useProject.getState().resetAll();
+  usePreview.getState().resetAll();
+  useTasks.getState().resetAll();
+  useValidation.getState().resetAll();
+  useWorkflow.getState().resetAll();
   useOverlays.getState().dismissAll();
   useShell.getState().setOpen(false);
   useShell.getState().setShellId(null);

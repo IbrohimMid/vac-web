@@ -7,10 +7,17 @@ import { useSession } from '../../stores/session';
 import { useShell } from '../../stores/shell';
 import { agentTextKey, useAgentSession } from '../../stores/agentSession';
 import { useTranscript } from '../../stores/transcript';
+import { usePreview } from '../../stores/preview';
+import { useProject } from '../../stores/project';
+import { useTasks } from '../../stores/tasks';
+import { useValidation } from '../../stores/validation';
+import { useWorkflow } from '../../stores/workflow';
 
 describe('session activation helper', () => {
   beforeEach(() => {
-    useActivity.setState({ entries: [{ id: 'act_old', ts: 't', subsystem: 'session', severity: 'info', summary: 'old' }] });
+    useActivity.setState({
+      entries: [{ id: 'act_old', ts: 't', subsystem: 'session', severity: 'info', summary: 'old' }],
+    });
     useApprovals.setState({
       pending: new Map([
         [
@@ -51,6 +58,91 @@ describe('session activation helper', () => {
     });
     useShell.setState({ open: true, shellId: 'shell_old' });
     useAgentSession.getState().clear();
+    useProject.setState({
+      treeStatus: 'loaded',
+      entries: [{ path: 'old.ts', type: 'file', size: 12 }],
+      files: {
+        'old.ts': { path: 'old.ts', status: 'loaded', content: 'old file' },
+      },
+      selectedFilePath: 'old.ts',
+      selectedLines: { start: 1, end: 2 },
+      expanded: { src: true },
+      filter: 'old',
+      treeOptions: { includeHidden: true },
+      truncated: true,
+      entryCount: 1,
+      capReason: 'old cap',
+    });
+    usePreview.setState({
+      status: 'failed',
+      url: 'http://localhost:5174',
+      errorMessage: 'old preview error',
+      unsupportedReason: 'old unsupported',
+      lastUpdatedAt: 1,
+      consoleErrors: [{ message: 'old console', receivedAt: 1 }],
+      networkFailures: [{ url: 'http://localhost:5174/api', receivedAt: 1 }],
+    });
+    useTasks.setState({
+      tasks: new Map([
+        [
+          'task_old',
+          {
+            taskId: 'task_old',
+            sessionId: 'sess_old',
+            title: 'Old task',
+            status: 'executing',
+            plan: [],
+            activeStepId: null,
+            changedFiles: ['old.ts'],
+            commands: ['pnpm test'],
+            approvalsNeeded: [],
+            validation: null,
+            blocker: null,
+            errorMessage: null,
+            createdAt: 't',
+            updatedAt: 't',
+          },
+        ],
+      ]),
+      order: ['task_old'],
+      activeTaskId: 'task_old',
+    });
+    useValidation.setState({
+      runs: new Map([
+        [
+          'val_old',
+          {
+            id: 'val_old',
+            sessionId: 'sess_old',
+            command: 'pnpm test',
+            label: 'Old validation',
+            status: 'running',
+            startedAt: 't',
+            relatedFiles: ['old.ts'],
+          },
+        ],
+      ]),
+      order: ['val_old'],
+      selectedRunId: 'val_old',
+    });
+    useWorkflow.setState({
+      runs: new Map([
+        [
+          'sess_old',
+          {
+            run_id: 'run_old',
+            session_id: 'sess_old',
+            spec_id: 'wf_old',
+            spec_name: 'Old workflow',
+            steps: [
+              { step_id: 'step_old', activity_kind: 'shell', label: 'Old step', status: 'started' },
+            ],
+            artifacts: [],
+            status: 'running',
+          },
+        ],
+      ]),
+    });
     useAgentSession.getState().appendAssistantDelta('sess_old', 'old rich text');
     useTranscript.setState({
       messages: new Map([
@@ -101,8 +193,19 @@ describe('session activation helper', () => {
     expect(useCockpit.getState().route).toBe('build');
     expect(useActivity.getState().entries).toHaveLength(0);
     expect(useApprovals.getState().pendingOrder).toHaveLength(0);
-    expect(useAgentSession.getState().assistants.get(agentTextKey('sess_old', 'assistant'))).toBeUndefined();
+    expect(
+      useAgentSession.getState().assistants.get(agentTextKey('sess_old', 'assistant')),
+    ).toBeUndefined();
     expect(useTranscript.getState().order).toHaveLength(0);
+    expect(useProject.getState().entries).toHaveLength(0);
+    expect(useProject.getState().files).toEqual({});
+    expect(useProject.getState().selectedFilePath).toBeNull();
+    expect(usePreview.getState().status).toBe('idle');
+    expect(usePreview.getState().consoleErrors).toHaveLength(0);
+    expect(usePreview.getState().networkFailures).toHaveLength(0);
+    expect(useTasks.getState().order).toHaveLength(0);
+    expect(useValidation.getState().order).toHaveLength(0);
+    expect(useWorkflow.getState().runs.size).toBe(0);
     expect(useShell.getState().open).toBe(false);
     expect(useShell.getState().shellId).toBeNull();
     expect(useSession.getState().authStatus).toBe('idle');
