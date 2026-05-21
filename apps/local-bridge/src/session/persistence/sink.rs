@@ -82,10 +82,26 @@ impl PersistenceSink {
         health: PersistenceHealth,
         bus: Option<broadcast::Sender<ServerEvent>>,
     ) -> Self {
+        Self::with_health_and_initial_seq(inner, vac_session_id, mode, health, bus, 0)
+    }
+
+    /// Construct a sink whose next persisted event starts at `initial_seq`.
+    ///
+    /// S03-F02: resumed sinks must continue after the persisted JSONL tail
+    /// instead of restarting at zero. Otherwise newly-emitted lifecycle events
+    /// can duplicate old seq values and make replay ordering nondeterministic.
+    pub fn with_health_and_initial_seq(
+        inner: Arc<dyn SessionPersistence>,
+        vac_session_id: String,
+        mode: RedactionMode,
+        health: PersistenceHealth,
+        bus: Option<broadcast::Sender<ServerEvent>>,
+        initial_seq: u64,
+    ) -> Self {
         Self {
             inner,
             vac_session_id,
-            seq: Arc::new(AtomicU64::new(0)),
+            seq: Arc::new(AtomicU64::new(initial_seq)),
             mode,
             health,
             bus,
@@ -271,6 +287,7 @@ mod tests {
     #[derive(Default)]
     struct ToggleStore {
         fail_append: Mutex<bool>,
+        appended: Mutex<Vec<PersistedServerEvent>>,
     }
 
     impl ToggleStore {
@@ -298,7 +315,7 @@ mod tests {
         fn append_event(
             &self,
             _id: &str,
-            _ev: &PersistedServerEvent,
+            ev: &PersistedServerEvent,
         ) -> super::super::PersistenceResult<()> {
             if *self.fail_append.lock().unwrap() {
                 Err(PersistenceError::CorruptMeta {
@@ -306,6 +323,7 @@ mod tests {
                     reason: "injected".into(),
                 })
             } else {
+                self.appended.lock().unwrap().push(ev.clone());
                 Ok(())
             }
         }
@@ -506,6 +524,29 @@ mod tests {
         assert!(
             !health.is_degraded(),
             "healthy double-write must stay clean"
+        );
+    }
+
+    #[test]
+    fn with_initial_seq_continues_after_persisted_tail() {
+        let store = Arc::new(ToggleStore::default());
+        let sink = PersistenceSink::with_health_and_initial_seq(
+            Arc::clone(&store) as Arc<dyn SessionPersistence>,
+            "sess_alpha".into(),
+            RedactionMode::Standard,
+            PersistenceHealth::new(),
+            None,
+            42,
+        );
+
+        sink.record(&ok_event());
+        sink.record(&ok_event());
+
+        let appended = store.appended.lock().unwrap();
+        assert_eq!(
+            appended.iter().map(|ev| ev.seq).collect::<Vec<_>>(),
+            vec![42, 43],
+            "resumed sinks must append after the persisted tail instead of restarting at zero"
         );
     }
 

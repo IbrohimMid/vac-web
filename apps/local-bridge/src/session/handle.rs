@@ -1311,9 +1311,33 @@ fn build_persistence_sink(
         health.record_failure("meta_save_failed", e.to_string(), Some(session_id));
         return None;
     }
+    let initial_seq = match inner.load_events(session_id, 0) {
+        Ok(events) => events
+            .iter()
+            .map(|event| event.seq)
+            .max()
+            .and_then(|max_seq| max_seq.checked_add(1))
+            .unwrap_or(0),
+        Err(e) => {
+            tracing::warn!(
+                session = %session_id,
+                error = %e,
+                "persistence.load_events failed while initializing sink seq; starting at 0"
+            );
+            health.record_failure("load_events_failed", e.to_string(), Some(session_id));
+            0
+        }
+    };
     Some(
-        PersistenceSink::with_health(Arc::clone(inner), session_id.to_string(), mode, health, bus)
-            .with_assessment_index(assessment_index),
+        PersistenceSink::with_health_and_initial_seq(
+            Arc::clone(inner),
+            session_id.to_string(),
+            mode,
+            health,
+            bus,
+            initial_seq,
+        )
+        .with_assessment_index(assessment_index),
     )
 }
 

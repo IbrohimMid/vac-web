@@ -526,6 +526,28 @@ async fn x6_native_or_replay_unsupported_falls_back_to_replay() {
         replayed >= 3,
         "fallback path must replay at least the pre-populated 3 events; got {replayed}"
     );
+
+    // S03-F02 regression guard: resume creates a fresh PersistenceSink.
+    // It must continue after the existing JSONL tail (0,1,2 here) instead
+    // of restarting at 0, otherwise the newly persisted resume lifecycle
+    // rows collide with old transcript rows and replay ordering becomes
+    // nondeterministic.
+    let persisted_after_resume = h.persistence.load_events(vac_session_id, 0).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut duplicates = Vec::new();
+    for event in &persisted_after_resume {
+        if !seen.insert(event.seq) {
+            duplicates.push(event.seq);
+        }
+    }
+    assert!(
+        duplicates.is_empty(),
+        "resumed persistence sink must not duplicate seq values; duplicates={duplicates:?}, events={persisted_after_resume:#?}"
+    );
+    assert!(
+        persisted_after_resume.iter().any(|event| event.seq >= 3),
+        "resume lifecycle events must be appended after the pre-existing tail seq=2; events={persisted_after_resume:#?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
