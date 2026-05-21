@@ -8,7 +8,7 @@ use profile_core::profile::CapabilityProfile;
 #[cfg(test)]
 use profile_core::profile::FsConfig;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
 
@@ -100,15 +100,80 @@ pub fn resolve_path(raw: &str, project_root: &Path) -> PathBuf {
     }
 }
 
+fn deny_path_escape(reason: impl Into<String>) -> FsError {
+    FsError::ProfileDenied {
+        reason: reason.into(),
+        code: "fs.path_escape".into(),
+    }
+}
+
+fn canonical_project_root(project_root: &Path) -> Result<PathBuf, FsError> {
+    project_root.canonicalize().map_err(FsError::IoError)
+}
+
+fn normalize_absolute(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
+}
+
+fn resolve_for_read(raw: &str, project_root: &Path) -> Result<(PathBuf, PathBuf), FsError> {
+    let root = canonical_project_root(project_root)?;
+    let candidate = resolve_path(raw, &root);
+    let resolved = candidate.canonicalize().map_err(FsError::IoError)?;
+    Ok((resolved, root))
+}
+
+fn resolve_for_write(raw: &str, project_root: &Path) -> Result<(PathBuf, PathBuf), FsError> {
+    let root = canonical_project_root(project_root)?;
+    let candidate = normalize_absolute(&resolve_path(raw, &root));
+    if !candidate.starts_with(&root) {
+        return Err(deny_path_escape(format!(
+            "write path {:?} escapes project root {:?}",
+            candidate, root
+        )));
+    }
+
+    let mut existing = candidate.parent().unwrap_or(&root).to_path_buf();
+    while !existing.exists() {
+        if !existing.pop() {
+            return Err(FsError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no existing ancestor for write path",
+            )));
+        }
+    }
+
+    let canon_existing = existing.canonicalize().map_err(FsError::IoError)?;
+    if !canon_existing.starts_with(&root) {
+        return Err(deny_path_escape(format!(
+            "write parent {:?} resolves outside project root {:?}",
+            canon_existing, root
+        )));
+    }
+
+    Ok((candidate, root))
+}
+
 pub async fn handle_fs_read(ctx: &FsHandlerContext, params: &Value) -> Result<Value, FsError> {
     let raw_path = params
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or(FsError::MissingParam("path"))?;
 
-    let resolved = resolve_path(raw_path, &ctx.project_root);
+    let (resolved, project_root) = resolve_for_read(raw_path, &ctx.project_root)?;
 
-    match enforce_fs_read(&ctx.profile, &resolved, &ctx.project_root) {
+    match enforce_fs_read(&ctx.profile, &resolved, &project_root) {
         Decision::Allow => {}
         Decision::Deny { reason, code } => {
             return Err(FsError::ProfileDenied {
@@ -168,9 +233,9 @@ pub async fn handle_fs_write(
         .and_then(|v| v.as_str())
         .ok_or(FsError::MissingParam("content"))?;
 
-    let resolved = resolve_path(raw_path, &ctx.project_root);
+    let (resolved, project_root) = resolve_for_write(raw_path, &ctx.project_root)?;
 
-    match enforce_fs_write(&ctx.profile, &resolved, &ctx.project_root) {
+    match enforce_fs_write(&ctx.profile, &resolved, &project_root) {
         Decision::Allow => {}
         Decision::Deny { reason, code } => {
             return Err(FsError::ProfileDenied {
@@ -410,5 +475,50 @@ mod tests {
         let meta = meta.unwrap();
         assert_eq!(meta.old_content.as_deref(), Some("old"));
         assert_eq!(meta.new_content, "new");
+    }
+
+    #[tokio::test]
+    async fn write_parent_traversal_outside_project_denied_before_touching_disk() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let ctx = test_ctx(dir.path(), "project_root", "project_root");
+        let escape = format!(
+            "../{}/escaped.txt",
+            outside.path().file_name().unwrap().to_string_lossy()
+        );
+        let params = json!({ "path": escape, "content": "escape" });
+        let err = handle_fs_write(&ctx, &params).await.unwrap_err();
+        assert!(matches!(err, FsError::ProfileDenied { code, .. } if code == "fs.path_escape"));
+        assert!(!outside.path().join("escaped.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_through_symlink_parent_outside_project_denied() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked-out")).unwrap();
+        let ctx = test_ctx(dir.path(), "project_root", "project_root");
+        let params = json!({ "path": "linked-out/escaped.txt", "content": "escape" });
+        let err = handle_fs_write(&ctx, &params).await.unwrap_err();
+        assert!(matches!(err, FsError::ProfileDenied { code, .. } if code == "fs.path_escape"));
+        assert!(!outside.path().join("escaped.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_through_symlink_outside_project_denied() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            dir.path().join("secret-link.txt"),
+        )
+        .unwrap();
+        let ctx = test_ctx(dir.path(), "project_root", "project_root");
+        let params = json!({ "path": "secret-link.txt" });
+        let err = handle_fs_read(&ctx, &params).await.unwrap_err();
+        assert!(matches!(err, FsError::ProfileDenied { .. }));
     }
 }
