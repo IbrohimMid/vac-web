@@ -1,0 +1,126 @@
+schema_version: 1
+kind: ownership
+id: vac-web.ownership
+
+exempt_paths:
+  - "**/node_modules/**"
+  - ".git/**"
+  - "**/target/**"
+  - "dist/**"
+  - ".gemini/**"
+  - "**/.DS_Store"
+  - ".perf-baseline/**"
+  - "**/*.done"
+  - "**/*.log"
+  - "**/*.pid"
+  - "**/*.bk"
+  - "**/node_modules"
+  - "**/.pnpm-store/**"
+  - "**/.vite/**"
+  - "**/*.tsbuildinfo"
+  - ".vscode/**"
+  - ".idea/**"
+
+owners:
+  bridge_core:
+    title: Bridge Core Engine Team
+    paths:
+      - "apps/local-bridge/**"
+      - "packages/bridge-core/**"
+      - "packages/profile-core/**"
+    capabilities:
+      - bridge.agent_runtime
+      - bridge.audit
+      - bridge.auth
+      - bridge.config
+      - bridge.handoff
+      - bridge.profile_enforcement
+      - bridge.session
+      - bridge.storage
+      - bridge.translator
+      - bridge.workflows
+      - bridge.ws
+      - bridge.notify
+      - bridge.observability
+      - bridge.server
+      - bridge.tunnel
+      - bridge.capability_registry
+      - bridge.extensions
+      - bridge.gate_governance
+      - bridge.perf
+      - bridge.release_plane
+    approval_required: true
+
+  relay_service:
+    title: Relay Service Infra Team
+    paths:
+      - "apps/relay-service/**"
+    capabilities:
+      - bridge.tunnel
+    approval_required: true
+
+  cockpit_ui:
+    title: Cockpit UI React Team
+    paths:
+      - "apps/web/**"
+    capabilities:
+      - bridge.perf
+      - bridge.notify
+    approval_required: false
+
+  qa_automation:
+    title: QA and Test Automation Team
+    paths:
+      - "tools/mock-acp/**"
+      - "tools/mock-engine/**"
+      - "tools/perf/**"
+      - "tests/integration/**"
+      - "tests/red-team/**"
+      - "fixtures/**"
+      - "workflow-presets/**"
+    capabilities:
+      - bridge.agent_runtime
+      - bridge.translator
+    approval_required: false
+
+  governance:
+    title: Architecture and Governance Team
+    paths:
+      - ".vac/**"
+      - "config/**"
+      - "schema/**"
+      - "docs/**"
+      - "tools/codegen/**"
+      - "scripts/**"
+      - "packages/protocol/**"
+      - "packages/protocol-rs/**"
+      - "packages/protocol-ts/**"
+      - "examples/**"
+      - "AGENTS.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "CODE_OF_CONDUCT.md"
+      - "LICENSE"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "rustfmt.toml"
+      - "rust-toolchain.toml"
+      - "clippy.toml"
+      - "tsconfig.base.json"
+      - ".gitignore"
+      - ".github/**"
+      - ".config/**"
+      - ".gitleaks.toml"
+      - ".editorconfig"
+      - ".nvmrc"
+      - ".prettierrc"
+    capabilities:
+      - bridge.capability_registry
+      - bridge.gate_governance
+    approval_required: true

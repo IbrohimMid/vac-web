@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.tunnel
+title: Tunnel
+status: ready
+owner:
+  crate: local-bridge
+  module: tunnel
+description: Establishes secure outbound WebSocket tunnels to hosted dispatch relays.
+policy:
+  risk: remote_mutation
+  mutates_files: false
+  network: true

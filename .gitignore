@@ -69,3 +69,9 @@ logs/
 
 # MCP workbench (runtime job traces + worker state; not part of repo)
 .mcp-workbench/
+
+# VAC agent data (track control plane, ignore local runtime states)
+.vac/cache/
+.vac/memory/
+.vac/sessions/
+.vac/traces/

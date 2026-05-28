@@ -1,0 +1,8 @@
+schema_version: 1
+kind: status
+id: vac-web.migration
+status: in_progress
+notes:
+  - Core product vac-web is migrating to the declarative .vac control plane.
+  - Initial 20 capabilities are tagged and mapped to apps/local-bridge backend modules.
+  - Next phase will involve consolidating loader configurations inside the rust runtime.

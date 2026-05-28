@@ -1,0 +1,18 @@
+schema_version: 1
+kind: surface
+id: surface.web
+title: Web Cockpit Dashboard
+capabilities:
+  - bridge.perf
+  - bridge.notify
+  - bridge.agent_runtime
+routes:
+  - kind: web
+    path: /
+    title: Cockpit Overview
+  - kind: web
+    path: /workflow
+    title: Repeatable Workflows Panel
+  - kind: web
+    path: /debug-config
+    title: Debug Control Plane Config

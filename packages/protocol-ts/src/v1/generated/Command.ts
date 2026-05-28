@@ -114,6 +114,55 @@ export type Command =
       id: string;
       session_id: string;
       v: number;
+      type: 'bridge.mutation.approve';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'bridge.mutation.refine_request';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'bridge.mutation.reject';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'coding.context.ask_about_file';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'coding.context.ask_about_selection';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'coding.context.request_edit';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'coding.context.request_tests';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
       type: 'config.policy.get';
       payload: Record<string, unknown>;
     }
@@ -191,7 +240,28 @@ export type Command =
       id: string;
       session_id: string;
       v: number;
+      type: 'extensions.approve_promotion';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
       type: 'extensions.list';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'extensions.list_approvals';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'extensions.request_promotion';
       payload: Record<string, unknown>;
     }
   | {
@@ -228,6 +298,13 @@ export type Command =
       v: number;
       type: 'gate.signoff';
       payload: CommandGateSignoffPayload;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'gate.sync_mutation_audit';
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
@@ -373,6 +450,13 @@ export type Command =
       id: string;
       session_id: string;
       v: number;
+      type: 'perf.latest_run';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
       type: 'plan.approve';
       payload: Record<string, unknown>;
     }
@@ -395,6 +479,20 @@ export type Command =
       session_id: string;
       v: number;
       type: 'plan.reject';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'project.file.request';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'project.tree.request';
       payload: Record<string, unknown>;
     }
   | {
@@ -445,6 +543,13 @@ export type Command =
       v: number;
       type: 'release.publish';
       payload: CommandReleasePublishPayload;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'review.hunk.action.request';
+      payload: Record<string, unknown>;
     }
   | {
       id: string;
@@ -625,6 +730,34 @@ export type Command =
       id: string;
       session_id: string;
       v: number;
+      type: 'task.execution.continue';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'task.plan.request_changes';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'validation.failure.send_context';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'validation.run.request';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
       type: 'workbench.invoke';
       payload: Record<string, unknown>;
     }
@@ -633,6 +766,48 @@ export type Command =
       session_id: string;
       v: number;
       type: 'workbench.select_tab';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'workspace.branch.request';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'workspace.preview.open';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'workspace.preview.refresh';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'workspace.preview.run_e2e';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'workspace.preview.send_context';
+      payload: Record<string, unknown>;
+    }
+  | {
+      id: string;
+      session_id: string;
+      v: number;
+      type: 'workspace.preview.stop';
       payload: Record<string, unknown>;
     }
 ;

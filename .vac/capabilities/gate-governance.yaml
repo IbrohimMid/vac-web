@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.gate_governance
+title: Gate Governance
+status: ready
+owner:
+  crate: local-bridge
+  module: gate
+description: Evaluates automated quality gates, persists sign-offs, and governs manual overrides.
+policy:
+  risk: local_mutation
+  mutates_files: true
+  network: false

@@ -1,0 +1,16 @@
+schema_version: 1
+kind: policy
+id: vac.policy.default-local
+title: Default Local Sandbox Policy
+default_decision: approval_required
+rules:
+  - id: execute-process
+    match:
+      action: process_execute
+    decision: approval_required
+    reason: Process execution requires user approval to maintain system integrity.
+  - id: mutate-file-system
+    match:
+      action: file_write
+    decision: allow
+    reason: Direct local file edits are allowed under current user security profile.

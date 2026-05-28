@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.extensions
+title: Extensions
+status: ready
+owner:
+  crate: local-bridge
+  module: extensions
+description: Loads third-party extension packages and updates trust tiers.
+policy:
+  risk: local_mutation
+  mutates_files: true
+  network: false

@@ -1,0 +1,16 @@
+schema_version: 1
+kind: workflow
+id: maintenance.slo-budget
+title: Check SLO Budgets
+status: ready
+inputs: {}
+ui:
+  surface: /workflow/slo-budget
+  progress_panel: true
+  activity_log: true
+steps:
+  - id: check
+    uses: capability.observability.verify_slos
+validation:
+  commands:
+    - node scripts/check-slo-budgets.mjs

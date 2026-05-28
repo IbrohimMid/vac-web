@@ -1,0 +1,25 @@
+schema_version: 1
+kind: workflow
+id: maintenance.build-check
+title: Local Validation Sequence
+status: ready
+inputs: {}
+ui:
+  surface: /workflow/build-check
+  progress_panel: true
+  activity_log: true
+steps:
+  - id: format
+    uses: capability.gate_governance.format_check
+  - id: lint
+    uses: capability.gate_governance.clippy_check
+  - id: build
+    uses: capability.gate_governance.cargo_build
+  - id: test
+    uses: capability.gate_governance.cargo_test
+validation:
+  commands:
+    - cargo fmt --all -- --check
+    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo build --workspace --all-targets
+    - cargo test --workspace

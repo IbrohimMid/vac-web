@@ -1,0 +1,12 @@
+schema_version: 1
+kind: product
+id: vac-web
+title: VAC Cockpit
+command: vac-web
+status: migration
+control_plane: .vac
+runtime: rust-ts
+launcher: apps/local-bridge
+primary_surfaces:
+  - apps/web
+  - apps/local-bridge

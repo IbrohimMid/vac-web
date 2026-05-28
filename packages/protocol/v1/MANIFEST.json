@@ -9,7 +9,7 @@
     "assessment_run.schema.json": "sha256:fac0efdfe4495e5ec82c9e8bbd24c967ec3111104ec8660eeb911fcfbe6f2a4c",
     "assessment_verdict.schema.json": "sha256:88cb83e7eb40700589409413271c39c0fa8ac1527db2920190cc71ff72508d07",
     "capability_profile.schema.json": "sha256:2a742e7a1e03e4939c07ae5605e58223d669afe8f21badbdc79d03e5dad40488",
-    "command.schema.json": "sha256:af9a7bdbf6425801c5d520b4bb455b18fd46451d2f3237e4bc2a0e072946adf8",
+    "command.schema.json": "sha256:b7e859321c897dc0ce41a74f92cce5b13fdee2402ae71234fbaf69c768fe249b",
     "event.schema.json": "sha256:13caff81520fef078d75add75e281bd369c6981dca29b00a63d7534f19593403",
     "evidence_ref.schema.json": "sha256:501f9f633401fb8bc6dacecc1562f220803ce519ebeff7ff68345a9e2a028c98",
     "gate_policy.schema.json": "sha256:77d2a59553ab3164f471eccd0bd4139acbe447a7b2dd5d16a7aa2005db572746",

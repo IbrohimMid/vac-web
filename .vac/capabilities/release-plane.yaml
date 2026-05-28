@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.release_plane
+title: Release Plane
+status: ready
+owner:
+  crate: local-bridge
+  module: release
+description: Coordinates deployments, tag publications, and release notes generation.
+policy:
+  risk: remote_mutation
+  mutates_files: true
+  network: true

@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.auth
+title: Auth
+status: ready
+owner:
+  crate: local-bridge
+  module: auth
+description: Enforces WSS origin pinning, pairing handshakes, and short-lived JWT token stores.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

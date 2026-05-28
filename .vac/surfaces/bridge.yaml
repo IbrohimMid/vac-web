@@ -1,0 +1,333 @@
+schema_version: 1
+kind: surface
+id: surface.bridge
+title: Local axum WebSocket & RPC Bridge API
+
+capabilities:
+  - bridge.session
+  - bridge.translator
+  - bridge.handoff
+  - bridge.release_plane
+  - bridge.gate_governance
+  - bridge.extensions
+  - bridge.agent_runtime
+  - bridge.auth
+  - bridge.perf
+  - bridge.storage
+  - bridge.ws
+
+routes:
+  # System
+  - kind: ws
+    event: system.ping
+    capability: bridge.server
+  - kind: ws
+    event: system.version
+    capability: bridge.server
+
+  # Sessions & Persistence
+  - kind: ws
+    event: session.create
+    capability: bridge.session
+  - kind: ws
+    event: session.resume
+    capability: bridge.session
+  - kind: ws
+    event: session.list
+    capability: bridge.session
+  - kind: ws
+    event: session.close
+    capability: bridge.session
+  - kind: ws
+    event: session.snapshot
+    capability: bridge.session
+  - kind: ws
+    event: session.rename
+    capability: bridge.session
+  - kind: ws
+    event: session.authenticate
+    capability: bridge.auth
+  - kind: ws
+    event: session.history.list
+    capability: bridge.storage
+  - kind: ws
+    event: session.history.forget
+    capability: bridge.storage
+
+  # Message Channels
+  - kind: ws
+    event: message.submit
+    capability: bridge.translator
+  - kind: ws
+    event: message.cancel_stream
+    capability: bridge.translator
+  - kind: ws
+    event: message.retry
+    capability: bridge.translator
+
+  # Approvals Governance
+  - kind: ws
+    event: approval.approve
+    capability: bridge.gate_governance
+  - kind: ws
+    event: approval.reject
+    capability: bridge.gate_governance
+  - kind: ws
+    event: approval.approve_all
+    capability: bridge.gate_governance
+  - kind: ws
+    event: approval.inspect
+    capability: bridge.gate_governance
+
+  # Workspace Review & Mutation
+  - kind: ws
+    event: review.open_file
+    capability: bridge.storage
+  - kind: ws
+    event: review.revert_file
+    capability: bridge.storage
+  - kind: ws
+    event: review.revert_all
+    capability: bridge.storage
+  - kind: ws
+    event: review.toggle_hunk
+    capability: bridge.ws
+  - kind: ws
+    event: review.hunk.action.request
+    capability: bridge.translator
+  - kind: ws
+    event: bridge.mutation.approve
+    capability: bridge.gate_governance
+  - kind: ws
+    event: bridge.mutation.reject
+    capability: bridge.gate_governance
+  - kind: ws
+    event: bridge.mutation.refine_request
+    capability: bridge.translator
+
+  # Runtime Jobs & Shell Drawers
+  - kind: ws
+    event: runtime.list_jobs
+    capability: bridge.agent_runtime
+  - kind: ws
+    event: runtime.inspect_job
+    capability: bridge.agent_runtime
+  - kind: ws
+    event: runtime.cancel_job
+    capability: bridge.agent_runtime
+  - kind: ws
+    event: shell.start
+    capability: bridge.agent_runtime
+  - kind: ws
+    event: shell.input
+    capability: bridge.agent_runtime
+  - kind: ws
+    event: shell.resize
+    capability: bridge.agent_runtime
+  - kind: ws
+    event: shell.kill
+    capability: bridge.agent_runtime
+
+  # Code Workspace Bridge Contracts
+  - kind: ws
+    event: project.tree.request
+    capability: bridge.storage
+  - kind: ws
+    event: project.file.request
+    capability: bridge.storage
+  - kind: ws
+    event: coding.context.ask_about_file
+    capability: bridge.translator
+  - kind: ws
+    event: coding.context.ask_about_selection
+    capability: bridge.translator
+  - kind: ws
+    event: coding.context.request_edit
+    capability: bridge.translator
+  - kind: ws
+    event: coding.context.request_tests
+    capability: bridge.translator
+  - kind: ws
+    event: workspace.preview.open
+    capability: bridge.ws
+  - kind: ws
+    event: workspace.preview.refresh
+    capability: bridge.ws
+  - kind: ws
+    event: workspace.preview.stop
+    capability: bridge.ws
+  - kind: ws
+    event: workspace.preview.send_context
+    capability: bridge.translator
+  - kind: ws
+    event: workspace.preview.run_e2e
+    capability: bridge.ws
+  - kind: ws
+    event: validation.run.request
+    capability: bridge.translator
+  - kind: ws
+    event: validation.failure.send_context
+    capability: bridge.translator
+  - kind: ws
+    event: task.execution.continue
+    capability: bridge.translator
+  - kind: ws
+    event: task.plan.request_changes
+    capability: bridge.translator
+  - kind: ws
+    event: workspace.branch.request
+    capability: bridge.storage
+
+  # Assessment Runs
+  - kind: ws
+    event: assessment.run
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.sweep.run
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.sweep.cancel
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.list_runs
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.fetch_report
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.fetch_evidence_preview
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.cancel
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.replay
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.diff
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.index.status
+    capability: bridge.observability
+  - kind: ws
+    event: assessment.index.rebuild
+    capability: bridge.observability
+
+  # Handoff Packets
+  - kind: ws
+    event: handoff.create
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.fetch
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.approve
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.reject
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.dispatch_local
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.dispatch_web_cli
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.export_blueprint
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.cancel
+    capability: bridge.handoff
+  - kind: ws
+    event: handoff.status
+    capability: bridge.handoff
+
+  # Gates
+  - kind: ws
+    event: gate.evaluate
+    capability: bridge.gate_governance
+  - kind: ws
+    event: gate.signoff
+    capability: bridge.gate_governance
+  - kind: ws
+    event: gate.override
+    capability: bridge.gate_governance
+  - kind: ws
+    event: gate.revoke_override
+    capability: bridge.gate_governance
+  - kind: ws
+    event: gate.sync_mutation_audit
+    capability: bridge.gate_governance
+
+  # Connectors
+  - kind: ws
+    event: connector.list
+    capability: bridge.extensions
+  - kind: ws
+    event: connector.connect
+    capability: bridge.extensions
+  - kind: ws
+    event: connector.disconnect
+    capability: bridge.extensions
+  - kind: ws
+    event: connector.capabilities
+    capability: bridge.extensions
+  - kind: ws
+    event: connector.health
+    capability: bridge.extensions
+
+  # Release Plane
+  - kind: ws
+    event: release.list_targets
+    capability: bridge.release_plane
+  - kind: ws
+    event: release.generate_notes
+    capability: bridge.release_plane
+  - kind: ws
+    event: release.deploy
+    capability: bridge.release_plane
+  - kind: ws
+    event: release.publish
+    capability: bridge.release_plane
+
+  # Registry & Config Reload
+  - kind: ws
+    event: registry.sync
+    capability: bridge.capability_registry
+  - kind: ws
+    event: registry.add
+    capability: bridge.capability_registry
+  - kind: ws
+    event: registry.reload
+    capability: bridge.capability_registry
+  - kind: ws
+    event: config.validate
+    capability: bridge.config
+  - kind: ws
+    event: config.reload
+    capability: bridge.config
+  - kind: ws
+    event: config.policy.get
+    capability: bridge.config
+
+  # Performance baseline
+  - kind: ws
+    event: perf.latest_run
+    capability: bridge.perf
+
+  # Extensions Trust Promotion
+  - kind: ws
+    event: extensions.list
+    capability: bridge.extensions
+  - kind: ws
+    event: extensions.update_trust
+    capability: bridge.extensions
+  - kind: ws
+    event: extensions.request_promotion
+    capability: bridge.extensions
+  - kind: ws
+    event: extensions.approve_promotion
+    capability: bridge.extensions
+  - kind: ws
+    event: extensions.list_approvals
+    capability: bridge.extensions

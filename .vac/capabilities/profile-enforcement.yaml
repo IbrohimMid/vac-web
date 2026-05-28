@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.profile_enforcement
+title: Profile Enforcement
+status: ready
+owner:
+  crate: local-bridge
+  module: profile_layer
+description: Declarative bridge capability for Profile Enforcement.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

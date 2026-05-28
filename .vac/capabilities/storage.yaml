@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.storage
+title: Storage
+status: ready
+owner:
+  crate: local-bridge
+  module: storage
+description: Handles file-backed session metadata, events stream persistence, and evidence caching.
+policy:
+  risk: local_mutation
+  mutates_files: true
+  network: false

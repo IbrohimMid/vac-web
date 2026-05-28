@@ -49,6 +49,7 @@ impl FilePersistence {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(true)
             .open(&lock_path)?;
         if lock_created {
             sync_directory(&root)?;
@@ -109,6 +110,7 @@ impl FilePersistence {
     /// bridge instances pointed at the same sessions dir could still race on
     /// `meta.json` and `events.jsonl`. This lock serializes mutating file-store
     /// operations across cooperating processes as well.
+    #[allow(clippy::incompatible_msrv)]
     fn with_write_lock<T>(
         &self,
         op: impl FnOnce() -> PersistenceResult<T>,
@@ -121,6 +123,7 @@ impl FilePersistence {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(true)
             .open(self.root.join(LOCK_FILENAME))?;
         lock_file.lock_exclusive()?;
         let result = op();

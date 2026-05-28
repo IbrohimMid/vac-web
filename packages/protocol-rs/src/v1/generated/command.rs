@@ -37,6 +37,20 @@ pub enum CommandType {
     AssessmentSweepCancel,
     #[serde(rename = "assessment.sweep.run")]
     AssessmentSweepRun,
+    #[serde(rename = "bridge.mutation.approve")]
+    BridgeMutationApprove,
+    #[serde(rename = "bridge.mutation.refine_request")]
+    BridgeMutationRefineRequest,
+    #[serde(rename = "bridge.mutation.reject")]
+    BridgeMutationReject,
+    #[serde(rename = "coding.context.ask_about_file")]
+    CodingContextAskAboutFile,
+    #[serde(rename = "coding.context.ask_about_selection")]
+    CodingContextAskAboutSelection,
+    #[serde(rename = "coding.context.request_edit")]
+    CodingContextRequestEdit,
+    #[serde(rename = "coding.context.request_tests")]
+    CodingContextRequestTests,
     #[serde(rename = "config.policy.get")]
     ConfigPolicyGet,
     #[serde(rename = "config.reload")]
@@ -59,8 +73,14 @@ pub enum CommandType {
     ContextMentionSearch,
     #[serde(rename = "continuous.write_config")]
     ContinuousWriteConfig,
+    #[serde(rename = "extensions.approve_promotion")]
+    ExtensionsApprovePromotion,
     #[serde(rename = "extensions.list")]
     ExtensionsList,
+    #[serde(rename = "extensions.list_approvals")]
+    ExtensionsListApprovals,
+    #[serde(rename = "extensions.request_promotion")]
+    ExtensionsRequestPromotion,
     #[serde(rename = "extensions.update_trust")]
     ExtensionsUpdateTrust,
     #[serde(rename = "gate.evaluate")]
@@ -71,6 +91,8 @@ pub enum CommandType {
     GateRevokeOverride,
     #[serde(rename = "gate.signoff")]
     GateSignoff,
+    #[serde(rename = "gate.sync_mutation_audit")]
+    GateSyncMutationAudit,
     #[serde(rename = "handoff.approve")]
     HandoffApprove,
     #[serde(rename = "handoff.cancel")]
@@ -111,6 +133,8 @@ pub enum CommandType {
     OverlayOpen,
     #[serde(rename = "palette.invoke_action")]
     PaletteInvokeAction,
+    #[serde(rename = "perf.latest_run")]
+    PerfLatestRun,
     #[serde(rename = "plan.approve")]
     PlanApprove,
     #[serde(rename = "plan.edit")]
@@ -119,6 +143,10 @@ pub enum CommandType {
     PlanOpen,
     #[serde(rename = "plan.reject")]
     PlanReject,
+    #[serde(rename = "project.file.request")]
+    ProjectFileRequest,
+    #[serde(rename = "project.tree.request")]
+    ProjectTreeRequest,
     #[serde(rename = "registry.add")]
     RegistryAdd,
     #[serde(rename = "registry.reload")]
@@ -133,6 +161,8 @@ pub enum CommandType {
     ReleaseListTargets,
     #[serde(rename = "release.publish")]
     ReleasePublish,
+    #[serde(rename = "review.hunk.action.request")]
+    ReviewHunkActionRequest,
     #[serde(rename = "review.open_file")]
     ReviewOpenFile,
     #[serde(rename = "review.revert_all")]
@@ -183,10 +213,30 @@ pub enum CommandType {
     SystemPing,
     #[serde(rename = "system.version")]
     SystemVersion,
+    #[serde(rename = "task.execution.continue")]
+    TaskExecutionContinue,
+    #[serde(rename = "task.plan.request_changes")]
+    TaskPlanRequestChanges,
+    #[serde(rename = "validation.failure.send_context")]
+    ValidationFailureSendContext,
+    #[serde(rename = "validation.run.request")]
+    ValidationRunRequest,
     #[serde(rename = "workbench.invoke")]
     WorkbenchInvoke,
     #[serde(rename = "workbench.select_tab")]
     WorkbenchSelectTab,
+    #[serde(rename = "workspace.branch.request")]
+    WorkspaceBranchRequest,
+    #[serde(rename = "workspace.preview.open")]
+    WorkspacePreviewOpen,
+    #[serde(rename = "workspace.preview.refresh")]
+    WorkspacePreviewRefresh,
+    #[serde(rename = "workspace.preview.run_e2e")]
+    WorkspacePreviewRunE2e,
+    #[serde(rename = "workspace.preview.send_context")]
+    WorkspacePreviewSendContext,
+    #[serde(rename = "workspace.preview.stop")]
+    WorkspacePreviewStop,
 }
 
 #[derive(Debug, Clone, PartialEq)]

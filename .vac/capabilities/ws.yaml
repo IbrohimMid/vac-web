@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.ws
+title: Ws
+status: ready
+owner:
+  crate: local-bridge
+  module: ws
+description: Declarative bridge capability for Ws.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

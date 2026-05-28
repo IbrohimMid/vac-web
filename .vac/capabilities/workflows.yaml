@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.workflows
+title: Workflows
+status: ready
+owner:
+  crate: local-bridge
+  module: workflows
+description: Declarative bridge capability for Workflows.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

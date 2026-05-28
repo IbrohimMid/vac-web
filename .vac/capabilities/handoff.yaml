@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.handoff
+title: Handoff
+status: ready
+owner:
+  crate: local-bridge
+  module: handoff
+description: Declarative bridge capability for Handoff.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

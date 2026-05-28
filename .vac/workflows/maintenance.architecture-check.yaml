@@ -1,0 +1,16 @@
+schema_version: 1
+kind: workflow
+id: maintenance.architecture-check
+title: Check Architectural Boundaries
+status: ready
+inputs: {}
+ui:
+  surface: /workflow/architecture-check
+  progress_panel: true
+  activity_log: true
+steps:
+  - id: check
+    uses: capability.capability_registry.verify_architecture
+validation:
+  commands:
+    - node scripts/check-architecture-boundaries.mjs

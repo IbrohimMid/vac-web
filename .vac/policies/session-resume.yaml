@@ -1,0 +1,11 @@
+schema_version: 1
+kind: policy
+id: bridge.policy.session-resume
+title: Session Resume Policy
+session_resume:
+  default_mode: native_or_replay
+  native_fallback: replay_only
+  mcp_server_drift: warn
+  profile_class_mismatch: fail
+  retention_days: 30
+  max_events: 20000

@@ -1,0 +1,44 @@
+schema_version: 1
+kind: domains
+status: migration
+domains:
+  - id: agent_runtime
+    status: ready
+  - id: audit
+    status: ready
+  - id: auth
+    status: ready
+  - id: config
+    status: ready
+  - id: handoff
+    status: ready
+  - id: profile_enforcement
+    status: ready
+  - id: session
+    status: ready
+  - id: storage
+    status: ready
+  - id: translator
+    status: ready
+  - id: workflows
+    status: ready
+  - id: ws
+    status: ready
+  - id: notify
+    status: ready
+  - id: observability
+    status: ready
+  - id: server
+    status: ready
+  - id: tunnel
+    status: ready
+  - id: capability_registry
+    status: ready
+  - id: extensions
+    status: ready
+  - id: gate_governance
+    status: ready
+  - id: perf
+    status: ready
+  - id: release_plane
+    status: ready

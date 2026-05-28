@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.capability_registry
+title: Capability Registry
+status: ready
+owner:
+  crate: local-bridge
+  module: capabilities
+description: Declarative bridge capability for Capability Registry.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

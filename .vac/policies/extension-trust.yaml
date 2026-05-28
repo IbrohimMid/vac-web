@@ -1,0 +1,18 @@
+schema_version: 1
+kind: policy
+id: bridge.policy.extension-trust
+title: Extension Trust Policy
+allow_unsigned: false
+publishers:
+  - "vac-trusted-pub-1"
+extensions:
+  - id: "vac.review-tab"
+    tier: allowed_bundled
+    source: bundled
+  - id: "vac.signed-ext"
+    tier: allowed_signed
+    source: signed
+    publisher: "vac-trusted-pub-1"
+  - id: "vac.experimental"
+    tier: quarantined
+    source: bundled

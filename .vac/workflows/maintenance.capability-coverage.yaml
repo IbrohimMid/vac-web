@@ -1,0 +1,16 @@
+schema_version: 1
+kind: workflow
+id: maintenance.capability-coverage
+title: Check Capability Coverage
+status: ready
+inputs: {}
+ui:
+  surface: /workflow/capability-coverage
+  progress_panel: true
+  activity_log: true
+steps:
+  - id: check
+    uses: capability.capability_registry.verify
+validation:
+  commands:
+    - node scripts/check-capability-coverage.mjs

@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.observability
+title: Observability
+status: ready
+owner:
+  crate: local-bridge
+  module: observability
+description: Declarative bridge capability for Observability.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false

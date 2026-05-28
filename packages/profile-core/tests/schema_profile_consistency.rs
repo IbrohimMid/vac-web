@@ -27,7 +27,7 @@ fn read_yaml(path: &PathBuf) -> Value {
     serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse YAML {}: {}", path.display(), e))
 }
 
-fn schema_object_keys<'a>(schema: &'a Value, path: &[&str]) -> Vec<String> {
+fn schema_object_keys(schema: &Value, path: &[&str]) -> Vec<String> {
     let mut node = schema;
     for segment in path {
         node = &node[*segment];

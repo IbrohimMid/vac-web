@@ -1,0 +1,13 @@
+schema_version: 1
+kind: capability
+id: bridge.session
+title: Session
+status: ready
+owner:
+  crate: local-bridge
+  module: session
+description: Implements resumable sessions, history forget, and event ring buffers.
+policy:
+  risk: local_mutation
+  mutates_files: true
+  network: false

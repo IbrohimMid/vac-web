@@ -1,0 +1,17 @@
+schema_version: 1
+kind: capability
+id: bridge.agent_runtime
+title: Agent Runtime
+status: ready
+owner:
+  crate: local-bridge
+  module: agent_runtime
+description: Spawns and manages engine child processes; enforces event budgets per active session.
+policy:
+  risk: safe_read
+  mutates_files: false
+  network: false
+allowed_agent_kinds:
+  - acp
+  - mock
+  - vac-native
