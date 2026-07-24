@@ -31,7 +31,7 @@ async-trait = "0.1"
 # HTTP / WS
 axum = { version = "0.7", features = ["ws", "macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+tower-http = { version = "0.7", features = ["trace", "cors", "fs"] }
 tokio-tungstenite = "0.24"
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 
